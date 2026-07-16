@@ -1,0 +1,185 @@
+@prefix voc:  <https://w3id.org/msr-kg/vocab#> .
+@prefix msr:  <https://w3id.org/msr-kg/ontology#> .
+@prefix skos: <http://www.w3.org/2004/02/skos/core#> .
+@prefix dct:  <http://purl.org/dc/terms/> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix owl:  <http://www.w3.org/2002/07/owl#> .
+
+# MSR Controlled Vocabulary — seed SKOS scheme (Phase C).
+# 29 concepts sourced from the IAEA INIS thesaurus (2018) and salience-filtered against
+# the openmsr/msr-archive corpus. dct:source "minted" = no INIS descriptor exists.
+# closeMatch links resolve into ontology/msr.ttl. The self-evolution demo targets
+# (solubility, graphite/moderators) are intentionally NOT here — they live outside the seed.
+
+voc:msr-scheme a skos:ConceptScheme ;
+    dct:title "MSR Controlled Vocabulary (POC seed)" ;
+    dct:description "Molten-salt-reactor concept scheme for the KG POC." ;
+    skos:hasTopConcept voc:molten-salt-reactors , voc:molten-salts , voc:fluorides ,
+        voc:fuel-salt , voc:coolant-salt , voc:flush-salt ,
+        voc:density , voc:viscosity , voc:electric-conductivity , voc:surface-tension ,
+        voc:thermal-conductivity , voc:specific-heat , voc:vapor-pressure , voc:melting-point ,
+        voc:corrosion , voc:nickel-base-alloys , voc:reductive-extraction .
+
+########## A. Reactor frame ##########
+voc:molten-salt-reactors a skos:Concept ; skos:inScheme voc:msr-scheme ;
+    skos:prefLabel "molten salt reactors"@en ; skos:altLabel "MSR"@en ;
+    skos:narrower voc:molten-salt-cooled-reactors , voc:molten-salt-fueled-reactors ;
+    skos:related voc:reductive-extraction ;
+    skos:scopeNote "INIS BT: reactors. INIS RT: metal transfer process, molten salt fuels."@en ;
+    dct:source "INIS" ; skos:closeMatch msr:MoltenSaltReactor .
+
+voc:molten-salt-cooled-reactors a skos:Concept ; skos:inScheme voc:msr-scheme ;
+    skos:prefLabel "molten salt cooled reactors"@en ;
+    skos:broader voc:molten-salt-reactors ; skos:narrower voc:msre-reactor ;
+    skos:scopeNote "Structural concept (salt = coolant only). 0 verbatim docs in the corpus; kept for hierarchy, not as an NER target."@en ;
+    dct:source "INIS" .
+
+voc:molten-salt-fueled-reactors a skos:Concept ; skos:inScheme voc:msr-scheme ;
+    skos:prefLabel "molten salt fueled reactors"@en ;
+    skos:broader voc:molten-salt-reactors ; skos:related voc:fuel-salt ;
+    skos:scopeNote "Structural concept (fissile dissolved in salt). INIS *BT: fluid fueled reactors."@en ;
+    dct:source "INIS" .
+
+voc:msre-reactor a skos:Concept ; skos:inScheme voc:msr-scheme ;
+    skos:prefLabel "MSRE reactor"@en ; skos:altLabel "MSRE"@en , "molten salt reactor experiment"@en ;
+    skos:broader voc:molten-salt-cooled-reactors ; skos:related voc:flush-salt ;
+    skos:scopeNote "The ORNL Molten-Salt Reactor Experiment (Oak Ridge, TN). The POC's anchor reactor."@en ;
+    dct:source "INIS" .
+
+########## B. Salts & fluoride compounds ##########
+voc:molten-salts a skos:Concept ; skos:inScheme voc:msr-scheme ;
+    skos:prefLabel "molten salts"@en ;
+    skos:altLabel "fused salts"@en , "ionic liquids"@en , "molten salt coolants"@en ;
+    skos:narrower voc:flibe , voc:flinak ;
+    skos:scopeNote "INIS BT: salts; INIS RT: coolants."@en ;
+    dct:source "INIS" ; skos:closeMatch msr:MoltenSalt .
+
+voc:flibe a skos:Concept ; skos:inScheme voc:msr-scheme ;
+    skos:prefLabel "FLiBe"@en ; skos:altLabel "LiF-BeF2"@en , "LiF-BeF2 eutectic"@en ;
+    skos:broader voc:molten-salts ; skos:related voc:lithium-fluorides , voc:beryllium-fluorides ;
+    skos:definition "Molten salt of fluorine, lithium and beryllium (INIS scope note)."@en ;
+    dct:source "INIS" .
+
+voc:flinak a skos:Concept ; skos:inScheme voc:msr-scheme ;
+    skos:prefLabel "FLiNaK"@en ; skos:altLabel "LiF-NaF-KF"@en ;
+    skos:broader voc:molten-salts ;
+    skos:related voc:lithium-fluorides , voc:sodium-fluorides , voc:potassium-fluorides ;
+    skos:scopeNote "Eutectic LiF-NaF-KF coolant salt. No INIS descriptor — minted."@en ;
+    dct:source "minted" .
+
+voc:fluorides a skos:Concept ; skos:inScheme voc:msr-scheme ;
+    skos:prefLabel "fluorides"@en ;
+    skos:narrower voc:lithium-fluorides , voc:beryllium-fluorides , voc:uranium-fluorides ,
+        voc:zirconium-fluorides , voc:thorium-fluorides , voc:sodium-fluorides , voc:potassium-fluorides ;
+    skos:scopeNote "INIS BT: fluorine compounds, halides."@en ; dct:source "INIS" .
+
+voc:lithium-fluorides a skos:Concept ; skos:inScheme voc:msr-scheme ;
+    skos:prefLabel "lithium fluorides"@en ; skos:altLabel "LiF"@en ;
+    skos:broader voc:fluorides ; skos:related voc:flibe ;
+    skos:scopeNote "INIS *BT: fluorides, lithium halides."@en ; dct:source "INIS" .
+
+voc:beryllium-fluorides a skos:Concept ; skos:inScheme voc:msr-scheme ;
+    skos:prefLabel "beryllium fluorides"@en ; skos:altLabel "BeF2"@en ;
+    skos:broader voc:fluorides ; skos:related voc:flibe ;
+    skos:scopeNote "INIS *BT: beryllium halides, fluorides."@en ; dct:source "INIS" .
+
+voc:uranium-fluorides a skos:Concept ; skos:inScheme voc:msr-scheme ;
+    skos:prefLabel "uranium fluorides"@en ; skos:altLabel "UF4"@en , "uranium tetrafluoride"@en ;
+    skos:broader voc:fluorides ;
+    skos:scopeNote "INIS *BT: fluorides, uranium halides; NT include uranium tetra/penta/hexafluoride."@en ;
+    dct:source "INIS" .
+
+voc:zirconium-fluorides a skos:Concept ; skos:inScheme voc:msr-scheme ;
+    skos:prefLabel "zirconium fluorides"@en ; skos:altLabel "ZrF4"@en ;
+    skos:broader voc:fluorides ;
+    skos:scopeNote "INIS *BT: fluorides, zirconium halides."@en ; dct:source "INIS" .
+
+voc:thorium-fluorides a skos:Concept ; skos:inScheme voc:msr-scheme ;
+    skos:prefLabel "thorium fluorides"@en ; skos:altLabel "ThF4"@en ;
+    skos:broader voc:fluorides ;
+    skos:scopeNote "INIS *BT: fluorides, thorium halides."@en ; dct:source "INIS" .
+
+voc:sodium-fluorides a skos:Concept ; skos:inScheme voc:msr-scheme ;
+    skos:prefLabel "sodium fluorides"@en ; skos:altLabel "NaF"@en ;
+    skos:broader voc:fluorides ; skos:related voc:flinak ;
+    skos:scopeNote "INIS *BT: fluorides, sodium halides."@en ; dct:source "INIS" .
+
+voc:potassium-fluorides a skos:Concept ; skos:inScheme voc:msr-scheme ;
+    skos:prefLabel "potassium fluorides"@en ; skos:altLabel "KF"@en ;
+    skos:broader voc:fluorides ; skos:related voc:flinak ;
+    skos:scopeNote "INIS *BT: fluorides, potassium halides, potassium compounds."@en ; dct:source "INIS" .
+
+########## C. Salt roles (minted — ORNL-TM-2316 triad) ##########
+voc:fuel-salt a skos:Concept ; skos:inScheme voc:msr-scheme ;
+    skos:prefLabel "fuel salt"@en ;
+    skos:related voc:molten-salt-fueled-reactors ;
+    skos:scopeNote "Fissile-bearing salt (ORNL-TM-2316 triad). INIS closeMatch: 'molten salt fuels'. Minted role concept."@en ;
+    dct:source "minted" ; skos:closeMatch msr:FuelSalt .
+
+voc:coolant-salt a skos:Concept ; skos:inScheme voc:msr-scheme ;
+    skos:prefLabel "coolant salt"@en ; skos:related voc:molten-salt-cooled-reactors ;
+    skos:scopeNote "Secondary heat-transfer salt (ORNL-TM-2316 triad). Minted role concept."@en ;
+    dct:source "minted" ; skos:closeMatch msr:CoolantSalt .
+
+voc:flush-salt a skos:Concept ; skos:inScheme voc:msr-scheme ;
+    skos:prefLabel "flush salt"@en ; skos:related voc:msre-reactor ;
+    skos:scopeNote "Cleaning salt (ORNL-TM-2316 triad). Minted role concept."@en ;
+    dct:source "minted" ; skos:closeMatch msr:FlushSalt .
+
+########## D. Physical properties ##########
+voc:density a skos:Concept ; skos:inScheme voc:msr-scheme ;
+    skos:prefLabel "density"@en ; skos:altLabel "mass density"@en ;
+    skos:scopeNote "NIST property. INIS DENSITY is density-of-states-flavored; used as closest match for mass density."@en ;
+    dct:source "INIS" ; skos:closeMatch msr:density .
+
+voc:viscosity a skos:Concept ; skos:inScheme voc:msr-scheme ;
+    skos:prefLabel "viscosity"@en ; skos:altLabel "dynamic viscosity"@en ;
+    skos:scopeNote "NIST property."@en ; dct:source "INIS" ; skos:closeMatch msr:viscosity .
+
+voc:electric-conductivity a skos:Concept ; skos:inScheme voc:msr-scheme ;
+    skos:prefLabel "electric conductivity"@en ;
+    skos:altLabel "electrical conductivity"@en , "electrical conductance"@en , "specific conductance"@en ;
+    skos:scopeNote "NIST property. INIS preferred label is ELECTRIC CONDUCTIVITY."@en ;
+    dct:source "INIS" ; skos:closeMatch msr:electricalConductivity .
+
+voc:surface-tension a skos:Concept ; skos:inScheme voc:msr-scheme ;
+    skos:prefLabel "surface tension"@en ; skos:altLabel "interfacial tension"@en ;
+    skos:scopeNote "NIST property. INIS SF: interfacial tension; BT: surface properties. Aligns to DIAMOND InterfacialTension."@en ;
+    dct:source "INIS" ; skos:closeMatch msr:surfaceTension .
+
+voc:thermal-conductivity a skos:Concept ; skos:inScheme voc:msr-scheme ;
+    skos:prefLabel "thermal conductivity"@en ;
+    skos:scopeNote "Document-sourced (not in NIST). INIS BT: thermodynamic properties."@en ;
+    dct:source "INIS" ; skos:closeMatch msr:thermalConductivity .
+
+voc:specific-heat a skos:Concept ; skos:inScheme voc:msr-scheme ;
+    skos:prefLabel "specific heat"@en ; skos:altLabel "heat capacity"@en ;
+    skos:scopeNote "Document-sourced. INIS folds 'heat capacity' into SPECIFIC HEAT; BT: thermodynamic properties."@en ;
+    dct:source "INIS" ; skos:closeMatch msr:specificHeat .
+
+voc:vapor-pressure a skos:Concept ; skos:inScheme voc:msr-scheme ;
+    skos:prefLabel "vapor pressure"@en ; skos:altLabel "vapour pressure"@en ;
+    skos:scopeNote "Document-sourced. INIS BT: thermodynamic properties."@en ;
+    dct:source "INIS" ; skos:closeMatch msr:vaporPressure .
+
+voc:melting-point a skos:Concept ; skos:inScheme voc:msr-scheme ;
+    skos:prefLabel "melting point"@en ; skos:altLabel "freezing point"@en , "liquidus"@en ;
+    skos:scopeNote "Document-sourced. INIS MELTING POINTS (UF freezing points); BT: transition temperature."@en ;
+    dct:source "INIS" ; skos:closeMatch msr:meltingPoint .
+
+########## E. Processes & materials ##########
+voc:corrosion a skos:Concept ; skos:inScheme voc:msr-scheme ;
+    skos:prefLabel "corrosion"@en ;
+    skos:scopeNote "Dominant archive theme; salt-alloy compatibility. INIS BT: chemical reactions."@en ;
+    dct:source "INIS" .
+
+voc:nickel-base-alloys a skos:Concept ; skos:inScheme voc:msr-scheme ;
+    skos:prefLabel "nickel base alloys"@en ; skos:altLabel "Hastelloy-N"@en , "INOR-8"@en ;
+    skos:related voc:corrosion ;
+    skos:scopeNote "The MSRE structural alloy. INIS has no 'Hastelloy' descriptor (captured as altLabels)."@en ;
+    dct:source "INIS" .
+
+voc:reductive-extraction a skos:Concept ; skos:inScheme voc:msr-scheme ;
+    skos:prefLabel "reductive extraction"@en ; skos:related voc:molten-salt-reactors ;
+    skos:scopeNote "Fuel-salt reprocessing chemistry. INIS BT: extraction; RT: molten salt reactors."@en ;
+    dct:source "INIS" .
