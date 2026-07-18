@@ -1,0 +1,127 @@
+# docker-compose.yml — msr-graph POC orchestration.
+#
+# See openspec/changes/bootstrap-graph-infra/design.md (D2, D5) for the
+# architecture decisions this file implements.
+#
+# Services:
+#   graphdb    - Ontotext GraphDB 11.4.2. One repository ("msr", inference
+#                disabled — deploy/graphdb/msr-repo-config.ttl) is created by
+#                `make up` via scripts/ensure-repo.sh, NOT by this file.
+#   server     - the msr-graph HTTP API (root Dockerfile, ENTRYPOINT
+#                /app/server). Started by a bare `docker compose up`.
+#   loader     - one-shot seed/init-db tool built from the SAME image as
+#                `server`. Gated behind the "tools" profile so it never
+#                starts on a bare `up`; invoked via `docker compose run`
+#                (see `make load-seed`).
+#   extraction - the Python extraction scaffold (extraction/Dockerfile).
+#                One-shot, also gated behind the "tools" profile.
+#
+# Shared contract across app containers: fixed non-root UID:GID 10001:10001.
+#
+# ./data is a HOST BIND MOUNT (not a named volume), shared by server/loader,
+# so the SQLite measurement store and any host-side inspection see the same
+# files. GraphDB's OWN repository storage lives in a SEPARATE named volume
+# (graphdb-data) below — it is not part of the ./data contract.
+#
+# NOTE (ownership, macOS vs CI): containers write to ./data as UID 10001.
+# On Linux hosts (e.g. CI) that UID likely doesn't match your host user, so
+# files can end up owned by an unfamiliar UID from the host's perspective —
+# `sudo chown -R 10001:10001 ./data` (or run as that UID) fixes permission
+# errors if you need to touch those files as your own host user. macOS Docker
+# Desktop's virtiofs/osxfs layer generally maps ownership transparently, so
+# this is mainly a Linux CI concern. The loader also MkdirAll's ./data with
+# 0o775 so group-writable access works once ownership is aligned.
+
+services:
+  graphdb:
+    image: ontotext/graphdb:11.4.2
+    ports:
+      - "7200:7200"
+    volumes:
+      # GraphDB's own persistent repository storage — a dedicated named
+      # volume, deliberately separate from the ./data bind mount used by
+      # server/loader (see header comment).
+      - graphdb-data:/opt/graphdb/home
+      # License, mounted READ-ONLY. NOT placed at the image's default
+      # conf/graphdb.license path (that path lives inside /opt/graphdb/home,
+      # which graphdb-data above already owns as a directory mount — nesting
+      # a second mount under it is unnecessary complexity). Instead it is
+      # mounted at an arbitrary path and GraphDB is pointed at it via
+      # GDB_JAVA_OPTS below. Both mechanisms are documented by the image
+      # maintainer for GraphDB 11.x:
+      #   https://github.com/Ontotext-AD/graphdb-docker (README: license
+      #   file via `-Dgraphdb.license.file=<path>` passed through
+      #   GDB_JAVA_OPTS, or mounted at conf/graphdb.license under the home
+      #   directory).
+      - ./graphdb.license:/opt/graphdb/license/graphdb.license:ro
+    environment:
+      GDB_JAVA_OPTS: "-Dgraphdb.license.file=/opt/graphdb/license/graphdb.license"
+    healthcheck:
+      # The image (eclipse-temurin/Ubuntu-based, per the maintainer's
+      # Dockerfile) ships neither curl nor wget — only a JDK, net-tools and
+      # less — so this speaks raw HTTP over bash's /dev/tcp pseudo-device
+      # against /rest/repositories, an endpoint that answers 200 as soon as
+      # GraphDB's REST API is serving, independent of whether the "msr"
+      # repository exists yet (that's created afterwards by
+      # scripts/ensure-repo.sh from the host).
+      test:
+        - "CMD-SHELL"
+        - >-
+          bash -c 'exec 3<>/dev/tcp/127.0.0.1/7200 &&
+          printf "GET /rest/repositories HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n" >&3 &&
+          timeout 5 cat <&3 | grep -q "HTTP/1.1 200"'
+      interval: 10s
+      timeout: 10s
+      retries: 30
+      start_period: 60s
+
+  server:
+    build: .
+    user: "10001:10001"
+    environment:
+      GRAPHDB_URL: http://graphdb:7200
+      GRAPHDB_REPO: msr
+      MSR_DB_PATH: /data/msr.db
+    volumes:
+      - ./data:/data
+      # Declared now for chunk 3's sandbox pool (container-managed exec of
+      # sandbox tasks); unused by this scaffold.
+      - /var/run/docker.sock:/var/run/docker.sock
+    ports:
+      - "8080:8080"
+    depends_on:
+      graphdb:
+        condition: service_healthy
+
+  loader:
+    build: .
+    profiles: ["tools"]
+    user: "10001:10001"
+    environment:
+      GRAPHDB_URL: http://graphdb:7200
+      GRAPHDB_REPO: msr
+      MSR_ONTOLOGY_DIR: /app/ontology
+      MSR_DB_PATH: /data/msr.db
+    volumes:
+      - ./data:/data
+    # The root Dockerfile's default ENTRYPOINT is /app/server; reset it here
+    # so `docker compose run --rm loader /app/loader <subcommand>` executes
+    # exactly the given command, with no /app/server prefix. `command:`
+    # below is only the default for a bare `docker compose run loader` with
+    # no extra args (prints usage, exits non-zero) — `make load-seed`
+    # supplies the real subcommand explicitly.
+    entrypoint: []
+    command: ["/app/loader"]
+    depends_on:
+      graphdb:
+        condition: service_healthy
+
+  extraction:
+    build: ./extraction
+    profiles: ["tools"]
+    user: "10001:10001"
+
+volumes:
+  # GraphDB's dedicated repository storage volume (see graphdb service
+  # comment above). Removed by `make down` (`docker compose down -v`).
+  graphdb-data:
