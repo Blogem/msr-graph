@@ -92,6 +92,11 @@ expected. No EULA. Safe to ingest and redistribute derivatives.
 - **Acquisition:** `GIT_LFS_SKIP_SMUDGE=1 git clone --depth 1 …` → ~139 MB on disk,
   leaves PDFs as LFS pointers, pulls the OCR text we need. Fetch individual PDFs on
   demand only if page images are wanted.
+- **Two uses, two scopes:** the full 637-doc OCR set stays on disk and is used **only
+  for corpus-frequency statistics** (vocabulary salience, novelty scoring — cheap text
+  scans); NER/relation extraction runs on the curated core set alone. This keeps the
+  processing scope small while keeping frequency evidence (e.g. "solubility: 280/637
+  docs") real.
 
 ### POC core document set (~10–12 docs)
 
@@ -110,6 +115,13 @@ Confirmed anchors:
 Expand to ~10–12 by adding 3–4 from the MSRE chemistry/corrosion cluster
 (INOR-8 / Hastelloy-N appears in 163 docs) selected from the manifest — these feed
 the self-evolving-ontology demo with genuinely new concepts.
+
+**Selection criteria for the 3–4 additions** (the evolution demo depends on its target
+mentions existing in the *curated set*, not just corpus-wide): at least one report with
+**solubility statements carrying numeric values + units** (the fuel-salt-chemistry /
+PuF₃-and-fission-product-solubility-in-LiF-BeF₂ cluster), and the set must contain
+**graphite-as-moderator statements in prose** (ORNL-TM-0728, the MSRE design report, is
+expected to cover this — verify on ingest).
 
 ### Licensing
 
@@ -177,3 +189,6 @@ substantial verbatim text.
 2. Confirm the MSRE coolant FLiBe (~66-34 `LiF-BeF2`) row exists.
 3. Verify the `+E`, `P2`, `P3`, `DP` equation forms against `molten-salt-data.pdf`.
 4. Finalize the 3–4 additional chemistry/corrosion docs from the manifest.
+5. Confirm the final curated set actually contains the evolution-demo targets —
+   solubility statements with numeric values/units, and graphite-as-moderator prose.
+   (Corpus-wide salience counts don't guarantee presence in the 12.)
