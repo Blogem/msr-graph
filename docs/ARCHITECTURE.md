@@ -14,21 +14,22 @@ a concrete worked example below:
 
 | Component | Tech | Role |
 |-----------|------|------|
-| Structured loader | **Go** | Parse NIST CSVs, filter to fluoride subset, split salt formula+composition into constituents, load coefficients → SQLite, emit catalog triples → GraphDB. |
-| NER / relation extraction | **Python + spaCy** | Link known entities (EntityRuler seeded from the SKOS vocab) and mine unknown terms; extract salt↔property↔value and salt↔reactor↔role relations. |
-| Novelty miner + triage | **Python + LLM** | Score unlinked terms; classify candidates (property / class / instance / relation) and propose ontology placement. Python *only* because it reads spaCy's `Doc`/span output directly — see language boundary. |
-| Review app | **Go + SvelteKit** | Render each proposal as a *visual* ontology diff + evidence; capture approve/edit/reject; commit approved changes via SPARQL graph ops. |
+| Structured loader | **Go** | Parse NIST CSVs, filter to fluoride subset, split salt formula+composition into constituents, load coefficients → SQLite, emit catalog triples → GraphDB — **before NER runs**, so mentions link to loaded salt individuals. |
+| NER / relation extraction | **Python + spaCy + DeepSeek V4 Flash** | spaCy links known entities deterministically (EntityRuler seeded from the SKOS vocab **and the salt catalog**); Flash — grounded by the cached KG-schema prompt — disambiguates unresolved spans and extracts salt↔property↔value and salt↔reactor↔role relations. |
+| Novelty miner + triage | **Python + DeepSeek V4 Flash** | Score unlinked terms; classify candidates (property / class / instance / relation) and propose ontology placement. Python *only* because it reads spaCy's `Doc`/span output directly — see language boundary. |
+| Sandbox pool | **Go + Docker** | Warm pool of throwaway Python sandbox containers (channel-based) executing the analysis agent's scripts; each container is destroyed after one use and replaced fresh. |
+| Analysis agent | **Go + DeepSeek V4 Pro** | Conversational: tools are SPARQL over GraphDB, read-only SQL over SQLite, and `run_python` in a sandbox. All computation in scripts, never in the model; every step streams as a trace event. |
+| Web app | **Go + SvelteKit** | **Single frontend**: chat with the data (visible tool/script/provenance trace), ontology-diff review queue (approve/edit/reject), checkpoint/reset admin. |
 | Graph store | **GraphDB (Docker)** | Ontology (TBox) + instances (ABox) + SKOS vocab + provenance. RDF/SPARQL. |
-| Value store | **SQLite** | Numeric coefficients (NIST + text-derived), keyed by `dataLocator`. The federated numbers. |
-| Analysis agent | **Go + LLM** | Two tools — SPARQL over GraphDB, SQL over SQLite — plus equation evaluation. No ML dependency → follows the Go default. |
+| Value store | **SQLite** | Numeric coefficients (NIST + text-derived), keyed by `dataLocator`. The federated numbers. Mounted **read-only** into sandboxes. |
 
 **Language boundary.** The rule: **Python only where there's a hard ML dependency
 (spaCy); Go everywhere else.** NER + novelty mining + triage are one Python service —
 they share spaCy `Doc`/span objects, and re-implementing that in Go would mean
 serializing spaCy internals for no gain — and it emits finished *candidate proposals* as
-data. Everything downstream (structured loader, review app, analysis agent) is Go, because
-none of them touch spaCy; the LLM calls in triage and in the agent are just HTTPS to the
-model and don't pull anything toward Python. Alternative seam if you want even less
+data. Everything downstream (structured loader, sandbox pool, web-app server, analysis
+agent) is Go, because none of them touch spaCy; the LLM calls in triage and in the agent
+are just HTTPS to the model and don't pull anything toward Python. Alternative seam if you want even less
 Python: Python emits raw candidates + context and Go does the triage LLM step too — I'd
 keep triage in Python for cohesion, but it's a clean cut either way.
 
@@ -39,7 +40,7 @@ STRUCTURED                                   UNSTRUCTURED
 NIST CSVs (fluoride subset)                  msr-archive OCR (~12 curated docs)
       │                                            │
       ▼                                            ▼
-[Structured loader · Go]                     [spaCy NER + relation extraction]
+[Structured loader · Go]                     [spaCy NER + Flash relations]
       │                                       │                     │
       │  coefficients                  known entities         unknown terms
       ▼                                       │                     ▼
@@ -53,7 +54,7 @@ NIST CSVs (fluoride subset)                  msr-archive OCR (~12 curated docs)
                          │                                          │
                          └──── [Apply: +ontology +vocab +EntityRuler ; version++] ◄┘
 
-ANALYSIS:  [LLM agent] ──SPARQL──► GraphDB   +   ──SQL──► SQLite   ⇒ grounded answer
+ANALYSIS:  [agent · V4 Pro] ─SPARQL─► GraphDB · ─SQL─► SQLite · ─scripts─► sandbox ⇒ traced answer
 ```
 
 ### Stages
@@ -63,16 +64,21 @@ ANALYSIS:  [LLM agent] ──SPARQL──► GraphDB   +   ──SQL──► SQ
 1. **Structured ingest** — filter to fluoride rows; coefficients → SQLite; catalog
    triples (`MoltenSalt`, `Constituent`, `PropertyMeasurement` with `dataLocator`) →
    GraphDB. No numbers in the graph.
-2. **Unstructured ingest + NER** — spaCy `EntityRuler`/`PhraseMatcher` seeded from the
-   vocab (prefLabels + altLabels + chemical formulas) links *known* entities to concepts/
-   classes with high precision; a statistical/noun-chunk pass surfaces *unknown* terms.
-   Relation patterns produce salt↔property↔value and salt↔reactor↔role edges.
+2. **Unstructured ingest + NER** — runs **after stage 1**, so the salt catalog is already
+   in the graph. spaCy `EntityRuler`/`PhraseMatcher` seeded from the vocab (prefLabels +
+   altLabels + chemical formulas) **and the loaded salt catalog** links *known* entities —
+   including salt mentions → the loaded `MoltenSalt` individuals — with high precision; a
+   statistical/noun-chunk pass surfaces *unknown* terms. DeepSeek V4 Flash (cached
+   KG-schema prompt) extracts salt↔property↔value and salt↔reactor↔role relations and
+   disambiguates spans the lexical layers can't settle.
 3. **Graph population** — linked entities/relations → ABox triples; text-derived property
    values → `PropertyMeasurement` (source = document) with the value stored in SQLite
    *alongside the NIST coefficients* (a `source` column distinguishes them — one uniform
    federation boundary).
 4. **Self-evolution loop** — see next section (the centerpiece).
-5. **Analysis** — the LLM agent answers questions using SPARQL + SQL + evaluation.
+5. **Analysis** — conversational: the agent (DeepSeek V4 Pro) answers over SPARQL +
+   read-only SQL + sandboxed Python scripts, streaming the full trace (tool calls, data,
+   scripts, provenance) to the chat UI.
 
 ### Matching & OCR robustness (how fuzzy spaCy needs to be)
 
@@ -91,7 +97,10 @@ concept, not spawn a false novelty candidate — otherwise the queue floods):
    and composition variants unify structurally. Chemistry has structure; use it.
 4. **Bounded fuzzy matcher** — for the long tail, a `rapidfuzz`/`spaczz` pass with a high
    threshold (~90) and a minimum token length catches OCR-mangled multi-word terms.
-5. *(stretch)* embedding similarity for concept linking when lexical matching misses.
+5. **LLM disambiguation** — spans still unresolved after 1–4 go to DeepSeek V4 Flash with
+   sentence context on top of the cached KG-schema prompt; it may only link to an
+   *existing* IRI (schema-constrained JSON, validated — else rejected) or declare the span
+   novel → novelty queue. (Replaces the earlier embedding-similarity stretch idea.)
 
 Net: **high-precision linking with bounded fuzziness.** Over-fuzzy matching pollutes both
 the graph and the novelty queue, so the formula normalizer + expanded exact patterns do
@@ -230,8 +239,9 @@ loop; only the *kind* of change differs.
 
 Detailed in [ONTOLOGY.md](ONTOLOGY.md#how-the-ai-analysis-uses-it): "density of this
 LiF-BeF2 melt at 900 K?" → agent SPARQLs the graph for the measurement (Linear form,
-in-range, locator), pulls `c0,c1` from SQLite, evaluates `2.413 − 4.88e-4·900 =
-**1.974 g·cm⁻³**`. Graph = method, table = numbers. After the evolution example above,
+in-range, locator), pulls `c0,c1` from SQLite, and evaluates via a generated Python script
+in a sandbox: `2.413 − 4.88e-4·900 = **1.974 g·cm⁻³**` — the script itself appears in the
+chat trace. Graph = method, table = numbers, sandbox = computation. After the evolution example above,
 the *same* agent can now also answer solubility questions — the analysis surface grows
 automatically as the ontology evolves.
 
@@ -241,8 +251,9 @@ The seams each implementation chunk builds against — decided here so OpenSpec 
 reference them instead of re-deciding.
 
 **Run model — batch, not services.** Only two long-running processes: GraphDB (Docker) and
-the review app (`reviewd`). The loader, corpus ingest, NER/extraction, and the novelty
-miner are CLI stages behind `make` targets. Two consequences: the spaCy `EntityRuler` is
+the web-app server (`server` — chat, review, and checkpoint APIs, the embedded frontend,
+and the sandbox-pool manager). The loader, corpus ingest, NER/extraction, and the novelty
+miner are one-shot container runs behind `make` targets. Two consequences: the spaCy `EntityRuler` is
 **rebuilt from the graph** (vocab + approved concepts) at the start of every extraction run
 — approval doesn't push a refresh signal, the next run simply sees the new concept; and
 **back-population = re-run** — at ~12 docs a full re-pass is cheaper and safer than
@@ -271,7 +282,8 @@ Every stage can be re-run safely; SQLite writes are `INSERT OR REPLACE` on the l
 | Python extraction | mention/relation triples → `urn:msr:data`; proposals → `urn:msr:proposal/{id}` + `urn:msr:staging` | SPARQL UPDATE over HTTP |
 | Python extraction | SQLite (text-derived values, `source='document'`) | stdlib `sqlite3` |
 | Go apply engine | GraphDB graph ops (ADD, status flips, version bump) | SPARQL UPDATE |
-| Analysis agent | read-only | SPARQL SELECT (core dataset) + SQL SELECT |
+| Analysis agent | read-only | SPARQL SELECT (core dataset) · SQL SELECT · scripts via sandbox |
+| Sandbox scripts | SQLite mounted **read-only** at `/data/msr.db` | stdlib `sqlite3`; no write path exists |
 
 GraphDB's HTTP endpoint is language-neutral, so Python writing the graph directly doesn't
 blur the language boundary — that rule is about ML dependencies, not store access.
@@ -280,10 +292,25 @@ blur the language boundary — that rule is about ML dependencies, not store acc
 membership stays predictable (no inferred triples materializing outside their named
 graph), and the POC's hierarchy queries are fine with property paths (`rdfs:subClassOf*`).
 
-**LLM access.** Anthropic API on both sides of the language boundary — the Go analysis
-agent via `anthropic-sdk-go`, the Python triage step via the `anthropic` package. Model is
-config (`ANTHROPIC_MODEL`, default `claude-sonnet-5`); clients are injected so tests run
-against stubs, never the live API.
+**LLM access — DeepSeek API only.** No Anthropic models and no local LLMs anywhere in the
+design (spaCy is a local *NER pipeline*, not an LLM — it stays). The endpoint is
+OpenAI-compatible, so Go and Python both use OpenAI-compatible clients with the base URL
+overridden. Two models, one per side of the pipeline:
+
+- **DeepSeek V4 Flash** — extraction side: span disambiguation, relation extraction,
+  novelty triage.
+- **DeepSeek V4 Pro** — the conversational analysis agent.
+
+**Prompt caching.** DeepSeek context caching is prefix-based and automatic, so the system
+prompt is built as a **byte-stable prefix**: a canonical, deterministically ordered
+serialization of the ontology TBox + SKOS vocab + the salt catalog (small, stable,
+schema-level). It regenerates only on an ontology version bump — invalidating the cache
+exactly when the schema actually changes. **Not the whole graph:** mentions, measurements,
+and evidence stay behind tools — they grow unbounded, and the traceability requirement
+wants data retrieval *visible as tool calls*, not silently baked into a prompt.
+
+Config: `DEEPSEEK_BASE_URL`, `LLM_MODEL_EXTRACT` (Flash), `LLM_MODEL_ANALYSIS` (Pro).
+Clients are injected interfaces — **tests always run against stubs, never a live model.**
 
 **Salience vs. extraction scope.** The LFS-skip clone leaves all 637 OCR texts on disk, so
 document-frequency statistics (novelty scoring, the vocabulary's evidence numbers) are
@@ -296,17 +323,92 @@ and the processing scope stays small.
 and writes a PROV activity (reviewer, timestamp, evidence link) into `<urn:msr:staging>` —
 the audit trail lives with the proposal history, outside the analysis dataset.
 
+## Analysis execution — sandboxed Python pool
+
+**All computation happens in throwaway sandboxes — none in the model, and none in SQLite.**
+This supersedes the earlier `msr_eval`-in-SQLite decision: the agent now writes small
+Python scripts and executes them via a `run_python` tool. A Go **sandbox pool** keeps N
+warm containers ready:
+
+- **Pool mechanics (Go):** a buffered channel `chan *Sandbox` *is* the pool; acquire =
+  channel receive (blocks when empty). There is no release — after **one** script run the
+  container is force-removed (no artifacts survive between runs) and a goroutine spawns a
+  fresh replacement into the channel.
+- **Container spec:** minimal Python image (stdlib + numpy/pandas pre-installed),
+  `--network none`, read-only root FS + tmpfs `/tmp`, non-root user, CPU/memory/pids
+  limits, wall-clock timeout; the SQLite file is bind-mounted **read-only** at
+  `/data/msr.db`.
+- **Script contract:** script source arrives on stdin (`docker exec -i … python -`), the
+  result is JSON on stdout; stderr + exit code are captured for the trace. Scripts query
+  `/data/msr.db` (stdlib `sqlite3`) and compute — equation evaluation, aggregation,
+  comparison — in deterministic code a reviewer can read in the trace.
+- The *no-model-arithmetic* invariant survives the redesign and gets more visible: every
+  computation is a script in the trace, and the agent's final numbers must match script
+  output.
+
+## Conversational analytics & traceability (key requirement)
+
+Chatting with the data is the user-facing analysis surface, and **the trace is a
+first-class deliverable** — for the POC, *how* an answer was produced matters as much as
+the answer itself.
+
+- **Chat API (Go server):** `POST /api/chat`, streaming **trace events** over SSE:
+  `text` (assistant tokens) · `tool_call` (name + args) · `tool_result` (bindings/rows,
+  truncated inline, full payload retrievable) · `script_run` (script source, stdout,
+  stderr, exit code, sandbox id) · `provenance` (dataLocators, `citedIn` documents,
+  dataset DOIs, ontology version used) · `done`.
+- **UI:** answer pane plus a per-turn expandable **trace timeline** — every claim links
+  back to the tool step that produced it; provenance chips (NIST DOI / ORNL report)
+  render inline.
+- **Persistence:** events append to a `trace` table in SQLite so a demo run can be
+  replayed and inspected afterwards.
+- Traceability also settles the prompt-vs-tools question above: data reaches the model
+  through **visible tool calls**, never by stuffing instance data into the prompt.
+
+## Checkpoints & demo rollback
+
+Demo requirement: evolve the ontology, roll it back, do it again.
+
+- **Checkpoint** = full GraphDB repository export (TriG, **all** named graphs incl.
+  staging/proposals) + a copy of the SQLite file + the ontology version, stored under
+  `data/checkpoints/{label}/`.
+- **Restore** = clear repository → import the TriG → put the SQLite copy back. Full-store
+  restore is deliberately chosen over per-change undo: proposal statuses, back-populated
+  instances, and text-derived rows all revert together in one atomic move — no dangling
+  ABox referencing a rolled-back class.
+- Exposed as API (`POST /api/checkpoints`, `POST /api/checkpoints/{label}/restore`) + an
+  admin panel in the web app; `make checkpoint` / `make restore` wrappers.
+- Per-change undo stays cheap if ever wanted (each approval is an isolated
+  `ADD <proposal> TO core`, so a DELETE-by-proposal-pattern can surgically remove one
+  change), but checkpoints are the demo path.
+
+## Deployment — everything in containers
+
+The whole solution runs under Docker Compose:
+
+| Service | Image | Notes |
+|---------|-------|-------|
+| `graphdb` | ontotext/graphdb | repo `msr`, data volume |
+| `server` | Go binary + embedded SvelteKit build | chat + review + checkpoint APIs; mounts `/var/run/docker.sock` to manage the sandbox pool (sandboxes are **sibling** containers) |
+| `extraction` | Python (spaCy + pipeline) | one-shot runs via `make extract`, not long-running |
+| sandbox pool | minimal Python image | N sibling containers, lifecycle owned by `server` |
+
+A shared volume carries the SQLite file (server read-write, sandboxes read-only) and the
+corpus cache.
+
 ## Tech stack summary
 
-- **GraphDB** (Docker, local) — RDF/SPARQL triple store.
-- **SQLite** — federated numeric value store.
-- **spaCy** — NER + relation extraction; `EntityRuler` synced from the vocab + approved
-  concepts.
-- **Go** — structured loader, analysis agent, and the review-app backend.
-- **SvelteKit** — review-app frontend (visual ontology diffs + evidence panels).
-- **Python** — the spaCy extraction service *only*: NER, novelty mining, triage.
-- **LLM** — Anthropic API: triage classification (Python `anthropic`) and the analysis
-  agent (Go `anthropic-sdk-go`); model via `ANTHROPIC_MODEL`.
+- **GraphDB** (Docker) — RDF/SPARQL triple store.
+- **SQLite** — federated numeric value store; mounted read-only inside sandboxes.
+- **spaCy** — deterministic NER first pass; `EntityRuler` synced from the vocab + salt
+  catalog + approved concepts.
+- **Go** — structured loader, sandbox pool, analysis agent, web-app server.
+- **SvelteKit** — the single frontend: chat + trace timeline, review queue, admin.
+- **Python** — the spaCy extraction service *only*: NER, relations, novelty mining, triage.
+- **LLM** — DeepSeek API (OpenAI-compatible): **V4 Flash** for extraction/triage, **V4
+  Pro** for analysis; cached KG-schema system prompt; stubbed in all tests.
+- **Docker Compose** — the whole solution runs in containers; sandboxes are managed
+  sibling containers.
 
 ## Open questions for review
 
@@ -318,17 +420,31 @@ Decided:
   changes (new property / class / relation) go through the human review gate. ✓
 - **Review app** → Go + SvelteKit rendering visual ontology diffs. ✓
 - **Language boundary** → Python only for the spaCy extraction service; Go everywhere else. ✓
-- **Run model** → batch CLI stages; only GraphDB + `reviewd` long-running; EntityRuler
+- **Run model** → batch CLI stages; only GraphDB + `server` long-running; EntityRuler
   re-seeded from the graph per run; back-population = idempotent re-run. ✓
 - **Core-dataset enforcement** → query-layer `FROM` injection in a shared Go SPARQL client
   (GraphDB's no-dataset default is union-of-all-graphs). ✓
 - **Writes** → deterministic IRIs, no blank nodes, idempotent re-runs; Python talks to
   GraphDB/SQLite directly. ✓
 - **Inference** → disabled; hierarchy queries via property paths. ✓
-- **LLM** → Anthropic API (Go SDK / Python SDK), model via config, stubbed in tests. ✓
+- **LLM** → DeepSeek API only (V4 Flash for extraction/disambiguation/triage, V4 Pro for
+  analysis), OpenAI-compatible clients, cached byte-stable KG-schema prompt — no Anthropic
+  models, no local LLMs; tests always run against stubs. ✓
+- **Computation** → sandboxed Python pool (warm, channel-based, destroy-after-one-use);
+  supersedes `msr_eval`-in-SQLite. ✓
+- **Relation extraction depth** → resolved: DeepSeek V4 Flash with schema-constrained,
+  validated output (was rules-vs-LLM). ✓
+- **Frontend** → one SvelteKit app: chat + trace, review, admin. Traceability/explainability
+  is a key requirement — the trace is a first-class deliverable. ✓
+- **Rollback** → checkpoint/restore of the full store (graph + SQLite) for demo re-runs. ✓
+- **Deployment** → everything in containers (Compose); `server` manages sandbox siblings
+  via the Docker socket. ✓
+- **NER ordering** → the salt catalog loads before NER; entity linking targets the loaded
+  salt individuals, not just vocab concepts. ✓
 - **Salience scope** → frequency stats over all 637 OCR texts; extraction over the curated set. ✓
 
 Open (build-time tuning, non-blocking):
 - **Novelty salience threshold** — fixed document-frequency cutoff vs. relative/tf-idf.
-- **Relation extraction depth** — dependency-pattern rules (cheaper, brittle) vs. an LLM
-  extractor (richer, costlier) for salt↔property↔value edges.
+- **Sandbox pool sizing** — pool size (default 3) and per-container CPU/mem/timeout limits.
+- **Exact DeepSeek model ids** — pin the V4 Flash/Pro identifiers at build time (config
+  aliases until then).
