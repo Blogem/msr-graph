@@ -288,9 +288,19 @@ Every stage can be re-run safely; SQLite writes are `INSERT OR REPLACE` on the l
 GraphDB's HTTP endpoint is language-neutral, so Python writing the graph directly doesn't
 blur the language boundary — that rule is about ML dependencies, not store access.
 
-**GraphDB repository.** Single repo `msr`, **inference disabled** (no ruleset): graph
-membership stays predictable (no inferred triples materializing outside their named
-graph), and the POC's hierarchy queries are fine with property paths (`rdfs:subClassOf*`).
+**GraphDB repository.** Single repo `msr`, **inference disabled** (no ruleset), for three
+reasons. (1) *Staging isolation*: forward-chaining materializes inferred triples into the
+implicit graph, not the named graph of their premises — so a pending proposal could spawn
+statements outside its proposal graph, and graph membership (the entire isolation
+mechanism) stops being reliable; checkpoint/restore and the idempotency/triple-count tests
+also stay exact only when the store holds exactly what was written. (2) *Traceability*:
+inferred triples live in no graph we control and carry no provenance (`citedIn`, DOI,
+version) — an answer grounded on one breaks the provenance chain; and domain/range
+inference silently repairs typing mistakes the review loop should surface instead.
+(3) *Low payoff*: the shallow TBox only needs subclass/type propagation, which property
+paths (`rdfs:subClassOf*`) answer explicitly. Revisit note: GraphDB fixes the ruleset at
+repository creation (changing it means recreating the repo) — another reason to start
+disabled and opt in later rather than the reverse.
 
 **LLM access — DeepSeek API only.** No Anthropic models and no local LLMs anywhere in the
 design (spaCy is a local *NER pipeline*, not an LLM — it stays). The endpoint is
