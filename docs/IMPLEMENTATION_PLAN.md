@@ -48,6 +48,7 @@ Fixed here so each OpenSpec change references them instead of re-deciding. Detai
   webapp/         SvelteKit frontend — chat + review + admin (static build embedded in server)
   data/           nist/ (vendored CSVs, committed) · corpus/ (OCR cache, gitignored) ·
                   checkpoints/ (gitignored)
+  testdata/       shared cross-language fixtures (salt-canonicalization.json)
   ```
 
 - **Named graphs & core dataset:** core = `urn:msr:ontology` + `urn:msr:data` +
@@ -77,6 +78,11 @@ Fixed here so each OpenSpec change references them instead of re-deciding. Detai
   (`LiF-BeF2,34.0-66.0` → `BeF2-LiF | 66.0-34.0`); the canonical form is used in IRIs,
   locators, the SQLite `salt` column, and labels. Friendly names come from vocab
   `closeMatch`, and chunk 6's formula normalizer maps mention variants to the same form.
+  The rule is implemented **twice on purpose** — Go in the loader (chunk 2), Python for
+  text mentions (chunk 6); it's pure string/structure work, so duplication beats a
+  cross-language dependency. Drift guard: a shared fixture
+  `testdata/salt-canonicalization.json` (raw → canonical cases, authored by chunk 2)
+  that **both** the Go tests and the pytest suite must pass.
 - **Deterministic IRIs, no blank nodes** in pipeline-written data — re-runs are idempotent
   (RDF set semantics); minting scheme in ARCHITECTURE. The seed A-Box
   (`example-flibe.ttl`) already follows the contract; seed files load with graph-replace
@@ -118,7 +124,7 @@ Fixed here so each OpenSpec change references them instead of re-deciding. Detai
 - **Interfaces:** consumes `data/nist/*.txt`; produces SQLite rows + catalog triples that chunk 4 reads, chunk 6 links mentions against, and chunk 7 extends.
 - **Depends on:** 1
 - **Acceptance:** FLiBe density coefficients (`2.413, -4.88e-4`) present in SQLite; SPARQL returns a FLiBe density `PropertyMeasurement` with a resolvable locator; no chloride rows loaded (fluoride filter verified); re-running the loader changes nothing; **DATA_SCOPE open items 1–3 answered and recorded**: fluoride row counts per property file, FLiNaK + MSRE-coolant row presence confirmed, equation forms verified against `molten-salt-data.pdf`.
-- **Test seed:** table-driven tests for the formula/composition parser (positional mole %, composition *ranges* incl. the positional-vs-range disambiguation — a value list matching the component count and summing to ~100 is positional, otherwise range semantics, neither → flag for manual review; canonicalization `LiF-BeF2,34.0-66.0` → `BeF2-LiF | 66.0-34.0`), equation-form mapping (`P1/P2/P3/+E/DP`), the fluoride filter (rejects chlorides + mixed-anion salts), and the unit-allowlist guard; loader idempotency.
+- **Test seed:** table-driven tests for the formula/composition parser (positional mole %, composition *ranges* incl. the positional-vs-range disambiguation — a value list matching the component count and summing to ~100 is positional, otherwise range semantics, neither → flag for manual review; canonicalization `LiF-BeF2,34.0-66.0` → `BeF2-LiF | 66.0-34.0`), equation-form mapping (`P1/P2/P3/+E/DP`), the fluoride filter (rejects chlorides + mixed-anion salts), and the unit-allowlist guard; loader idempotency. **Authors the shared canonicalization fixture** `testdata/salt-canonicalization.json` (chunk 6's Python normalizer must pass the same cases).
 
 ## 3 — `sandbox-exec-pool`  *(structured · execution)*
 - **Goal:** A warm pool of throwaway sandbox containers that runs Python scripts safely — **all analysis computation happens here**, not in the model and not in SQLite (supersedes the earlier `msr_eval` design).
@@ -154,7 +160,7 @@ Fixed here so each OpenSpec change references them instead of re-deciding. Detai
 - **Interfaces:** consumes `segments.jsonl` + the graph's concept labels + salt catalog; produces mention triples that chunks 7 and 8 consume.
 - **Depends on:** 1, 2, 5
 - **Acceptance:** in ORNL-TM-2316, "LiF-BeF2", "FLiBe", "viscosity", "MSRE" link to the correct concepts **and the LiF-BeF2 mention resolves to the loaded salt individual**; formula variants (`BeF2-LiF` ≡ `LiF-BeF2`) unify; an OCR-mangled span unresolved lexically is settled by the Flash layer (fixture); Flash output referencing an unknown IRI is rejected; **linking precision ≥ 0.90 on a labelled sample of ≥ 50 mentions from ORNL-TM-2316** (recall reported but not gated — the design is precision-biased); re-running the pipeline adds no duplicate mentions.
-- **Test seed:** pytest for the formula normalizer (hyphen/order/`·`/subscript variants → one canonical form), pattern-variant generation, **stubbed-Flash** disambiguation (accept on valid IRI, reject on unknown IRI, novel-span path), and a small labelled-sample precision harness (fixture sentences from ORNL-TM-2316).
+- **Test seed:** pytest for the formula normalizer (hyphen/order/`·`/subscript variants → one canonical form; **must pass the shared chunk-2 fixture** `testdata/salt-canonicalization.json` so Go and Python canonicalization can't drift), pattern-variant generation, **stubbed-Flash** disambiguation (accept on valid IRI, reject on unknown IRI, novel-span path), and a small labelled-sample precision harness (fixture sentences from ORNL-TM-2316).
 - **Open tuning:** fuzziness threshold (see ARCHITECTURE open questions).
 
 ## 7 — `extract-property-relations`  *(unstructured · relations)*
