@@ -1,0 +1,74 @@
+#
+# GraphDB repository configuration for repository "msr" (MSR knowledge-graph POC).
+#
+# Vendored from GraphDB's own repository-configuration TTL template
+# (RDF4J config vocabulary + the graphdb: extension properties), unchanged in
+# structure across GraphDB 11.0–11.4; this file targets GraphDB 11.4.2.
+#
+# NO RULESET (graphdb:ruleset "empty" below): inference is DISABLED for this
+# repository per architecture decision D2 (see openspec/changes/
+# bootstrap-graph-infra/design.md). Reasons:
+#   - staging isolation: the core-dataset client (internal/graph.Select)
+#     enforces the core/staging boundary at the named-graph level; inferred
+#     triples would blur what's asserted vs. derived and could leak across
+#     that boundary in ways the client's FROM/FROM NAMED contract can't see
+#   - traceability: every triple in the store is then something a loader or
+#     the review/promotion flow actually wrote, not materialized by the
+#     reasoner
+#   - low payoff for this POC's query patterns
+# Inference is fixed at repository creation — this config is POSTed once by
+# the bootstrap/repo-ensure step (check-then-create, idempotent). Enabling
+# inference later means recreating the repository from a new config, which is
+# deliberate (see design.md D2 and the "Ruleset is fixed at repo creation"
+# risk note).
+#
+# Consumed by: the `make up` repo-bootstrap step, which POSTs this file to
+# GraphDB's REST API (POST /rest/repositories, multipart/form-data field
+# "config") and is referenced from docker-compose.yml.
+#
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#>.
+@prefix rep: <http://www.openrdf.org/config/repository#>.
+@prefix sr: <http://www.openrdf.org/config/repository/sail#>.
+@prefix sail: <http://www.openrdf.org/config/sail#>.
+@prefix graphdb: <http://www.ontotext.com/config/graphdb#>.
+
+[] a rep:Repository ;
+    rep:repositoryID "msr" ;
+    rdfs:label "MSR knowledge graph (inference disabled — see D2)" ;
+    rep:repositoryImpl [
+        rep:repositoryType "graphdb:SailRepository" ;
+        sr:sailImpl [
+            sail:sailType "graphdb:Sail" ;
+
+            graphdb:read-only "false" ;
+
+            # Inference and Validation — NO RULESET (D2)
+            graphdb:ruleset "empty" ;
+            graphdb:disable-sameAs "true" ;
+            graphdb:check-for-inconsistencies "false" ;
+
+            # Indexing
+            graphdb:entity-id-size "32" ;
+            graphdb:enable-context-index "false" ;
+            graphdb:enablePredicateList "true" ;
+            graphdb:enable-fts-index "false" ;
+            graphdb:fts-indexes ("default" "iri") ;
+            graphdb:fts-string-literals-index "default" ;
+            graphdb:fts-iris-index "none" ;
+
+            # Queries and Updates
+            graphdb:query-timeout "0" ;
+            graphdb:throw-QueryEvaluationException-on-timeout "false" ;
+            graphdb:query-limit-results "0" ;
+
+            # Settable in the file but otherwise hidden in the UI and in the RDF4J console
+            graphdb:base-URL "http://example.org/owlim#" ;
+            graphdb:defaultNS "" ;
+            graphdb:imports "" ;
+            graphdb:repository-type "file-repository" ;
+            graphdb:storage-folder "storage" ;
+            graphdb:entity-index-size "10000000" ;
+            graphdb:in-memory-literal-properties "true" ;
+            graphdb:enable-literal-index "true" ;
+        ]
+    ].
