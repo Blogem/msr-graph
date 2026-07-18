@@ -7,19 +7,19 @@ section). Grounded in `docs/ARCHITECTURE.md`.
 
 ## Summary
 
-| # | Change (suggested id) | Track | Tech | Depends on |
-|---|-----------------------|-------|------|-----------|
-| 1 | `bootstrap-graph-infra` | foundation | Docker, Go, Python | — |
-| 2 | `load-nist-structured-data` | structured | Go, SQLite | 1 |
-| 3 | `sandbox-exec-pool` | structured | Go, Docker | 1 |
-| 4 | `grounded-analysis-agent` | structured | Go, DeepSeek V4 Pro | 1, 2, 3 |
-| 5 | `ingest-archive-documents` | unstructured | Python | 1 |
-| 6 | `ner-entity-linking` | unstructured | Python, spaCy, DeepSeek V4 Flash | 1, 2, 5 |
-| 7 | `extract-property-relations` | unstructured | Python, DeepSeek V4 Flash | 2, 6 |
-| 8 | `mine-ontology-candidates` | evolution | Python, DeepSeek V4 Flash | 1, 6 |
-| 9 | `apply-ontology-changes` | evolution | Go | 1, 8 |
-| 10 | `web-frontend` | UI | SvelteKit | 4, 9 |
-| 11 | `ingest-iaea-safety` *(stretch)* | unstructured | Python | 6–10 |
+| # | Change (suggested id) | Track | Tech | Depends on | Phase |
+|---|-----------------------|-------|------|-----------|-------|
+| 1 | `bootstrap-graph-infra` | foundation | Docker, Go, Python | — | P1 |
+| 2 | `load-nist-structured-data` | structured | Go, SQLite | 1 | P2 |
+| 3 | `sandbox-exec-pool` | structured | Go, Docker | 1 | P2 |
+| 4 | `grounded-analysis-agent` | structured | Go, DeepSeek V4 Pro | 1, 2, 3 | P3 |
+| 5 | `ingest-archive-documents` | unstructured | Python | 1 | P2 |
+| 6 | `ner-entity-linking` | unstructured | Python, spaCy, DeepSeek V4 Flash | 1, 2, 5 | P3 |
+| 7 | `extract-property-relations` | unstructured | Python, DeepSeek V4 Flash | 2, 6 | P4 |
+| 8 | `mine-ontology-candidates` | evolution | Python, DeepSeek V4 Flash | 1, 6 | P4 |
+| 9 | `apply-ontology-changes` | evolution | Go | 1, 8 | P5 |
+| 10 | `web-frontend` | UI | SvelteKit | 4, 9 | P6 |
+| 11 | `ingest-iaea-safety` *(stretch)* | unstructured | Python | 6–10 | — |
 
 **Two tracks** run after the foundation: a **structured** track (2 · 3 → 4) that lands the
 grounded-analysis demo early (chat API with full trace, before any UI), and an
@@ -28,8 +28,36 @@ single frontend. The analysis agent (4) is schema-generic, so it automatically b
 from data added by 7 and 9 with **no rework**. Chunk 6 depends on 2 on purpose: the salt
 catalog loads **before** NER so mentions link to existing salt individuals.
 
-**Milestones:** chunk 4 = grounded-analysis demo works (traced, via API); chunk 10 = both
-demos in the web app, incl. checkpoint/reset re-runs.
+**Milestones:** one per phase (M1–M6, defined under *Phases* below); the headline ones are
+**M3** (chunk 4 — grounded-analysis demo works, traced, via API) and **M6** (chunk 10 —
+both demos in the web app, incl. checkpoint/reset re-runs).
+
+## Phases — parallel execution & milestones
+
+Chunks grouped into dependency waves: everything inside a phase can be built **in
+parallel** (independent OpenSpec changes, separate branches per the branch-naming
+convention); a phase starts only when the previous milestone is met. Within a phase the
+only shared surface is the root config (`Makefile`, `docker-compose.yml`, both owned by
+chunk 1) — keep changes to those additive and rebase frequently.
+
+| Phase | Changes (parallel) | Milestone — phase exit criteria |
+|-------|--------------------|---------------------------------|
+| **P1** | 1 `bootstrap-graph-infra` | **M1 — stores live.** GraphDB + SQLite up via `make up`; seed ontology/vocab/A-Box loaded and queryable through the core-dataset client; staging exclusion pinned by test. |
+| **P2** | 2 `load-nist-structured-data` · 3 `sandbox-exec-pool` · 5 `ingest-archive-documents` | **M2 — data landed, execution ready.** NIST fluoride subset in SQLite + catalog triples in the graph; curated corpus normalized/segmented with the evolution-demo targets verified present; sandbox pool runs scripts against the read-only DB with isolation properties tested. |
+| **P3** | 4 `grounded-analysis-agent` · 6 `ner-entity-linking` | **M3 — demo #1: grounded analysis.** The agent answers the density question over the chat API with a full SSE trace, all computation in sandbox scripts; text mentions linked to vocab concepts and the loaded salt individuals at ≥ 0.90 precision. |
+| **P4** | 7 `extract-property-relations` · 8 `mine-ontology-candidates` | **M4 — knowledge grows from text.** Text-derived measurements answerable by the *unchanged* agent; `solubility` + `graphite` proposals sit in staging with evidence, invisible to the core dataset. |
+| **P5** | 9 `apply-ontology-changes` | **M5 — evolution loop closed (API-level).** Approve routes proposal bundles into core (the agent now answers solubility questions); reject/edit work; checkpoint → approve → restore reverts everything and the approval can be re-run. |
+| **P6** | 10 `web-frontend` | **M6 — demo #2: the full POC.** One web app serving chat + trace timeline, review with rendered ontology diff, and admin checkpoint/reset; both demos re-runnable end-to-end from a pre-demo checkpoint. |
+| *stretch* | 11 `ingest-iaea-safety` | Safety branch grown via the same loop (post-M6). |
+
+Scheduling notes:
+
+- The table is the **earliest-start** assignment; the *Depends on* column in the summary
+  stays authoritative. Two legal slips if a phase drags: **4** only needs 2 + 3, so it may
+  start before 5 finishes; **7** has no downstream dependents (nothing consumes it except
+  the demo surface), so it may run alongside P5 without blocking 9.
+- **6 gates the most** (7, 8, and transitively 9–10 all sit behind it) — staff it first
+  within P3.
 
 ## Cross-cutting contracts (bind all chunks)
 
@@ -211,4 +239,6 @@ Fixed here so each OpenSpec change references them instead of re-deciding. Detai
 - **5** can fold into 6 if you prefer fewer changes.
 - **3** is deliberately standalone: the sandbox pool is the security-sensitive piece and
   deserves its own spec and review.
-- Chunks **3** and **5** can be specced/built in parallel once **1** lands.
+- Parallel scheduling lives in *Phases — parallel execution & milestones* above; merging
+  or splitting chunks per these notes means re-deriving the affected phases from the
+  dependency column.
