@@ -138,9 +138,11 @@ Custom OWL ontology (RDF, loadable into GraphDB) with three layers:
 - **Property + measurement (QUDT-style quantity pattern):** `Density`, `Viscosity`,
   `SurfaceTension` (reuse DIAMOND labels; DIAMOND calls surface tension
   `InterfacialTension`), plus `ElectricalConductivity` (**DIAMOND lacks this — new**).
-  A `PropertyMeasurement` node carries `ofSalt`, `hasProperty`, `hasUnit`
-  (qudt:Unit), `tempRangeMin/Max`, `equationForm`, `coefficients`, `sourceDataset`,
-  `sourceRow`. Units via QUDT (`GM-PER-CentiM3`, `S-PER-CentiM`, `mN-PER-M`, `MilliPA-SEC`).
+  A `PropertyMeasurement` node carries `ofSalt`, `forProperty`, `hasUnit` (qudt:Unit),
+  `validTempMin/Max`, `equationForm`, `uncertainty`, and a `dataLocator` pointing at the
+  coefficient row in SQLite (the numbers stay external); provenance via
+  `prov:wasDerivedFrom` / `citedIn`. Units via QUDT (`GM-PER-CentiM3`, `S-PER-CentiM`,
+  `mN-PER-M`, `MilliPA-SEC`) — see `ONTOLOGY.md` for the materialized T-Box.
 - **Reactor:** `MoltenSaltReactor` (reuse DIAMOND), `MSRE` individual; components
   `ReactorCore`, `Coolant`, `HeatExchanger`, `Pump`; salt roles `FuelSalt`,
   `CoolantSalt`, `FlushSalt`.
@@ -185,10 +187,17 @@ substantial verbatim text.
 
 ## Open items to verify on ingestion
 
+Each item is owned by an implementation chunk (see `IMPLEMENTATION_PLAN.md`) and appears
+in that chunk's acceptance criteria.
+
 1. Exact fluoride row counts per property file; confirm FLiNaK (`LiF-NaF-KF`) presence.
-2. Confirm the MSRE coolant FLiBe (~66-34 `LiF-BeF2`) row exists.
+   → **chunk 2** (`load-nist-structured-data`)
+2. Confirm the MSRE coolant FLiBe (~66-34 `LiF-BeF2`) row exists. → **chunk 2**
 3. Verify the `+E`, `P2`, `P3`, `DP` equation forms against `molten-salt-data.pdf`.
+   → **chunk 2**
 4. Finalize the 3–4 additional chemistry/corrosion docs from the manifest.
+   → **chunk 5** (`ingest-archive-documents`)
 5. Confirm the final curated set actually contains the evolution-demo targets —
    solubility statements with numeric values/units, and graphite-as-moderator prose.
-   (Corpus-wide salience counts don't guarantee presence in the 12.)
+   (Corpus-wide salience counts don't guarantee presence in the 12.) → **chunk 5**;
+   gates chunks 8–10.
