@@ -121,9 +121,12 @@ Nothing mutates the ontology automatically — the loop *proposes*, a human *dis
    - **Class** — appears in material/'`constructed of X`' or process contexts → propose a
      new subclass under an existing class.
    - **Instance** — matches a compound-formula or named-reactor pattern → a new individual.
-     **Auto-accepted** straight into `<urn:msr:data>` (flagged `msr:autoAccepted true`,
-     provenance kept) since the schema is unchanged; only property/class/relation changes
-     hit the review gate.
+     **Never enters staging**: the extraction run writes it directly into `<urn:msr:data>`
+     (flagged `msr:autoAccepted true`, provenance kept) since the schema is unchanged; only
+     TBox changes (property/class/relation) hit the review gate. Exception: an individual
+     that depends on *proposed* schema (e.g. `msrd:graphite` needs the proposed `Moderator`
+     class) cannot be typed yet — it rides along inside that proposal's bundle and reaches
+     `<urn:msr:data>` when the proposal is approved.
    - **Relation** — recurring subject–verb–object between known types → propose a new
      object property.
 4. **Ground & package.** An LLM classifier confirms the kind and proposes placement
@@ -135,10 +138,19 @@ Nothing mutates the ontology automatically — the loop *proposes*, a human *dis
    source sentences with highlighted spans and document links. (The underlying triples are
    available as a raw view, but the reviewer works with the rendered diff.) Approve / edit
    / reject.
-6. **Apply.** On approval the candidate's named graph is promoted with a single graph op
-   (`ADD <urn:msr:proposal/{id}> TO <urn:msr:ontology>`), status → `approved`, the ontology
-   version is bumped with a PROV record (who / when / evidence), and the spaCy `EntityRuler`
-   gains the new pattern so future mentions link automatically.
+6. **Apply.** A proposal is **one bundle of nodes + edges** the reviewer approves or
+   rejects as a whole — but its triples can belong to different core graphs (a new class →
+   ontology; its SKOS concept → vocab; individuals and their edges → data). On approval the
+   apply engine therefore **routes by triple type** instead of one graph-level `ADD`:
+   subjects typed `skos:Concept` (and SKOS-predicate triples) → `<urn:msr:vocab>`; TBox
+   axioms (`owl:Class` / `owl:ObjectProperty` / `owl:DatatypeProperty` declarations,
+   `rdfs:subClassOf`, domain/range, `msr:PhysicalProperty` individuals with their
+   `quantityKind`/`canonicalUnit`) → `<urn:msr:ontology>`; everything else (individuals,
+   edges between individuals) → `<urn:msr:data>`. Implemented as three filtered
+   `INSERT { GRAPH <dest> … } WHERE { GRAPH <proposal> … }` copies; the proposal graph
+   stays put as the audit record. Status → `approved`, the ontology version is bumped with
+   a PROV record (who / when / evidence), and the spaCy `EntityRuler` gains the new pattern
+   so future mentions link automatically.
 7. **Back-populate.** Previously-parked mentions are re-processed into instances now that
    a target exists.
 
@@ -165,8 +177,11 @@ all) goes through it. A chunk-1 acceptance test pins the exclusion. The review a
 `<urn:msr:staging>` to list what's pending. Lifecycle:
 
 - **detected** → proposed triples → `<urn:msr:proposal/{id}>`; a `ChangeProposal`
-  (`msr:reviewStatus "pending"`) → `<urn:msr:staging>`.
-- **approve** → `ADD <urn:msr:proposal/{id}> TO <urn:msr:ontology>` (or `…/data`); status → `approved`.
+  (`msr:reviewStatus "pending"`) → `<urn:msr:staging>`. (TBox proposals only — instances
+  are written directly to `<urn:msr:data>` by the extraction run, never staged.)
+- **approve** → typed routing copies the proposal's triples into
+  `<urn:msr:ontology>` / `<urn:msr:vocab>` / `<urn:msr:data>` (see *Apply* above);
+  status → `approved`.
 - **edit** → modify the proposal graph, then approve.
 - **reject** → status → `rejected`; triples stay put (audit trail), never reach core.
 
@@ -204,17 +219,19 @@ neither contains **solubility**. NER is running over the MSR chemistry reports.
    +     skos:prefLabel "solubility"@en ; skos:altLabel "miscibility"@en .
    ```
    → **approve.**
-6. **Apply.** The proposal's named graph is promoted (`ADD <urn:msr:proposal/{id}> TO
-   <urn:msr:ontology>`); ontology `0.1.0-seed → 0.2.0` with a PROV activity
-   (`prov:wasAssociatedWith` the reviewer, `prov:used` the evidence); the EntityRuler gains
-   `"solubility" → msr:solubility`.
+6. **Apply.** The proposal bundle is promoted by **typed routing**: `msr:solubility` (a
+   `PhysicalProperty` individual with its `quantityKind`/`canonicalUnit`) →
+   `<urn:msr:ontology>`, the `voc:solubility` SKOS concept → `<urn:msr:vocab>`; ontology
+   `0.1.0-seed → 0.2.0` with a PROV activity (`prov:wasAssociatedWith` the reviewer,
+   `prov:used` the evidence); the EntityRuler gains `"solubility" → msr:solubility`.
 7. **Back-populate.** Parked mentions become measurements — e.g. PuF₃ solubility in the
-   fuel salt, value in SQLite (`source = document`):
+   LiF-BeF₂ solvent, value in SQLite (`source = document`; `{report#}` = the chemistry
+   report the statement came from):
    ```turtle
-   msrd:m-flibe-puf3-solubility a msr:PropertyMeasurement ;
-       msr:ofSalt msrd:msre-coolant ; msr:forProperty msr:solubility ;
+   msrd:m-doc-{report#}-solubility-PuF3-in-BeF2-LiF a msr:PropertyMeasurement ;
+       msr:ofSalt msrd:salt-BeF2-LiF-34.0-66.0 ; msr:forProperty msr:solubility ;
        msr:hasUnit unit:MOL-PER-MOL ; msr:equationForm msr:DiscretePoint ;
-       msr:dataLocator "chem-report/solubility#PuF3-in-LiF-BeF2" ; msr:citedIn msrd:ORNL-TM-2316 .
+       msr:dataLocator "doc/{report#}/solubility#PuF3-in-BeF2-LiF" ; msr:citedIn msrd:ORNL-TM-2316 .
    ```
 
 **Why this one matters:** solubility is **doubly new** — absent from *both* the structured
@@ -230,9 +247,10 @@ docs; "graphite-moderated" in 159) appears in a moderator context — *"the MSRE
 moderated by graphite"*. It's outside the seed vocabulary and triages as a **class +
 relation**: propose a new `msr:Moderator` class, an individual `msrd:graphite`, and a new
 object property `msr:moderatedBy` (`MoltenSaltReactor → Moderator`). It grounds to INIS
-`GRAPHITE` (UF "graphite moderator") and `MODERATORS`. On approval the ontology gains a
-moderator branch and `msrd:MSRE msr:moderatedBy msrd:graphite` — reaching beyond salts and
-properties into reactor structure. Same detect → triage → review → apply → back-populate
+`GRAPHITE` (UF "graphite moderator") and `MODERATORS`. One approved bundle, routed to two
+graphs: the `Moderator` class + `moderatedBy` property → `<urn:msr:ontology>`; the
+`msrd:graphite` individual + `msrd:MSRE msr:moderatedBy msrd:graphite` edge →
+`<urn:msr:data>` — reaching beyond salts and properties into reactor structure. Same detect → triage → review → apply → back-populate
 loop; only the *kind* of change differs.
 
 ## AI-analysis example (recap)
@@ -259,20 +277,33 @@ miner are one-shot container runs behind `make` targets. Two consequences: the s
 **back-population = re-run** — at ~12 docs a full re-pass is cheaper and safer than
 incremental bookkeeping.
 
+**Canonical salt naming — normalize at the boundary.** NIST's `Salt` column is not
+consistent about component order and the corpus writes the same salt a dozen ways, so the
+loader canonicalizes on ingest: **components alphabetized, composition values reordered in
+lockstep, mole-% formatted with one decimal** (`LiF-BeF2,34.0-66.0` → `BeF2-LiF |
+66.0-34.0`). The canonical form is used *everywhere* — IRI, locator, SQLite `salt` column,
+`rdfs:label`. Human-friendly names ("FLiBe") come from the vocab via `skos:closeMatch`,
+not from raw strings; chunk 6's formula normalizer maps mention variants to the same
+canonical form, so text mentions and NIST rows meet at one IRI.
+
 **Idempotent writes via deterministic IRIs.** RDF graphs are sets, so re-asserting the same
 triples is a no-op — provided nothing is a blank node. Pipeline-written data therefore
-mints IRIs deterministically and uses **no blank nodes** (the hand-authored example A-Box's
-blank-node constituents get proper IRIs from the loader):
+mints IRIs deterministically and uses **no blank nodes**; the hand-authored seed A-Box
+(`example-flibe.ttl`) already follows this contract, so the loader re-asserting its salts
+is a no-op:
 
 | Thing | IRI pattern |
 |-------|-------------|
-| salt | `msrd:salt-{formula}-{composition}` (components alphabetized by the formula normalizer) |
+| salt | `msrd:salt-{formula}-{composition}` (canonical form, e.g. `msrd:salt-BeF2-LiF-66.0-34.0`) |
 | constituent | `{salt-iri}-c-{compound}` |
-| measurement | `msrd:m-{locator-slug}` |
+| measurement | `msrd:m-{locator-slug}` (slug = locator with `/ # \|` → `-`) |
 | mention | `msrd:mention-{report#}-{start}-{end}` |
 | proposal | `urn:msr:proposal/{kind}-{term-slug}` |
 
 Every stage can be re-run safely; SQLite writes are `INSERT OR REPLACE` on the locator key.
+Seed files (`msr.ttl`, `vocab.ttl`, `example-flibe.ttl`) are loaded with **graph-replace
+semantics** (SPARQL Graph Store `PUT`), so editing a seed file and re-running
+`make load-seed` never leaves renamed IRIs behind.
 
 **Write paths.**
 
@@ -281,12 +312,23 @@ Every stage can be re-run safely; SQLite writes are `INSERT OR REPLACE` on the l
 | Go loader | SQLite (`source='nist'`) + `urn:msr:data` | `database/sql` · SPARQL 1.1 UPDATE over HTTP |
 | Python extraction | mention/relation triples → `urn:msr:data`; proposals → `urn:msr:proposal/{id}` + `urn:msr:staging` | SPARQL UPDATE over HTTP |
 | Python extraction | SQLite (text-derived values, `source='document'`) | stdlib `sqlite3` |
-| Go apply engine | GraphDB graph ops (ADD, status flips, version bump) | SPARQL UPDATE |
+| Go apply engine | GraphDB graph ops (typed-routing promotion, status flips, version bump) | SPARQL UPDATE |
 | Analysis agent | read-only | SPARQL SELECT (core dataset) · SQL SELECT · scripts via sandbox |
 | Sandbox scripts | SQLite mounted **read-only** at `/data/msr.db` | stdlib `sqlite3`; no write path exists |
 
 GraphDB's HTTP endpoint is language-neutral, so Python writing the graph directly doesn't
 blur the language boundary — that rule is about ML dependencies, not store access.
+
+**SQLite runtime.** One file, several processes, so the operational settings are pinned
+here rather than left to defaults. **Journal mode `DELETE`** (never WAL — WAL requires a
+writable `-shm` sidecar, which would break the sandboxes' read-only mounts) and a
+`busy_timeout` on every connection. Sandboxes mount the **data directory** read-only (not
+the bare file), so journal sidecars stay visible and a mid-write read can't see a torn
+state. Writers are the batch jobs only (loader, extraction); the server does not write
+SQLite at runtime — checkpoints copy the file via the **SQLite backup API** (safe
+regardless of writers) and restore puts the copy back while no extraction is running.
+**DDL ownership:** chunk 1 owns the init script (idempotent `CREATE TABLE IF NOT EXISTS`);
+any later chunk adding a table extends that same script.
 
 **GraphDB repository.** Single repo `msr`, **inference disabled** (no ruleset), for three
 reasons. (1) *Staging isolation*: forward-chaining materializes inferred triples into the
@@ -315,7 +357,13 @@ overridden. Two models, one per side of the pipeline:
 prompt is built as a **byte-stable prefix**: a canonical, deterministically ordered
 serialization of the ontology TBox + SKOS vocab + the salt catalog (small, stable,
 schema-level). It regenerates only on an ontology version bump — invalidating the cache
-exactly when the schema actually changes. **Not the whole graph:** mentions, measurements,
+exactly when the schema actually changes. **Detection:** the long-running server checks
+`owl:versionInfo` (one cheap SELECT) at the start of every chat request and rebuilds the
+prompt when it changed — this covers both approvals and checkpoint restores with no push
+signal; the batch Python jobs simply read the version at run start. **Ownership:** the Go
+prompt builder lives with the agent (chunk 4), the Python one with the extraction service
+(chunk 6, reused by 7 and 8) — the two need not be byte-identical to *each other*, only
+stable within themselves (each side caches its own prefix). **Not the whole graph:** mentions, measurements,
 and evidence stay behind tools — they grow unbounded, and the traceability requirement
 wants data retrieval *visible as tool calls*, not silently baked into a prompt.
 
@@ -329,7 +377,7 @@ evidence sentences come only from the curated ~12. The worked example's "280/637
 and the processing scope stays small.
 
 **Ontology versioning.** `owl:versionInfo` on the ontology header inside
-`<urn:msr:ontology>` (seed `0.1.0`); each approved schema change bumps the minor version
+`<urn:msr:ontology>` (seed `0.1.0-seed`); each approved schema change bumps the minor version
 and writes a PROV activity (reviewer, timestamp, evidence link) into `<urn:msr:staging>` —
 the audit trail lives with the proposal history, outside the analysis dataset.
 
@@ -346,8 +394,9 @@ warm containers ready:
   fresh replacement into the channel.
 - **Container spec:** minimal Python image (stdlib + numpy/pandas pre-installed),
   `--network none`, read-only root FS + tmpfs `/tmp`, non-root user, CPU/memory/pids
-  limits, wall-clock timeout; the SQLite file is bind-mounted **read-only** at
-  `/data/msr.db`.
+  limits, wall-clock timeout; the SQLite data **directory** is bind-mounted read-only
+  (DB at `/data/msr.db` — directory mount keeps journal sidecars visible, per the
+  SQLite runtime contract).
 - **Script contract:** script source arrives on stdin (`docker exec -i … python -`), the
   result is JSON on stdout; stderr + exit code are captured for the trace. Scripts query
   `/data/msr.db` (stdlib `sqlite3`) and compute — equation evaluation, aggregation,
@@ -362,16 +411,20 @@ Chatting with the data is the user-facing analysis surface, and **the trace is a
 first-class deliverable** — for the POC, *how* an answer was produced matters as much as
 the answer itself.
 
-- **Chat API (Go server):** `POST /api/chat`, streaming **trace events** over SSE:
+- **Chat API (Go server):** `POST /api/chat`, **stateless** — the request body carries
+  the full conversation so far, OpenAI-style (`{"messages": [{"role": "user"|"assistant",
+  "content": …}, …]}`); the server holds no session state and the SvelteKit app keeps the
+  history in memory. The response streams **trace events** over SSE:
   `text` (assistant tokens) · `tool_call` (name + args) · `tool_result` (bindings/rows,
   truncated inline, full payload retrievable) · `script_run` (script source, stdout,
   stderr, exit code, sandbox id) · `provenance` (dataLocators, `citedIn` documents,
-  dataset DOIs, ontology version used) · `done`.
+  dataset DOIs, ontology version used) · `done`. (Browsers' native `EventSource` can't
+  POST — the frontend consumes the stream via `fetch` streaming.)
 - **UI:** answer pane plus a per-turn expandable **trace timeline** — every claim links
   back to the tool step that produced it; provenance chips (NIST DOI / ORNL report)
   render inline.
-- **Persistence:** events append to a `trace` table in SQLite so a demo run can be
-  replayed and inspected afterwards.
+- **No persistence:** traces are ephemeral per session — the demo streams live, and
+  nothing needs replay afterwards. (Consequence: the server never writes SQLite.)
 - Traceability also settles the prompt-vs-tools question above: data reaches the model
   through **visible tool calls**, never by stuffing instance data into the prompt.
 
@@ -380,17 +433,17 @@ the answer itself.
 Demo requirement: evolve the ontology, roll it back, do it again.
 
 - **Checkpoint** = full GraphDB repository export (TriG, **all** named graphs incl.
-  staging/proposals) + a copy of the SQLite file + the ontology version, stored under
-  `data/checkpoints/{label}/`.
+  staging/proposals) + a copy of the SQLite file (via the SQLite backup API) + the
+  ontology version, stored under `data/checkpoints/{label}/`.
 - **Restore** = clear repository → import the TriG → put the SQLite copy back. Full-store
   restore is deliberately chosen over per-change undo: proposal statuses, back-populated
   instances, and text-derived rows all revert together in one atomic move — no dangling
   ABox referencing a rolled-back class.
 - Exposed as API (`POST /api/checkpoints`, `POST /api/checkpoints/{label}/restore`) + an
   admin panel in the web app; `make checkpoint` / `make restore` wrappers.
-- Per-change undo stays cheap if ever wanted (each approval is an isolated
-  `ADD <proposal> TO core`, so a DELETE-by-proposal-pattern can surgically remove one
-  change), but checkpoints are the demo path.
+- Per-change undo stays cheap if ever wanted (an approval only copies triples that still
+  sit in the proposal graph, so a DELETE-where-in-proposal pattern can surgically remove
+  one change from the core graphs), but checkpoints are the demo path.
 
 ## Deployment — everything in containers
 
@@ -403,8 +456,8 @@ The whole solution runs under Docker Compose:
 | `extraction` | Python (spaCy + pipeline) | one-shot runs via `make extract`, not long-running |
 | sandbox pool | minimal Python image | N sibling containers, lifecycle owned by `server` |
 
-A shared volume carries the SQLite file (server read-write, sandboxes read-only) and the
-corpus cache.
+A shared volume carries the SQLite file (batch jobs write, sandboxes read-only, server
+only for checkpoint/restore copies) and the corpus cache.
 
 ## Tech stack summary
 
@@ -425,9 +478,21 @@ corpus cache.
 Decided:
 - **Text-derived values** → stored in SQLite with a `source` column, alongside the NIST
   coefficients (one uniform federation boundary). ✓
-- **Instance auto-accept** → new specific salts/compounds/reactors are inserted directly
-  into `<urn:msr:data>` (flagged `msr:autoAccepted true`, provenance kept); only *schema*
-  changes (new property / class / relation) go through the human review gate. ✓
+- **Instance auto-accept** → instances never enter staging: the extraction run writes new
+  specific salts/compounds/reactors directly into `<urn:msr:data>` (flagged
+  `msr:autoAccepted true`, provenance kept); only *TBox* changes (new property / class /
+  relation) go through the human review gate. Individuals depending on proposed schema
+  ride the proposal bundle. ✓
+- **Approval promotion** → typed routing: one approved bundle, triples copied to
+  ontology / vocab / data by what they are (no single-graph `ADD`). ✓
+- **Salt naming** → canonicalized at the loader boundary (alphabetized components,
+  lockstep-reordered compositions, one-decimal mole %); canonical form used in IRIs,
+  locators, SQLite, and labels; friendly names via vocab `closeMatch`. ✓
+- **SQLite runtime** → journal mode `DELETE`, `busy_timeout` everywhere, directory (not
+  file) mounted read-only into sandboxes, backup-API checkpoints; batch jobs are the only
+  writers. ✓
+- **Chat API** → stateless `POST /api/chat` (client sends full message history);
+  traces stream live and are not persisted. ✓
 - **Review app** → Go + SvelteKit rendering visual ontology diffs. ✓
 - **Language boundary** → Python only for the spaCy extraction service; Go everywhere else. ✓
 - **Run model** → batch CLI stages; only GraphDB + `server` long-running; EntityRuler
