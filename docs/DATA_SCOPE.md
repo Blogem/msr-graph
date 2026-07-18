@@ -183,7 +183,14 @@ substantial verbatim text.
 - Full NIST dataset (~4,300 salts/mixtures) — fluoride subset only.
 - Full 637-doc archive — curated core set only.
 - Loading `diamond.owl` wholesale.
-- INIS thesaurus beyond the ~30-concept MSR neighborhood.
+- INIS thesaurus beyond the ~30-concept MSR neighborhood. Three reasons, beyond focus:
+  (a) no machine-readable release exists — the full ~30k-descriptor thesaurus is a
+  PDF-parsing project in itself; (b) it would flood the NER surface and the cached
+  KG-schema prompt with off-domain concepts; (c) it would **kill the evolution demo** —
+  `SOLUBILITY` and `GRAPHITE` are INIS descriptors, so a fully-loaded thesaurus makes
+  them "known" and the novelty miner never fires. If INIS grounding validation is ever
+  wanted, the shape is a flat vendored term list outside the graph (like the QUDT unit
+  allowlist), not loaded concepts.
 
 ## Open items to verify on ingestion
 
