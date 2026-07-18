@@ -138,16 +138,22 @@ Nothing mutates the ontology automatically — the loop *proposes*, a human *dis
 Candidates are **already in GraphDB the moment they're detected** — just isolated in
 named graphs so they're trivially filterable:
 
-| Named graph | Contents | In the default dataset? |
-|-------------|----------|--------------------------|
+| Named graph | Contents | In the core dataset? |
+|-------------|----------|-----------------------|
 | `<urn:msr:ontology>` / `<urn:msr:data>` / `<urn:msr:vocab>` | approved TBox / ABox / SKOS | **yes** |
 | `<urn:msr:proposal/{id}>` | the proposed triples for one candidate | **no** |
 | `<urn:msr:staging>` | `msr:ChangeProposal` resources (status, kind, evidence, provenance, link to the proposal graph) | **no** |
 
 Because graph membership *is* the filter, the analysis agent and every normal query run
-against the default dataset (the three core graphs) and **never see pending candidates** —
-no status-flag filtering required. The review app queries `<urn:msr:staging>` to list
-what's pending. Lifecycle:
+against the **core dataset** (the three core graphs) and **never see pending candidates** —
+no status-flag filtering required. One mechanism caveat: GraphDB evaluates a query with no
+`FROM`/`FROM NAMED` clauses against the union of the default graph and **all named graphs**
+— staging included ([documented behavior](https://graphdb.ontotext.com/documentation/11.2/query-behavior.html)).
+"Core only" is therefore **not a store setting; it's a query-layer contract**: a shared Go
+SPARQL client injects `FROM <urn:msr:ontology> FROM <urn:msr:data> FROM <urn:msr:vocab>`
+into every core read, and everything that must not see candidates (the analysis agent above
+all) goes through it. A chunk-1 acceptance test pins the exclusion. The review app queries
+`<urn:msr:staging>` to list what's pending. Lifecycle:
 
 - **detected** → proposed triples → `<urn:msr:proposal/{id}>`; a `ChangeProposal`
   (`msr:reviewStatus "pending"`) → `<urn:msr:staging>`.
@@ -229,6 +235,67 @@ in-range, locator), pulls `c0,c1` from SQLite, evaluates `2.413 − 4.88e-4·900
 the *same* agent can now also answer solubility questions — the analysis surface grows
 automatically as the ontology evolves.
 
+## Runtime contracts (solidified)
+
+The seams each implementation chunk builds against — decided here so OpenSpec changes
+reference them instead of re-deciding.
+
+**Run model — batch, not services.** Only two long-running processes: GraphDB (Docker) and
+the review app (`reviewd`). The loader, corpus ingest, NER/extraction, and the novelty
+miner are CLI stages behind `make` targets. Two consequences: the spaCy `EntityRuler` is
+**rebuilt from the graph** (vocab + approved concepts) at the start of every extraction run
+— approval doesn't push a refresh signal, the next run simply sees the new concept; and
+**back-population = re-run** — at ~12 docs a full re-pass is cheaper and safer than
+incremental bookkeeping.
+
+**Idempotent writes via deterministic IRIs.** RDF graphs are sets, so re-asserting the same
+triples is a no-op — provided nothing is a blank node. Pipeline-written data therefore
+mints IRIs deterministically and uses **no blank nodes** (the hand-authored example A-Box's
+blank-node constituents get proper IRIs from the loader):
+
+| Thing | IRI pattern |
+|-------|-------------|
+| salt | `msrd:salt-{formula}-{composition}` (components alphabetized by the formula normalizer) |
+| constituent | `{salt-iri}-c-{compound}` |
+| measurement | `msrd:m-{locator-slug}` |
+| mention | `msrd:mention-{report#}-{start}-{end}` |
+| proposal | `urn:msr:proposal/{kind}-{term-slug}` |
+
+Every stage can be re-run safely; SQLite writes are `INSERT OR REPLACE` on the locator key.
+
+**Write paths.**
+
+| Writer | Store | Protocol |
+|--------|-------|----------|
+| Go loader | SQLite (`source='nist'`) + `urn:msr:data` | `database/sql` · SPARQL 1.1 UPDATE over HTTP |
+| Python extraction | mention/relation triples → `urn:msr:data`; proposals → `urn:msr:proposal/{id}` + `urn:msr:staging` | SPARQL UPDATE over HTTP |
+| Python extraction | SQLite (text-derived values, `source='document'`) | stdlib `sqlite3` |
+| Go apply engine | GraphDB graph ops (ADD, status flips, version bump) | SPARQL UPDATE |
+| Analysis agent | read-only | SPARQL SELECT (core dataset) + SQL SELECT |
+
+GraphDB's HTTP endpoint is language-neutral, so Python writing the graph directly doesn't
+blur the language boundary — that rule is about ML dependencies, not store access.
+
+**GraphDB repository.** Single repo `msr`, **inference disabled** (no ruleset): graph
+membership stays predictable (no inferred triples materializing outside their named
+graph), and the POC's hierarchy queries are fine with property paths (`rdfs:subClassOf*`).
+
+**LLM access.** Anthropic API on both sides of the language boundary — the Go analysis
+agent via `anthropic-sdk-go`, the Python triage step via the `anthropic` package. Model is
+config (`ANTHROPIC_MODEL`, default `claude-sonnet-5`); clients are injected so tests run
+against stubs, never the live API.
+
+**Salience vs. extraction scope.** The LFS-skip clone leaves all 637 OCR texts on disk, so
+document-frequency statistics (novelty scoring, the vocabulary's evidence numbers) are
+computed over the **full corpus** — a cheap text scan — while NER/relation extraction and
+evidence sentences come only from the curated ~12. The worked example's "280/637" is real,
+and the processing scope stays small.
+
+**Ontology versioning.** `owl:versionInfo` on the ontology header inside
+`<urn:msr:ontology>` (seed `0.1.0`); each approved schema change bumps the minor version
+and writes a PROV activity (reviewer, timestamp, evidence link) into `<urn:msr:staging>` —
+the audit trail lives with the proposal history, outside the analysis dataset.
+
 ## Tech stack summary
 
 - **GraphDB** (Docker, local) — RDF/SPARQL triple store.
@@ -238,7 +305,8 @@ automatically as the ontology evolves.
 - **Go** — structured loader, analysis agent, and the review-app backend.
 - **SvelteKit** — review-app frontend (visual ontology diffs + evidence panels).
 - **Python** — the spaCy extraction service *only*: NER, novelty mining, triage.
-- **LLM** — triage classification (in the Python service) and the analysis agent (in Go).
+- **LLM** — Anthropic API: triage classification (Python `anthropic`) and the analysis
+  agent (Go `anthropic-sdk-go`); model via `ANTHROPIC_MODEL`.
 
 ## Open questions for review
 
@@ -250,6 +318,15 @@ Decided:
   changes (new property / class / relation) go through the human review gate. ✓
 - **Review app** → Go + SvelteKit rendering visual ontology diffs. ✓
 - **Language boundary** → Python only for the spaCy extraction service; Go everywhere else. ✓
+- **Run model** → batch CLI stages; only GraphDB + `reviewd` long-running; EntityRuler
+  re-seeded from the graph per run; back-population = idempotent re-run. ✓
+- **Core-dataset enforcement** → query-layer `FROM` injection in a shared Go SPARQL client
+  (GraphDB's no-dataset default is union-of-all-graphs). ✓
+- **Writes** → deterministic IRIs, no blank nodes, idempotent re-runs; Python talks to
+  GraphDB/SQLite directly. ✓
+- **Inference** → disabled; hierarchy queries via property paths. ✓
+- **LLM** → Anthropic API (Go SDK / Python SDK), model via config, stubbed in tests. ✓
+- **Salience scope** → frequency stats over all 637 OCR texts; extraction over the curated set. ✓
 
 Open (build-time tuning, non-blocking):
 - **Novelty salience threshold** — fixed document-frequency cutoff vs. relative/tf-idf.
