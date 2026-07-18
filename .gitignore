@@ -1,1 +1,7 @@
 graphdb.license
+
+# Shared data volume: ignore everything except the vendored NIST thesaurus
+/data/*
+!/data/nist/
+data/checkpoints/
+data/corpus/
