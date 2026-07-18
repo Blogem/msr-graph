@@ -1,0 +1,12 @@
+.git
+.claude
+openspec
+docs
+docker
+deploy
+extraction
+webapp
+data
+testdata
+*.md
+graphdb.license
