@@ -7,10 +7,13 @@
 #                   # extraction/sandbox images, wait for GraphDB, ensure the
 #                   # "msr" repository exists.
 #   make load-seed  # one-shot loader run: init-db then seed.
+#   make ingest     # one-shot extraction run: acquire -> manifest ->
+#                   # normalize/segment -> documents (see
+#                   # openspec/changes/ingest-archive-documents/design.md).
 #   make test       # go test ./... with the GraphDB acceptance gate enabled.
 #   make down       # stop the stack and remove its volumes.
 
-.PHONY: up down load-seed test
+.PHONY: up down load-seed ingest test
 
 # GraphDB's published host port (see docker-compose.yml, service "graphdb").
 GRAPHDB_URL ?= http://localhost:7200
@@ -57,6 +60,10 @@ load-seed:
 	docker compose run --rm loader /app/loader init-db
 	@echo "==> running loader seed"
 	docker compose run --rm loader /app/loader seed
+
+ingest:
+	@echo "==> running extraction ingest (acquire -> manifest -> normalize/segment -> documents)"
+	docker compose run --rm extraction ingest
 
 test:
 	@echo "==> running go test with the GraphDB acceptance gate enabled (GRAPHDB_REQUIRED=1)"
