@@ -28,11 +28,13 @@ fi
 echo "ensure-repo: checking for repository '${REPO_ID}' at ${GRAPHDB_URL}..."
 
 # CHECK existence: GET /rest/repositories lists all repositories as a JSON
-# array of objects; grep for the literal id field rather than parsing JSON
-# (no jq dependency assumed on the host).
+# array of objects; grep for the id field rather than parsing JSON (no jq
+# dependency assumed on the host). The pattern tolerates optional whitespace
+# around the JSON colon so a change in GraphDB's serialization (compact vs.
+# spaced) can't make the check silently miss and attempt a duplicate create.
 existing_repos="$(curl -fsS "${GRAPHDB_URL}/rest/repositories")"
 
-if grep -q "\"id\":\"${REPO_ID}\"" <<<"${existing_repos}"; then
+if grep -Eq "\"id\"[[:space:]]*:[[:space:]]*\"${REPO_ID}\"" <<<"${existing_repos}"; then
   echo "ensure-repo: repository '${REPO_ID}' already exists — no-op."
   exit 0
 fi
