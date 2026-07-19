@@ -46,6 +46,13 @@ make load-seed  # initialize the SQLite measurement_value schema and load the
                 #   ontology/example-flibe.ttl -> urn:msr:data
                 # and ensure urn:msr:staging exists
 
+make load-nist  # ingest the 4 vendored NIST SRD 27 fluoride CSVs: coefficient
+                # rows -> SQLite measurement_value (source='nist'); MoltenSalt /
+                # Constituent / PropertyMeasurement catalog triples -> urn:msr:data
+                # via additive SPARQL INSERT (idempotent; preserves the seed A-Box).
+                # Chains after load-seed — must run after seed, since seed's
+                # graph-replace PUT would otherwise drop the NIST triples.
+
 make ingest     # one-shot Compose run of the extraction container: acquire ->
                 # manifest -> normalize/segment -> documents. Acquires the
                 # openmsr/msr-archive corpus (LFS-skip `--depth 1` clone into
