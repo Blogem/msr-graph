@@ -94,22 +94,72 @@ LAYER_FLASH = 5
 #   and optional digits (ASCII or Unicode subscript) -- e.g. "Li", "F",
 #   "Be", "F2", "F₂".
 # - `_FORMULA_TOKEN`: 1-4 such units back to back (an optional leading
-#   stoichiometric coefficient), e.g. "LiF", "BeF2", "ZrF4".
+#   stoichiometric coefficient), e.g. "LiF", "BeF2", "ZrF4", plus an
+#   optional trailing comma/period standing in for an OCR-dropped subscript
+#   digit (e.g. "BeF," for "BeF2") -- chunk 6 task 3.1's OCR robustness: the
+#   real ORNL OCR renders subscripts as a trailing comma. Over-capturing the
+#   punctuation is safe: `normalize_salt_span` (layer 3) only links when it
+#   can compose a real, loaded salt from the span, so a token that merely
+#   *happens* to be followed by ordinary sentence punctuation simply fails
+#   to normalize and falls through to fuzzy/Flash/novel like any other
+#   unresolved span.
 # - separators: "-", the middle dot, bullet, and dot-operator characters
 #   `formula.py` already treats as salt separators.
 # - an optional trailing inline composition group, e.g. "(66-34 mol%)" or
 #   "66-34 mol%" -- mirrors `formula._INLINE_COMPOSITION_RE` loosely; the
-#   authoritative parse of it is left to `normalize_salt_span` itself.
+#   authoritative parse of it is left to `normalize_salt_span` itself. The
+#   mol-tail also accepts the "mole"/optional-period/spacing OCR variants
+#   ("mol %", "mole %", "mole%", "mol.%", "mol. %") that `formula.py`'s
+#   `_INLINE_COMPOSITION_RE` already broadens for (design.md task 2.2) --
+#   mirrored here rather than reusing that regex directly since this one
+#   matches mid-string (no trailing `$` anchor) as part of a larger span.
 _DIGITS = "0-9₀-₉"
 _ELEMENT_UNIT = rf"[A-Z][a-z]?[{_DIGITS}]*"
-_FORMULA_TOKEN = rf"\d*(?:{_ELEMENT_UNIT}){{1,4}}"
+_FORMULA_TOKEN = rf"\d*(?:{_ELEMENT_UNIT}){{1,4}}[,.]?"
 _FORMULA_SEP = r"\s*[-·•⋅]\s*"
 _COMPOSITION_TAIL = (
-    r"\(?\s*\d+(?:\.\d+)?(?:\s*-\s*\d+(?:\.\d+)?)+\s*mol\s*%\s*\)?"
+    r"\(?\s*\d+(?:\.\d+)?(?:\s*-\s*\d+(?:\.\d+)?)+\s*mol\.?\s*e?\.?\s*%\s*\)?"
 )
+# `formula` is a named group covering just the token(s), separate from the
+# optional `tail` (composition group) -- this lets `_has_ocr_subscript_artifact`
+# below check for a comma/period subscript stand-in only in the formula
+# portion, never mistaking punctuation that's actually part of the
+# composition tail itself (e.g. the "mol.%" spelling's own literal period)
+# for a dropped-subscript artifact.
 _FORMULA_CANDIDATE_RE = re.compile(
-    rf"{_FORMULA_TOKEN}(?:{_FORMULA_SEP}{_FORMULA_TOKEN})+(?:\s*{_COMPOSITION_TAIL})?"
+    rf"(?P<formula>{_FORMULA_TOKEN}(?:{_FORMULA_SEP}{_FORMULA_TOKEN})+)"
+    rf"(?:\s*(?P<tail>{_COMPOSITION_TAIL}))?"
 )
+
+# Known-compound labels (task 3.1): single-token, formula-shaped labels among
+# `known_entities` -- e.g. "LiF", "BeF2" but not "Lithium fluoride" or
+# "LiF-BeF2" (the latter has a separator, so it doesn't fullmatch). Fed to
+# `formula.normalize_salt_span` as `known_compounds` so it can resolve a
+# composed OCR salt span (e.g. "LiF-BeF," + "(66-34 mole %)") even though the
+# comma-for-subscript surface never matches a *canonical* formula string.
+# Over-inclusion is harmless *for a span that actually needs the
+# reconstruction*: `normalize_salt_span`/`canonicalize` and the `known_iris`
+# gate in `link_segment` reject anything that isn't a real loaded salt. It
+# is NOT harmless in general, though -- `known_entities` commonly carries
+# short all-caps acronyms (e.g. "MSRE") that happen to be shaped like a
+# formula token; if such a stray entry ends up in `known_compounds`,
+# `formula._resolve_components`'s all-or-nothing validation would then
+# reject an otherwise-clean, uncorrupted formula (e.g. "LiF-BeF2") merely
+# because "LiF"/"BeF2" themselves were never separately registered. So
+# `known_compounds` is only ever passed to `normalize_salt_span` for a
+# candidate span that itself shows the comma/period subscript artifact (see
+# `_has_ocr_subscript_artifact`) -- an already-clean span always resolves via
+# `known_compounds=None` (plain passthrough), exactly as it did before this
+# parameter existed, regardless of what noise the known-entity catalog's
+# labels happen to contain.
+_KNOWN_COMPOUND_RE = re.compile(rf"(?:{_ELEMENT_UNIT}){{1,4}}")
+
+# A letter immediately followed by a comma/period that is itself followed by
+# a separator, whitespace/paren, or the end of the formula part -- i.e. the
+# subscript-standin artifact from `_FORMULA_TOKEN`'s new optional trailing
+# `[,.]`, not a decimal point or the composition tail's own "mol.%" spelling
+# (both of which only ever occur *after* `formula`, in `tail`).
+_ARTIFACT_TOKEN_RE = re.compile(r"[A-Za-z][,.](?:[-\s(]|$)")
 
 _WORD_RE = re.compile(r"\w+", re.UNICODE)
 
@@ -157,6 +207,48 @@ def _known_labels(known_entities: list[KnownEntity]) -> list[tuple[str, str, str
         for entity in known_entities
         for label in entity.labels
     ]
+
+
+def _build_known_compounds(known_entities: list[KnownEntity]) -> frozenset[str]:
+    """The known-compound set (see module-level comment above `_KNOWN_COMPOUND_RE`)
+    for `formula.normalize_salt_span`'s `known_compounds` param -- computed
+    once per link run (`link_report`/`link_segment` cache it, never
+    recomputing per candidate span). May be empty, and may contain stray
+    formula-shaped-but-not-actually-a-compound labels (e.g. "MSRE") -- see
+    `_has_ocr_subscript_artifact` for why that's safe: this set is only ever
+    handed to `normalize_salt_span` for a candidate span that itself shows
+    the comma/period subscript artifact, never for an already-clean span.
+    """
+    return frozenset(
+        label
+        for entity in known_entities
+        for label in entity.labels
+        if _KNOWN_COMPOUND_RE.fullmatch(label)
+    )
+
+
+def _formula_part(surface: str) -> str:
+    """The `formula` portion of a `_find_formula_candidates` surface, with
+    any trailing composition-tail group stripped off (or `surface`
+    unchanged if it carries no tail) -- what `_has_ocr_subscript_artifact`
+    scans, so it never mistakes the tail's own punctuation (a decimal
+    point, or the "mol.%" spelling's literal period) for a dropped-subscript
+    artifact."""
+    match = _FORMULA_CANDIDATE_RE.fullmatch(surface)
+    return match.group("formula") if match else surface
+
+
+def _has_ocr_subscript_artifact(surface: str) -> bool:
+    """True iff `surface`'s formula portion (not its composition tail, if
+    any) contains a comma/period standing in for an OCR-dropped subscript
+    digit -- e.g. "BeF," in "LiF-BeF, (66-34 mole %)". Gates whether
+    `known_compounds` is passed to `normalize_salt_span` at all (see the
+    comment above `_KNOWN_COMPOUND_RE`): an already-clean candidate span
+    never needs -- and must never risk -- the known-compound validation,
+    since `known_entities` may carry unrelated formula-shaped noise (e.g.
+    "MSRE") that would otherwise cause `_resolve_components` to reject an
+    otherwise-unambiguous clean formula."""
+    return bool(_ARTIFACT_TOKEN_RE.search(_formula_part(surface)))
 
 
 def fuzzy_link(
@@ -221,8 +313,17 @@ def link_segment(
     *,
     prompt_prefix: str = "",
     disambiguator: Disambiguator | None = None,
+    known_compounds: frozenset[str] | None = None,
 ) -> list[MentionRecord]:
     """Link every span in one segment, ordered layers 2 -> 5, precision-biased.
+
+    ``known_compounds`` is `formula.normalize_salt_span`'s known-compound set
+    (see `_build_known_compounds`); defaults to `None`, in which case it is
+    computed from `known_entities` for this call. `link_report` computes it
+    once per run and passes it explicitly so a multi-segment run never
+    recomputes it per segment; existing call sites that invoke
+    `link_segment` directly (tests, the precision harness) keep working
+    unchanged since the default preserves prior behavior.
 
     Offsets on the returned records are absolute (``seg.char_start`` plus
     the local match offset), matching chunk 5's `segments.jsonl` offset
@@ -254,6 +355,9 @@ def link_segment(
     """
     resolved: list[MentionRecord] = []
 
+    if known_compounds is None:
+        known_compounds = _build_known_compounds(known_entities)
+
     def _is_free(start: int, end: int) -> bool:
         return not any(_overlaps(start, end, r.char_start, r.char_end) for r in resolved)
 
@@ -266,7 +370,14 @@ def link_segment(
         start = seg.char_start + local_start
         end = seg.char_start + local_end
         salt_target_iri: str | None = None
-        curie = formula.normalize_salt_span(surface)
+        # Only a candidate span that itself shows the comma/period
+        # subscript artifact gets `known_compounds` at all -- see the
+        # comment above `_KNOWN_COMPOUND_RE`/`_has_ocr_subscript_artifact`
+        # for why an already-clean span must never risk it.
+        span_known_compounds = (
+            known_compounds if _has_ocr_subscript_artifact(surface) else None
+        )
+        curie = formula.normalize_salt_span(surface, known_compounds=span_known_compounds)
         if curie is not None:
             expanded = expand_curie(curie)
             if expanded in known_iris:
@@ -333,9 +444,17 @@ def link_segment(
         if not _is_free(start, end):
             continue
 
-        # Layer 4: bounded rapidfuzz fallback.
+        # Layer 4: bounded rapidfuzz fallback. Uses the chemistry-specific
+        # minimum-token-length knob (not `config.fuzzy_min_token_length`)
+        # since every span reaching this loop is already a formula-shaped
+        # candidate span (never general prose) -- this is what makes a
+        # short 3-char token like "LiF"/"BeF" eligible without lowering the
+        # general fuzzy floor (task 3.2/4.1).
         fuzzy_result = fuzzy_link(
-            surface, known_labels, config.fuzzy_threshold, config.fuzzy_min_token_length
+            surface,
+            known_labels,
+            config.fuzzy_threshold,
+            config.fuzzy_min_token_length_chemistry,
         )
         if fuzzy_result is not None:
             target_iri, kind, score = fuzzy_result
@@ -426,8 +545,16 @@ def link_report(
     *,
     prompt_prefix: str = "",
     disambiguator: Disambiguator | None = None,
+    known_compounds: frozenset[str] | None = None,
 ) -> list[MentionRecord]:
-    """Link every segment of `report`'s `segments.jsonl`, report-ordered."""
+    """Link every segment of `report`'s `segments.jsonl`, report-ordered.
+
+    Computes the `known_compounds` set (see `_build_known_compounds`) once
+    for the whole report -- not per segment -- unless the caller already
+    supplies one.
+    """
+    if known_compounds is None:
+        known_compounds = _build_known_compounds(known_entities)
     records: list[MentionRecord] = []
     for seg in _read_segments(report, config):
         records.extend(
@@ -439,6 +566,7 @@ def link_report(
                 config,
                 prompt_prefix=prompt_prefix,
                 disambiguator=disambiguator,
+                known_compounds=known_compounds,
             )
         )
     return records
