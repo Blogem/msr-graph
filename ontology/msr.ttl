@@ -118,3 +118,13 @@ msr:FlushSalt   a msr:SaltRole ; skos:closeMatch voc:flush-salt .
 msr:Document a owl:Class ; rdfs:subClassOf prov:Entity .
 msr:Dataset  a owl:Class ; rdfs:subClassOf prov:Entity .
 msr:citedIn  a owl:ObjectProperty ; rdfs:domain msr:PropertyMeasurement ; rdfs:range msr:Document .
+
+### Mention layer  (chunk 6 — NER linked-mention schema, design.md D8)
+msr:Mention     a owl:Class ;
+    rdfs:comment "A text span in a Document linked to a known entity (concept, class, or individual)." .
+msr:linksTo     a owl:ObjectProperty ; rdfs:domain msr:Mention ;
+    rdfs:comment "Links a mention to the concept / class / individual it resolves to." .
+msr:inDocument  a owl:ObjectProperty ; rdfs:domain msr:Mention ; rdfs:range msr:Document .
+msr:surfaceForm a owl:DatatypeProperty ; rdfs:domain msr:Mention ; rdfs:range xsd:string .
+msr:startOffset a owl:DatatypeProperty ; rdfs:domain msr:Mention ; rdfs:range xsd:integer .
+msr:endOffset   a owl:DatatypeProperty ; rdfs:domain msr:Mention ; rdfs:range xsd:integer .
