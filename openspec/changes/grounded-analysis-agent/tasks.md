@@ -35,16 +35,16 @@
 - [x] 6.3 Out-of-range temperature test: a temperature outside the valid range is flagged/refused, not reported as a valid number
 - [x] 6.4 Comparative-query test (stubbed LLM + fake pool): a "lowest-viscosity" question is resolved by a single aggregating script whose output is the reported winner
 - [x] 6.5 SELECT-only-guard table tests: clean SELECTs pass; INSERT/UPDATE/DELETE, DDL, PRAGMA writes, multi-statement, and comment-smuggled writes are rejected
-- [ ] 6.6 SSE handler tests: stateless request shape accepted, malformed body rejected, every event type emitted and well-formed, `script_run` carries source+stdout+stderr+exit+sandbox id, `provenance` names locator/citedIn/DOI/version, and no trace is persisted
+- [x] 6.6 SSE handler tests: stateless request shape accepted, malformed body rejected, every event type emitted and well-formed, `script_run` carries source+stdout+stderr+exit+sandbox id, `provenance` names locator/citedIn/DOI/version, and no trace is persisted
 - [x] 6.7 Prompt-builder tests: byte-identical output for a fixed graph state (order-independent of query result order); rebuild triggered when `owl:versionInfo` changes; instance data absent from the prompt
 - [x] 6.8 Schema-generic test: a newly present measurement/coefficient row becomes answerable with no agent code change
 
 ## 7. Manual verification tooling (playground until the frontend lands)
 
-- [ ] 7.1 Build a small CLI (`cmd/chatcli`) that POSTs a question to a running `/api/chat`, consumes the SSE stream, and pretty-prints each trace event to the terminal (assistant text, tool calls/results, script source + stdout, provenance chips, done) — an interactive playground for the agent before chunk 10's UI exists
-- [ ] 7.2 Support a multi-turn REPL mode in the CLI: keep the conversation in memory and re-send the full `messages` array each turn (exercising the stateless contract exactly as chunk 10 will)
-- [ ] 7.3 Add a `make chat` target (and a `make demo-density` shortcut running the canonical density question) that runs the CLI against the live stack, and record a manual smoke-test checklist in the README: density answer ≈ 1.974 g·cm⁻³, out-of-range refusal, and a comparative query, each with its full trace visible
+- [x] 7.1 Build a small CLI (`cmd/chatcli`) that POSTs a question to a running `/api/chat`, consumes the SSE stream, and pretty-prints each trace event to the terminal (assistant text, tool calls/results, script source + stdout, provenance chips, done) — an interactive playground for the agent before chunk 10's UI exists
+- [x] 7.2 Support a multi-turn REPL mode in the CLI: keep the conversation in memory and re-send the full `messages` array each turn (exercising the stateless contract exactly as chunk 10 will)
+- [x] 7.3 Add a `make chat` target (and a `make demo-density` shortcut running the canonical density question) that runs the CLI against the live stack, and record a manual smoke-test checklist in the README: density answer ≈ 1.974 g·cm⁻³, out-of-range refusal, and a comparative query, each with its full trace visible
 
 ## 8. Documentation
 
-- [ ] 8.1 Document the `POST /api/chat` request shape and SSE trace-event contract (the chunk-10 interface) and the `DEEPSEEK_BASE_URL` / `LLM_MODEL_ANALYSIS` configuration in the README
+- [x] 8.1 Document the `POST /api/chat` request shape and SSE trace-event contract (the chunk-10 interface) and the `DEEPSEEK_BASE_URL` / `LLM_MODEL_ANALYSIS` configuration in the README
