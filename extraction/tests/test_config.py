@@ -19,6 +19,7 @@ from msr_extraction.config import Config
 def test_defaults_for_new_fields() -> None:
     config = Config()
     assert config.deepseek_base_url == ""
+    assert config.deepseek_api_key == ""
     assert config.llm_model_extract == "deepseek-v4-flash"
     assert config.fuzzy_threshold == 90.0
     assert config.fuzzy_min_token_length == 4
@@ -27,6 +28,7 @@ def test_defaults_for_new_fields() -> None:
 def test_from_env_empty_mapping_keeps_defaults() -> None:
     config = Config.from_env({})
     assert config.deepseek_base_url == Config.deepseek_base_url
+    assert config.deepseek_api_key == Config.deepseek_api_key
     assert config.llm_model_extract == Config.llm_model_extract
     assert config.fuzzy_threshold == Config.fuzzy_threshold
     assert config.fuzzy_min_token_length == Config.fuzzy_min_token_length
@@ -35,6 +37,11 @@ def test_from_env_empty_mapping_keeps_defaults() -> None:
 def test_from_env_reads_deepseek_base_url() -> None:
     config = Config.from_env({"DEEPSEEK_BASE_URL": "https://api.deepseek.example"})
     assert config.deepseek_base_url == "https://api.deepseek.example"
+
+
+def test_from_env_reads_deepseek_api_key() -> None:
+    config = Config.from_env({"DEEPSEEK_API_KEY": "sk-test-secret"})
+    assert config.deepseek_api_key == "sk-test-secret"
 
 
 def test_from_env_reads_llm_model_extract() -> None:
@@ -58,6 +65,7 @@ def test_from_env_parses_fuzzy_min_token_length_as_int() -> None:
     ("env", "attr", "expected"),
     [
         ({"DEEPSEEK_BASE_URL": "https://x"}, "deepseek_base_url", "https://x"),
+        ({"DEEPSEEK_API_KEY": "sk-x"}, "deepseek_api_key", "sk-x"),
         ({"LLM_MODEL_EXTRACT": "m"}, "llm_model_extract", "m"),
         ({"MSR_FUZZY_THRESHOLD": "72.5"}, "fuzzy_threshold", 72.5),
         ({"MSR_FUZZY_MIN_TOKEN_LENGTH": "3"}, "fuzzy_min_token_length", 3),
