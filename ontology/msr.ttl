@@ -67,6 +67,20 @@ msr:meltingPoint a msr:PhysicalProperty ;
     rdfs:label "melting point" ; msr:quantityKind qk:Temperature ; msr:canonicalUnit unit:K ;
     skos:closeMatch voc:melting-point .
 
+### Unit labels
+# QUDT units are referenced as values only (never imported/dereferenced; see
+# ontology/qudt-units.json). These rdfs:labels are the sole local facts asserted
+# about each unit IRI, so a grounding query can read a human-readable unit symbol
+# (e.g. ?unit rdfs:label ?unitLabel) without the join eliminating every row.
+unit:GM-PER-CentiM3 a qudt:Unit ; rdfs:label "g/cm³" .
+unit:MilliPA-SEC    a qudt:Unit ; rdfs:label "mPa·s" .
+unit:MilliN-PER-M   a qudt:Unit ; rdfs:label "mN/m" .
+unit:S-PER-CentiM   a qudt:Unit ; rdfs:label "S/cm" .
+unit:W-PER-M-K      a qudt:Unit ; rdfs:label "W/(m·K)" .
+unit:J-PER-KiloGM-K a qudt:Unit ; rdfs:label "J/(kg·K)" .
+unit:PA             a qudt:Unit ; rdfs:label "Pa" .
+unit:K              a qudt:Unit ; rdfs:label "K" .
+
 ### Measurement layer
 msr:PropertyMeasurement a owl:Class ;
     rdfs:comment "One salt × property × source correlation. Numeric coefficients are external (see dataLocator)." .
