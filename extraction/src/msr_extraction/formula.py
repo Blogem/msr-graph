@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from functools import lru_cache
 
 MSRD_PREFIX = "msrd:"
 
@@ -70,13 +71,25 @@ _LEADING_COEFFICIENT_RE = re.compile(r"^\d+(?=[A-Za-z])")
 _NUMBER_RE = re.compile(r"\d+(?:\.\d+)?")
 
 # A trailing inline composition group at the end of a mention: an optional
-# '(', 2+ hyphen-separated numbers, "mol%" (case-insensitive, optional
-# internal spacing), and an optional ')'. Matches both "(66-34 mol%)" and
+# '(', 2+ hyphen-separated numbers, a "mol%"-family tail (case-insensitive,
+# optional "e", optional internal spacing/period -- covers "mol%", "mol %",
+# "mole %", "mole%", "mol.%", "mol. %", the corpus OCR variants per
+# design.md, task 2.2), and an optional ')'. Matches both "(66-34 mol%)" and
 # the unparenthesized "66-34 mol%".
 _INLINE_COMPOSITION_RE = re.compile(
-    r"\(?\s*(\d+(?:\.\d+)?(?:\s*-\s*\d+(?:\.\d+)?)+)\s*mol\s*%\s*\)?\s*$",
+    r"\(?\s*(\d+(?:\.\d+)?(?:\s*-\s*\d+(?:\.\d+)?)+)\s*mol\.?\s*e?\.?\s*%\s*\)?\s*$",
     re.IGNORECASE,
 )
+
+# A comma/period standing in for a single subscript digit at the end of a
+# formula component, e.g. "BeF," or "BeF." (OCR artifact, design.md D1). The
+# root (everything before the trailing ,/.) is resolved against the known
+# compound skeleton map -- see `_skeleton_map` and `_resolve_ocr_component`.
+_OCR_SUBSCRIPT_TAIL_RE = re.compile(r"^(.+)[,.]$")
+
+# A trailing run of digits, stripped to produce a compound's "skeleton" for
+# the reverse OCR lookup (task 2.1), e.g. "BeF2" -> "BeF", "LiF" -> "LiF".
+_TRAILING_DIGITS_RE = re.compile(r"\d+$")
 
 
 def slugify(s: str) -> str:
@@ -265,7 +278,62 @@ def _extract_inline_composition(surface: str) -> tuple[str, str | None]:
     return formula_part, match.group(1)
 
 
-def normalize_salt_span(surface: str, composition_text: str | None = None) -> str | None:
+@lru_cache(maxsize=32)
+def _skeleton_map(known_compounds: frozenset[str]) -> dict[str, tuple[str, ...]]:
+    """Reverse map from a known compound's skeleton (trailing subscript
+    digits stripped, e.g. ``BeF2`` -> ``BeF``) to every known compound
+    sharing that skeleton, mirroring design.md D1's "uniquely maps" rule
+    (task 2.1). Cached per distinct `known_compounds` set since the linker
+    calls this with the same catalog repeatedly."""
+    mapping: dict[str, list[str]] = {}
+    for compound in known_compounds:
+        skeleton = _TRAILING_DIGITS_RE.sub("", compound)
+        mapping.setdefault(skeleton, []).append(compound)
+    return {skeleton: tuple(compounds) for skeleton, compounds in mapping.items()}
+
+
+def _resolve_components(
+    components: list[str], known_compounds: frozenset[str] | None
+) -> list[str] | None:
+    """Resolve each formula component against `known_compounds` (task 2.1).
+
+    When `known_compounds` is None, this is a no-op passthrough --
+    preserving the pre-existing (unvalidated) behavior exactly for backward
+    compatibility. When provided, every component must resolve to a known
+    compound: either directly (already-clean, e.g. "BeF2"), or via the
+    comma/period-as-subscript OCR reconstruction (e.g. "BeF," -> "BeF2")
+    when the stripped root uniquely maps to exactly one known compound. Any
+    component that cannot be resolved this way -- including one whose root
+    is unknown, or whose root is ambiguous between multiple known compounds
+    -- means the whole span is unresolved, so this returns None (no
+    partial/guessed salt, design.md D1).
+    """
+    if known_compounds is None:
+        return components
+
+    skeleton_map = _skeleton_map(known_compounds)
+    resolved: list[str] = []
+    for token in components:
+        if token in known_compounds:
+            resolved.append(token)
+            continue
+        match = _OCR_SUBSCRIPT_TAIL_RE.match(token)
+        if not match:
+            return None
+        root = match.group(1)
+        candidates = skeleton_map.get(root, ())
+        if len(candidates) != 1:
+            return None
+        resolved.append(candidates[0])
+    return resolved
+
+
+def normalize_salt_span(
+    surface: str,
+    composition_text: str | None = None,
+    *,
+    known_compounds: frozenset[str] | None = None,
+) -> str | None:
     """Resolve a text salt mention to the composed salt IRI, or None.
 
     Cleans surface-form variants (subscript digits, dot/bullet separators,
@@ -279,6 +347,15 @@ def normalize_salt_span(surface: str, composition_text: str | None = None) -> st
     salt-formula-normalization spec). With no composition anywhere, returns
     None: a bare formula must not fabricate a composed IRI (the linker
     resolves it to a concept via the exact-match layer instead).
+
+    When `known_compounds` (a set of clean compound formula strings the
+    graph has loaded) is provided, each component is additionally resolved
+    against it -- reversing the corpus OCR artifact that renders a
+    subscript digit as a trailing ',' or '.' (e.g. "BeF," -> "BeF2" when
+    "BeF2" is the only known compound with skeleton "BeF"; see
+    `_resolve_components`). When `known_compounds` is None (the default),
+    this resolution step is skipped entirely and behavior is identical to
+    before this parameter existed.
     """
     working_surface = surface
     if composition_text is None:
@@ -291,6 +368,10 @@ def normalize_salt_span(surface: str, composition_text: str | None = None) -> st
     raw_components = [tok for tok in cleaned.split("-") if tok]
     components = [_strip_leading_coefficient(tok) for tok in raw_components]
     components = [c for c in components if c]
+    if not components:
+        return None
+
+    components = _resolve_components(components, known_compounds)
     if not components:
         return None
 
