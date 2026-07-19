@@ -169,6 +169,40 @@ class TestInlineCompositionRegexIsBounded:
         surface = f"LiF-BeF2 66-34 {tail}"
         assert formula._INLINE_COMPOSITION_RE.search(surface) is not None
 
+    def test_long_leading_whitespace_before_composition_digits_does_not_match(self) -> None:
+        # Second-cycle hardening: the re-review found the LEADING `\(?\s*`
+        # run (before the first composition digit) was still unbounded.
+        # A pathological run of whitespace immediately after the opening
+        # paren must not match.
+        surface = "(" + " " * 50 + "66-34 mol%)"
+        assert formula._INLINE_COMPOSITION_RE.search(surface) is None
+
+    def test_long_internal_separator_whitespace_does_not_match(self) -> None:
+        # Second-cycle hardening: the `\s*-\s*` run separating composition
+        # values must also be bounded -- a huge whitespace run on either
+        # side of the '-' must not match.
+        surface = "(66" + " " * 50 + "-" + " " * 50 + "34 mol%)"
+        assert formula._INLINE_COMPOSITION_RE.search(surface) is None
+
+    def test_normally_spaced_separator_around_formula_hyphen_still_resolves(self) -> None:
+        # Positive control: a single space on either side of the FORMULA
+        # separator (not the composition tail) must still resolve to the
+        # FLiBe IRI -- the bound must not reject legitimate, lightly-spaced
+        # OCR/typeset forms.
+        result = normalize_salt_span(
+            "LiF - BeF2 (66-34 mol %)", known_compounds=KNOWN_FLIBE_COMPOUNDS
+        )
+        assert result == FLIBE_IRI
+
+    def test_normally_spaced_parens_around_composition_still_resolve(self) -> None:
+        # Positive control: a single leading/trailing space just inside the
+        # parens (bounded whitespace, well under the \s{0,4} cap) must still
+        # resolve to the FLiBe IRI.
+        result = normalize_salt_span(
+            "LiF-BeF2 ( 66-34 mol% )", known_compounds=KNOWN_FLIBE_COMPOUNDS
+        )
+        assert result == FLIBE_IRI
+
 
 class TestKnownCompoundsBackwardCompatibility:
     """spec.md "Canonicalization rule and shared fixture unchanged":

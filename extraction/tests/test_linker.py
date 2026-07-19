@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 
+from msr_extraction import linker
 from msr_extraction.config import Config
 from msr_extraction.formula import canonicalize
 from msr_extraction.graph_reader import KnownEntity
@@ -632,3 +633,53 @@ class TestBoundedFuzzyShortChemistryTokens:
         records = link_segment(seg, matcher, known, known_iris, high_config)
 
         assert not any(r.layer == 4 for r in records)
+
+
+class TestFormulaCandidateSeparatorWhitespaceIsBounded:
+    """Second-cycle ReDoS hardening: `linker._FORMULA_SEP` (the separator
+    between formula tokens, e.g. the '-' in "LiF-BeF2") must bound its
+    surrounding whitespace to `\\s{0,4}`, not an unbounded `\\s*` run, so a
+    pathologically long whitespace run around the separator is never
+    swallowed into a single candidate span -- while a normally-spaced
+    (single-space) separator still resolves at layer 3, same as an
+    unspaced one.
+    """
+
+    def test_huge_whitespace_run_around_separator_is_not_swallowed_into_one_candidate(
+        self,
+    ) -> None:
+        text = "LiF" + " " * 50 + "-" + " " * 50 + "BeF2 (66-34 mol%)"
+
+        candidates = linker._find_formula_candidates(text)
+
+        # Either no candidate is found at all, or -- if bounded whitespace
+        # elsewhere in the pattern still lets something match -- no single
+        # returned candidate's surface swallows the giant whitespace run
+        # (a legitimate candidate surface is always well under 60 chars).
+        assert all(len(surface) <= 60 for _, _, surface in candidates), (
+            f"expected the huge whitespace run around the separator to not be "
+            f"captured into one candidate span, got {candidates!r}"
+        )
+
+    def test_normally_spaced_separator_still_resolves_to_the_loaded_salt_individual(
+        self,
+    ) -> None:
+        # Positive control: a single space on either side of the formula
+        # separator must still be captured as a candidate and resolve at
+        # layer 3 to the loaded FLiBe salt individual, exactly like the
+        # unspaced "LiF-BeF2" form.
+        salt_entity, salt_iri = _salt_entity("LiF-BeF2", "66-34")
+        known = _compound_known_entities() + [salt_entity]
+
+        records = _link_with(
+            known, "The reference coolant was LiF - BeF2 (66-34 mol %) circulating through the loop."
+        )
+
+        salt = next((r for r in records if r.target_iri == salt_iri), None)
+        assert salt is not None, (
+            f"expected a layer-3 salt link to {salt_iri} for the normally-spaced "
+            f"separator form, got {records!r}"
+        )
+        assert salt.status == "linked"
+        assert salt.target_kind == "salt"
+        assert salt.layer == 3
