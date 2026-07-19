@@ -238,3 +238,76 @@ func TestBuildSchemaPrompt_InstanceDataAbsent(t *testing.T) {
 		t.Errorf("builder issued %d unrecognized queries; want 0", n)
 	}
 }
+
+func TestPromptCache_ReusesUntilVersionBump(t *testing.T) {
+	ctx := context.Background()
+
+	f := newFakeSchemaSource()
+	seedFixture(f, "v1")
+
+	cache := agent.NewPromptCache(f)
+
+	prompt1, version1, err := cache.Get(ctx)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if version1 != "v1" {
+		t.Fatalf("version = %q, want v1", version1)
+	}
+
+	prompt2, version2, err := cache.Get(ctx)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if version2 != "v1" {
+		t.Fatalf("version = %q, want v1", version2)
+	}
+	if prompt1 != prompt2 {
+		t.Fatalf("cached prompt changed between calls with an unchanged version")
+	}
+
+	// The version SELECT runs every call, but the schema-fetching
+	// queries must only have run once: the second Get reused the cache.
+	if n := f.callCount("version"); n != 2 {
+		t.Fatalf("version query ran %d times, want 2", n)
+	}
+	if n := f.callCount("classes"); n != 1 {
+		t.Fatalf("classes query ran %d times across two unchanged-version Gets, want 1 (no rebuild)", n)
+	}
+
+	// Bump the version -- simulating a real schema change (e.g. an
+	// ontology approval landing a new class), so the rebuilt prompt is
+	// expected to differ -- and confirm the next Get rebuilds.
+	f.version = "v2"
+	f.rows["classes"] = append(f.rows["classes"], map[string]graph.Binding{
+		"class": iri("https://w3id.org/msr-kg/ontology#NewSeedClass"),
+	})
+	prompt3, version3, err := cache.Get(ctx)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if version3 != "v2" {
+		t.Fatalf("version = %q, want v2", version3)
+	}
+	if prompt3 == prompt2 {
+		t.Fatalf("prompt did not change after a version bump")
+	}
+	if n := f.callCount("classes"); n != 2 {
+		t.Fatalf("classes query ran %d times after a version bump, want 2 (one rebuild)", n)
+	}
+}
+
+func TestDetectVersion(t *testing.T) {
+	ctx := context.Background()
+
+	f := newFakeSchemaSource()
+	seedFixture(f, "0.1.0-seed")
+
+	got, err := agent.DetectVersion(ctx, f)
+	if err != nil {
+		t.Fatalf("DetectVersion: %v", err)
+	}
+	if got != "0.1.0-seed" {
+		t.Fatalf("DetectVersion = %q, want 0.1.0-seed", got)
+	}
+}

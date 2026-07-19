@@ -3,10 +3,12 @@ package agent
 // This file implements the KG-schema system prompt: a Go builder that
 // serializes the ontology TBox, the SKOS controlled vocabulary, and the
 // salt catalog into a canonical, byte-stable string (design D4 in
-// openspec/changes/grounded-analysis-agent). The prompt is schema-only:
-// no measurement coefficients, mentions, or evidence sentences ever
-// appear here -- the agent reaches those exclusively through tool calls,
-// so they stay visible in the trace.
+// openspec/changes/grounded-analysis-agent), plus per-request
+// owl:versionInfo detection and a cache that rebuilds only on a version
+// bump. The prompt is schema-only: no measurement coefficients,
+// mentions, or evidence sentences ever appear here -- the agent reaches
+// those exclusively through tool calls, so they stay visible in the
+// trace.
 
 import (
 	"context"
@@ -14,6 +16,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/blogem/msr-graph/internal/graph"
 )
@@ -468,4 +471,70 @@ func renderPrompt(classes []schemaClass, properties []schemaProperty, concepts [
 	}
 
 	return b.String()
+}
+
+// DetectVersion runs the single owl:versionInfo SELECT the server issues
+// at the start of every chat request (design D4). The returned value is
+// also what the provenance event reports as the "ontology version used".
+func DetectVersion(ctx context.Context, src SchemaSource) (string, error) {
+	res, err := src.Select(ctx, versionQuery)
+	if err != nil {
+		return "", fmt.Errorf("agent: detect ontology version: %w", err)
+	}
+	for _, row := range res.Results.Bindings {
+		if v := bindingValue(row, "version"); v != "" {
+			return v, nil
+		}
+	}
+	return "", fmt.Errorf("agent: no owl:versionInfo found for the ontology")
+}
+
+// PromptCache caches the built system prompt and rebuilds it only when
+// DetectVersion reports a different owl:versionInfo than the cached
+// build, so a live server picks up ontology approvals/restores (which
+// have no push signal) with one cheap SELECT per chat request instead of
+// rebuilding on every turn (design D4). It is safe for concurrent use by
+// multiple in-flight chat requests.
+type PromptCache struct {
+	src SchemaSource
+
+	mu      sync.Mutex
+	built   bool
+	version string
+	prompt  string
+}
+
+// NewPromptCache builds an empty PromptCache reading schema state from
+// src. The first Get call always builds the prompt.
+func NewPromptCache(src SchemaSource) *PromptCache {
+	return &PromptCache{src: src}
+}
+
+// Get detects the current owl:versionInfo and returns the cached prompt
+// if it matches the version the cache was last built with; otherwise it
+// rebuilds via BuildSchemaPrompt, caches the result, and returns it. The
+// returned version is always the one just detected, whether or not a
+// rebuild happened, so callers can report it as the provenance event's
+// "ontology version used".
+func (c *PromptCache) Get(ctx context.Context) (prompt string, version string, err error) {
+	version, err = DetectVersion(ctx, c.src)
+	if err != nil {
+		return "", "", err
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if c.built && c.version == version {
+		return c.prompt, version, nil
+	}
+
+	prompt, err = BuildSchemaPrompt(ctx, c.src)
+	if err != nil {
+		return "", "", err
+	}
+	c.prompt = prompt
+	c.version = version
+	c.built = true
+	return c.prompt, version, nil
 }
