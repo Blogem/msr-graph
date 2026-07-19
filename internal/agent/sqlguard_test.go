@@ -50,6 +50,22 @@ func TestGuardSelectOnly(t *testing.T) {
 			name:  "comment tokens inside a string literal",
 			query: "SELECT c0 FROM t WHERE note = 'has -- dashes and /* comment */ text'",
 		},
+		{
+			name:  "legitimate backtick identifier",
+			query: "SELECT c0 AS `density` FROM measurement_value",
+		},
+		{
+			name:  "legitimate bracket identifier",
+			query: "SELECT [c0] FROM measurement_value",
+		},
+		{
+			name:  "semicolon inside a backtick identifier is still one statement",
+			query: "SELECT `weird;col` FROM t",
+		},
+		{
+			name:  "semicolon inside a double-quoted identifier is still one statement",
+			query: `SELECT "col;name" FROM t`,
+		},
 
 		// --- REJECT: writes ---
 		{
@@ -130,6 +146,46 @@ func TestGuardSelectOnly(t *testing.T) {
 		{
 			name:    "stacked statement after a quoted identifier",
 			query:   `SELECT "a" ; DROP TABLE t`,
+			wantErr: true,
+		},
+		{
+			name:    "block comment delimiters smuggled inside a backtick identifier to drop a table",
+			query:   "SELECT 1 AS `/*` ; DROP TABLE measurement_value ; SELECT 1 AS `*/`",
+			wantErr: true,
+		},
+		{
+			name:    "block comment delimiters smuggled inside a bracket identifier to drop a table",
+			query:   "SELECT 1 AS [/*] ; DROP TABLE measurement_value ; SELECT 1 AS [*/]",
+			wantErr: true,
+		},
+		{
+			name:    "block comment delimiters smuggled inside a backtick identifier to attach and create a file",
+			query:   "SELECT 1 AS `/*` ; ATTACH DATABASE '/tmp/evil.db' AS e ; CREATE TABLE e.pwned(x) ; SELECT 1 AS `*/`",
+			wantErr: true,
+		},
+		{
+			name:    "block comment delimiters smuggled inside a bracket identifier to attach and create a file",
+			query:   "SELECT 1 AS [/*] ; ATTACH DATABASE '/tmp/evil.db' AS e ; CREATE TABLE e.pwned(x) ; SELECT 1 AS [*/]",
+			wantErr: true,
+		},
+		{
+			name:    "stacked statement after a backtick-quoted identifier",
+			query:   "SELECT 1 AS `a`;DROP TABLE t",
+			wantErr: true,
+		},
+		{
+			name:    "stacked statement after a bracket-quoted identifier",
+			query:   "SELECT 1 AS [a];DROP TABLE t",
+			wantErr: true,
+		},
+		{
+			name:    "unterminated backtick-quoted identifier",
+			query:   "SELECT 1 AS `abc",
+			wantErr: true,
+		},
+		{
+			name:    "unterminated bracket-quoted identifier",
+			query:   "SELECT 1 AS [abc",
 			wantErr: true,
 		},
 		{

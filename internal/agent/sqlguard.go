@@ -49,10 +49,14 @@ var forbiddenKeywordPattern = regexp.MustCompile(
 //
 // This guard is a query-shape check, not a full SQL parser: it does not
 // validate that the statement is syntactically well-formed SQL beyond
-// what's needed to classify it, and it does not understand every SQLite
-// quoting form (e.g. bracket or backtick identifiers). Combined with the
-// read-only (mode=ro) connection used for the measurement store, it forms
-// defense in depth rather than a single guaranteed control.
+// what's needed to classify it. It does, however, cover every string/
+// identifier/comment quoting form SQLite's own tokenizer recognizes --
+// '...' strings, "..." and `...` quoted identifiers, [...] quoted
+// identifiers, -- line comments, and /* */ block comments -- so no
+// quoting form is left as a gap through which a comment delimiter or
+// stacked statement could be smuggled. Combined with the read-only
+// (mode=ro) connection used for the measurement store, it forms defense
+// in depth rather than a single guaranteed control.
 func guardSelectOnly(query string) error {
 	code, err := extractCodeStream(query)
 	if err != nil {
@@ -94,6 +98,8 @@ const (
 	stateCode codeScanState = iota
 	stateSingleQuote
 	stateDoubleQuote
+	stateBacktickQuote
+	stateBracketQuote
 	stateLineComment
 	stateBlockComment
 )
@@ -108,6 +114,19 @@ const (
 // comment is elided from the code stream, a single space is substituted
 // so adjacent tokens are not accidentally joined (e.g. "SELECT/**/1"
 // must not become the single token "SELECT1").
+//
+// This covers all four of SQLite's string/identifier quoting forms, not
+// just '...' strings and "..." identifiers: a backtick-quoted identifier
+// (`...`, MySQL-compatible, escaped by doubling like '' and "") and a
+// bracket-quoted identifier ([...], SQL-Server-compatible) are also
+// tracked as their own states. Without this, content inside a backtick or
+// bracket "identifier" was scanned as ordinary code, so a /* */ pair
+// placed inside one was treated as a real block comment -- letting a
+// stacked ';' and a write statement (e.g. DROP TABLE, ATTACH DATABASE) be
+// elided from the code stream along with it, e.g.
+// SELECT 1 AS `/*` ; DROP TABLE t ; SELECT 1 AS `*/`. Bracket identifiers
+// have no doubling escape in SQLite -- a bracket identifier is closed by
+// the first ']' -- so stateBracketQuote does not special-case "]]".
 //
 // An unterminated string, quoted identifier, or block comment is
 // malformed input and returns an error; an unterminated line comment
@@ -128,6 +147,10 @@ func extractCodeStream(query string) (string, error) {
 				state = stateSingleQuote
 			case c == '"':
 				state = stateDoubleQuote
+			case c == '`':
+				state = stateBacktickQuote
+			case c == '[':
+				state = stateBracketQuote
 			case c == '-' && i+1 < n && r[i+1] == '-':
 				state = stateLineComment
 				i++
@@ -154,6 +177,21 @@ func extractCodeStream(query string) (string, error) {
 				}
 				state = stateCode
 			}
+		case stateBacktickQuote:
+			if c == '`' {
+				if i+1 < n && r[i+1] == '`' {
+					// SQL `` escape: a doubled backtick stays in-identifier.
+					i++
+					continue
+				}
+				state = stateCode
+			}
+		case stateBracketQuote:
+			// SQLite has no "]]" escape for bracket identifiers: the first
+			// ']' always closes the identifier.
+			if c == ']' {
+				state = stateCode
+			}
 		case stateLineComment:
 			if c == '\n' {
 				state = stateCode
@@ -174,6 +212,10 @@ func extractCodeStream(query string) (string, error) {
 		return "", fmt.Errorf("sql_query: unterminated string literal")
 	case stateDoubleQuote:
 		return "", fmt.Errorf("sql_query: unterminated quoted identifier")
+	case stateBacktickQuote:
+		return "", fmt.Errorf("sql_query: unterminated backtick-quoted identifier")
+	case stateBracketQuote:
+		return "", fmt.Errorf("sql_query: unterminated bracket-quoted identifier")
 	case stateBlockComment:
 		return "", fmt.Errorf("sql_query: unterminated block comment")
 	}
