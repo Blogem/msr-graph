@@ -105,6 +105,12 @@ services:
       DEEPSEEK_BASE_URL: ${DEEPSEEK_BASE_URL:-https://api.deepseek.com}
       LLM_MODEL_ANALYSIS: ${LLM_MODEL_ANALYSIS:-deepseek-v4-pro}
       DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+      # Grounded analysis-agent loop bounds (chunk 4, internal/agent): how many
+      # model round-trips one /api/chat turn may take and its wall-clock
+      # backstop. Generous defaults for multi-step ground->fetch->compute
+      # questions; raise via .env if a turn hits "max iterations exceeded".
+      AGENT_MAX_ITERATIONS: ${AGENT_MAX_ITERATIONS:-30}
+      AGENT_TURN_DEADLINE: ${AGENT_TURN_DEADLINE:-10m}
     volumes:
       - ./data:/data
       # Used by chunk 3's sandbox pool (internal/sandbox) to launch sandbox

@@ -72,7 +72,10 @@ func main() {
 		agent.NewSQLTool(db),
 		agent.NewPythonTool(pool),
 	}
-	ag := agent.New(llm, tools, agent.DefaultConfig())
+	agentCfg := agent.DefaultConfig()
+	agentCfg.MaxIterations = cfg.agentMaxIterations
+	agentCfg.TurnDeadline = cfg.agentTurnDeadline
+	ag := agent.New(llm, tools, agentCfg)
 	prompts := agent.NewPromptCache(gc)
 
 	mux := newMux(newChatHandler(ag, prompts))
