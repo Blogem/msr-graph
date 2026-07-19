@@ -20,9 +20,9 @@
 
 ## 4. Chat API (`cmd/server`)
 
-- [ ] 4.1 Add the `POST /api/chat` handler: decode the stateless OpenAI-style `{"messages":[…]}` body, reject malformed bodies with a client error, and start an agent turn
-- [ ] 4.2 Stream the turn as SSE trace events (via `fetch`-streamable SSE), emitting each event type as it occurs and a terminating `done`; truncate large `tool_result`/`script_run` payloads inline with full payload retrievable; persist nothing
-- [ ] 4.3 Wire the agent's dependencies into the server: core-dataset client, read-only store connection, chunk-3 sandbox pool, prompt builder, and injected LLM client
+- [x] 4.1 Add the `POST /api/chat` handler: decode the stateless OpenAI-style `{"messages":[…]}` body, reject malformed bodies with a client error, and start an agent turn
+- [x] 4.2 Stream the turn as SSE trace events (via `fetch`-streamable SSE), emitting each event type as it occurs and a terminating `done`; truncate large `tool_result`/`script_run` payloads inline with full payload retrievable; persist nothing
+- [x] 4.3 Wire the agent's dependencies into the server: core-dataset client, read-only store connection, chunk-3 sandbox pool, prompt builder, and injected LLM client
 
 ## 5. Configuration
 
@@ -30,14 +30,14 @@
 
 ## 6. Tests
 
-- [ ] 6.1 Agent-loop tests with a stubbed LLM + fake pool: correct tool-call/final-answer sequence, final numeric answer equals the fake script output (no model arithmetic), a numeric answer is preceded by a `script_run`, and the max-iterations bound stops a runaway loop
-- [ ] 6.2 End-to-end grounded density test (stubbed LLM + fake pool): "density of FLiBe (LiF-BeF₂ 66-34 mol%) at 900 K" → ≈ 1.974 g·cm⁻³ from `c0=2.413`, `c1=-4.88e-4` (locator `nist-srd27/density#BeF2-LiF|34.0-66.0`) via a script; trace shows grounding → coefficient fetch → `script_run`
-- [ ] 6.3 Out-of-range temperature test: a temperature outside the valid range is flagged/refused, not reported as a valid number
-- [ ] 6.4 Comparative-query test (stubbed LLM + fake pool): a "lowest-viscosity" question is resolved by a single aggregating script whose output is the reported winner
+- [x] 6.1 Agent-loop tests with a stubbed LLM + fake pool: correct tool-call/final-answer sequence, final numeric answer equals the fake script output (no model arithmetic), a numeric answer is preceded by a `script_run`, and the max-iterations bound stops a runaway loop
+- [x] 6.2 End-to-end grounded density test (stubbed LLM + fake pool): "density of FLiBe (LiF-BeF₂ 66-34 mol%) at 900 K" → ≈ 1.974 g·cm⁻³ from `c0=2.413`, `c1=-4.88e-4` (locator `nist-srd27/density#BeF2-LiF|34.0-66.0`) via a script; trace shows grounding → coefficient fetch → `script_run`
+- [x] 6.3 Out-of-range temperature test: a temperature outside the valid range is flagged/refused, not reported as a valid number
+- [x] 6.4 Comparative-query test (stubbed LLM + fake pool): a "lowest-viscosity" question is resolved by a single aggregating script whose output is the reported winner
 - [x] 6.5 SELECT-only-guard table tests: clean SELECTs pass; INSERT/UPDATE/DELETE, DDL, PRAGMA writes, multi-statement, and comment-smuggled writes are rejected
 - [ ] 6.6 SSE handler tests: stateless request shape accepted, malformed body rejected, every event type emitted and well-formed, `script_run` carries source+stdout+stderr+exit+sandbox id, `provenance` names locator/citedIn/DOI/version, and no trace is persisted
 - [x] 6.7 Prompt-builder tests: byte-identical output for a fixed graph state (order-independent of query result order); rebuild triggered when `owl:versionInfo` changes; instance data absent from the prompt
-- [ ] 6.8 Schema-generic test: a newly present measurement/coefficient row becomes answerable with no agent code change
+- [x] 6.8 Schema-generic test: a newly present measurement/coefficient row becomes answerable with no agent code change
 
 ## 7. Manual verification tooling (playground until the frontend lands)
 
