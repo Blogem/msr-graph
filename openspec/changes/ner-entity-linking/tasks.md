@@ -17,7 +17,7 @@
 - [x] 3.1 Implement a Python graph reader that injects the three core `FROM` graphs (`urn:msr:ontology`, `urn:msr:data`, `urn:msr:vocab`) on every read, mirroring the core-dataset-access contract, so staging/proposal graphs are never read
 - [x] 3.2 Read vocab concepts (prefLabels + altLabels), ontology classes/properties, and the chunk-2 salt catalog (`MoltenSalt` individuals + canonical labels/IRIs) into a known-entity set keyed by target IRI
 - [x] 3.3 Implement pure, deterministic pattern-variant generation (hyphen/no-hyphen, spacing, `attr="LOWER"` case) per label
-- [ ] 3.4 Build the spaCy `EntityRuler`/`PhraseMatcher` from the known-entity set at run start (rebuilt every run, no persisted pattern file)
+- [x] 3.4 Build the spaCy `EntityRuler`/`PhraseMatcher` from the known-entity set at run start (rebuilt every run, no persisted pattern file)
 
 ## 4. Salt formula normalizer (`salt-formula-normalization`)
 
@@ -39,8 +39,8 @@
 
 ## 7. KG-schema prompt builder (`kg-schema-prompt`)
 
-- [ ] 7.1 Implement the byte-stable, deterministically-ordered serialization of TBox + vocab + salt catalog (excluding instance data)
-- [ ] 7.2 Read `owl:versionInfo` at run start; cache the prefix and rebuild only on a version change; expose the builder as an importable component for chunks 7 and 8
+- [x] 7.1 Implement the byte-stable, deterministically-ordered serialization of TBox + vocab + salt catalog (excluding instance data)
+- [x] 7.2 Read `owl:versionInfo` at run start; cache the prefix and rebuild only on a version change; expose the builder as an importable component for chunks 7 and 8
 
 ## 8. Mention graph writer (`mention-graph-writing`)
 
@@ -59,7 +59,7 @@
 - [ ] 10.3 Matcher/linker tests on fixture sentences → expected spans and targets (concept / class / salt individual), incl. `BeF2-LiF ≡ LiF-BeF2` unification; bounded-fuzzy accept-above / no-link-below-threshold cases
 - [x] 10.4 Core-dataset read guard test: a concept present only in `urn:msr:staging` does not seed the matcher; an approved concept does
 - [x] 10.5 Stubbed-Flash disambiguation tests: accept on valid IRI, reject on unknown IRI (→ novel), novel-span path, and malformed-JSON → unresolved
-- [ ] 10.6 KG-schema prompt tests: same graph state → byte-identical prefix; bumped `owl:versionInfo` → rebuilt prefix; instance data excluded
+- [x] 10.6 KG-schema prompt tests: same graph state → byte-identical prefix; bumped `owl:versionInfo` → rebuilt prefix; instance data excluded
 - [x] 10.7 Mention-emission tests: a fixed linked span → the exact expected `INSERT DATA` triples (deterministic IRI, no blank nodes) against a fake SPARQL client; idempotent-shape re-run
 - [ ] 10.8 Labelled-sample precision harness: committed gold fixture of ≥ 50 ORNL-TM-2316 mentions → precision ≥ 0.90 gate (stubbed Flash); recall computed and reported, not gated
 - [ ] 10.9 Guarded integration test (opt-in env flag, mirroring chunk 1's `GRAPHDB_REQUIRED`): after seed + catalog + a real `link` run, `LiF-BeF2`/`FLiBe`/`viscosity`/`MSRE` resolve to correct IRIs, the `LiF-BeF2` mention resolves to the loaded salt individual, and a second run leaves the `urn:msr:data` mention-triple count unchanged
