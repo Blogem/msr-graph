@@ -1,4 +1,11 @@
-# PLACEHOLDER target sentences — the finalization step (task 4.4) replaces
-# these with the ACTUAL quoted sentences from the curated msr-archive OCR.
+# FINALIZED (2026-07-19, task 4.4): actual OCR sentence from the curated
+# msr-archive checkout, report ORNL-TM-2256 ("Chemical Feasibility of
+# Fueling Molten-Salt Reactors with PuF3"), ocr/ORNL-TM-2256.txt lines
+# 357-360. Quoted verbatim including original OCR noise (e.g. "PuF;" for
+# "PuF3", "Bel," for "BeF2"). Recorded with grep-level evidence in
+# docs/DATA_SCOPE.md (Open item 5, resolved).
 
-The solubility of PuF3 in LiF-BeF2 was 2.7 mole % at 600°C.
+1. LiF-BeF,: The solubility of PuF; in LiF-Bel, solvents
+was measured by Bart0n6 for compositions ranging in BeF, from
+28.7 to 48.3 mole % and from 450 to 650°C. Solubilities of
+PuF; in LiF-BeF, solvents are compared with those for CeF; in

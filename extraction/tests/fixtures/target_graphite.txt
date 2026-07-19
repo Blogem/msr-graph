@@ -1,4 +1,9 @@
-# PLACEHOLDER target sentences — the finalization step (task 4.4) replaces
-# these with the ACTUAL quoted sentences from the curated msr-archive OCR.
+# FINALIZED (2026-07-19, task 4.4): actual OCR sentence from the curated
+# msr-archive checkout, report ORNL-TM-0728 ("MSRE Design and Operations
+# Report Part I: Reactor Design"), ocr/ORNL-TM-0728.txt line 2738. Quoted
+# verbatim including the original OCR line break. Recorded with grep-level
+# evidence in docs/DATA_SCOPE.md (Open item 5, resolved).
 
-The MSRE uses graphite as the moderator.
+The Molten-Salt Reactor Experiment (MSRE) is a single-region, un-
+clad, graphite-moderated, fluid-fuel type of reactor with a design heat
+generation rate of 10 Mw.
