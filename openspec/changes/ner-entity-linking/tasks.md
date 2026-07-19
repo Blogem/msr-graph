@@ -14,15 +14,15 @@
 
 ## 3. Graph reader & matcher seeding (`entity-ruler-seeding`)
 
-- [ ] 3.1 Implement a Python graph reader that injects the three core `FROM` graphs (`urn:msr:ontology`, `urn:msr:data`, `urn:msr:vocab`) on every read, mirroring the core-dataset-access contract, so staging/proposal graphs are never read
-- [ ] 3.2 Read vocab concepts (prefLabels + altLabels), ontology classes/properties, and the chunk-2 salt catalog (`MoltenSalt` individuals + canonical labels/IRIs) into a known-entity set keyed by target IRI
-- [ ] 3.3 Implement pure, deterministic pattern-variant generation (hyphen/no-hyphen, spacing, `attr="LOWER"` case) per label
+- [x] 3.1 Implement a Python graph reader that injects the three core `FROM` graphs (`urn:msr:ontology`, `urn:msr:data`, `urn:msr:vocab`) on every read, mirroring the core-dataset-access contract, so staging/proposal graphs are never read
+- [x] 3.2 Read vocab concepts (prefLabels + altLabels), ontology classes/properties, and the chunk-2 salt catalog (`MoltenSalt` individuals + canonical labels/IRIs) into a known-entity set keyed by target IRI
+- [x] 3.3 Implement pure, deterministic pattern-variant generation (hyphen/no-hyphen, spacing, `attr="LOWER"` case) per label
 - [ ] 3.4 Build the spaCy `EntityRuler`/`PhraseMatcher` from the known-entity set at run start (rebuilt every run, no persisted pattern file)
 
 ## 4. Salt formula normalizer (`salt-formula-normalization`)
 
-- [ ] 4.1 Implement the Python formula parser/normalizer: parse mention → (compound, fraction) structure; byte-wise alphabetize, lockstep-reorder composition, one-decimal mole % → canonical string (identical rule to chunk 2's Go)
-- [ ] 4.2 Map a composed canonical form to the loader-minted salt IRI (`msrd:salt-{formula}-{composition}`); resolve a bare-formula mention to the salt concept/compound family (never fabricate a composition)
+- [x] 4.1 Implement the Python formula parser/normalizer: parse mention → (compound, fraction) structure; byte-wise alphabetize, lockstep-reorder composition, one-decimal mole % → canonical string (identical rule to chunk 2's Go)
+- [x] 4.2 Map a composed canonical form to the loader-minted salt IRI (`msrd:salt-{formula}-{composition}`); resolve a bare-formula mention to the salt concept/compound family (never fabricate a composition)
 - [ ] 4.3 Wire the normalizer in as matching layer 3 (salt spans), unifying order/`·`/subscript/spacing variants
 
 ## 5. Layered linking pipeline (`entity-linking`)
@@ -33,9 +33,9 @@
 
 ## 6. Flash disambiguation (`llm-disambiguation`)
 
-- [ ] 6.1 Implement the injected OpenAI-compatible Flash client wrapper (`DEEPSEEK_BASE_URL`, `LLM_MODEL_EXTRACT`); interface stubbed in tests
+- [x] 6.1 Implement the injected OpenAI-compatible Flash client wrapper (`DEEPSEEK_BASE_URL`, `LLM_MODEL_EXTRACT`); interface stubbed in tests
 - [ ] 6.2 Send only layers-2–4-unresolved spans to Flash with sentence context + the cached KG-schema prompt; parse schema-constrained JSON
-- [ ] 6.3 Validate returned link IRIs against the run's known-IRI set — accept if present, reject (→ novel) if absent; treat novel declarations and malformed/schema-violating output as unresolved/novel (never a silent link)
+- [x] 6.3 Validate returned link IRIs against the run's known-IRI set — accept if present, reject (→ novel) if absent; treat novel declarations and malformed/schema-violating output as unresolved/novel (never a silent link)
 
 ## 7. KG-schema prompt builder (`kg-schema-prompt`)
 
@@ -44,8 +44,8 @@
 
 ## 8. Mention graph writer (`mention-graph-writing`)
 
-- [ ] 8.1 Emit each linked span as `msrd:mention-{report#}-{start}-{end} a msr:Mention` with `msr:linksTo`, `msr:inDocument`, `msr:surfaceForm`, `msr:startOffset`, `msr:endOffset`; deterministic IRIs, no blank nodes
-- [ ] 8.2 Write mention triples to `urn:msr:data` via additive `INSERT DATA` through the chunk-5 Python SPARQL-UPDATE helper (never `PutGraph`); ensure re-run leaves the mention-triple count unchanged
+- [x] 8.1 Emit each linked span as `msrd:mention-{report#}-{start}-{end} a msr:Mention` with `msr:linksTo`, `msr:inDocument`, `msr:surfaceForm`, `msr:startOffset`, `msr:endOffset`; deterministic IRIs, no blank nodes
+- [x] 8.2 Write mention triples to `urn:msr:data` via additive `INSERT DATA` through the chunk-5 Python SPARQL-UPDATE helper (never `PutGraph`); ensure re-run leaves the mention-triple count unchanged
 
 ## 9. `link` orchestration, wiring & docs
 
@@ -54,13 +54,13 @@
 
 ## 10. Tests
 
-- [ ] 10.1 Formula-normalizer tests driven by the shared `testdata/salt-canonicalization.json` (Python must pass every case) plus order/`·`/subscript/spacing variant cases → one canonical form + correct salt IRI; bare-formula-vs-composed-individual rule
-- [ ] 10.2 Pattern-variant generation tests (label → expected generated surface variants)
+- [x] 10.1 Formula-normalizer tests driven by the shared `testdata/salt-canonicalization.json` (Python must pass every case) plus order/`·`/subscript/spacing variant cases → one canonical form + correct salt IRI; bare-formula-vs-composed-individual rule
+- [x] 10.2 Pattern-variant generation tests (label → expected generated surface variants)
 - [ ] 10.3 Matcher/linker tests on fixture sentences → expected spans and targets (concept / class / salt individual), incl. `BeF2-LiF ≡ LiF-BeF2` unification; bounded-fuzzy accept-above / no-link-below-threshold cases
-- [ ] 10.4 Core-dataset read guard test: a concept present only in `urn:msr:staging` does not seed the matcher; an approved concept does
-- [ ] 10.5 Stubbed-Flash disambiguation tests: accept on valid IRI, reject on unknown IRI (→ novel), novel-span path, and malformed-JSON → unresolved
+- [x] 10.4 Core-dataset read guard test: a concept present only in `urn:msr:staging` does not seed the matcher; an approved concept does
+- [x] 10.5 Stubbed-Flash disambiguation tests: accept on valid IRI, reject on unknown IRI (→ novel), novel-span path, and malformed-JSON → unresolved
 - [ ] 10.6 KG-schema prompt tests: same graph state → byte-identical prefix; bumped `owl:versionInfo` → rebuilt prefix; instance data excluded
-- [ ] 10.7 Mention-emission tests: a fixed linked span → the exact expected `INSERT DATA` triples (deterministic IRI, no blank nodes) against a fake SPARQL client; idempotent-shape re-run
+- [x] 10.7 Mention-emission tests: a fixed linked span → the exact expected `INSERT DATA` triples (deterministic IRI, no blank nodes) against a fake SPARQL client; idempotent-shape re-run
 - [ ] 10.8 Labelled-sample precision harness: committed gold fixture of ≥ 50 ORNL-TM-2316 mentions → precision ≥ 0.90 gate (stubbed Flash); recall computed and reported, not gated
 - [ ] 10.9 Guarded integration test (opt-in env flag, mirroring chunk 1's `GRAPHDB_REQUIRED`): after seed + catalog + a real `link` run, `LiF-BeF2`/`FLiBe`/`viscosity`/`MSRE` resolve to correct IRIs, the `LiF-BeF2` mention resolves to the loaded salt individual, and a second run leaves the `urn:msr:data` mention-triple count unchanged
 
