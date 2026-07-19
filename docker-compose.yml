@@ -120,6 +120,19 @@ services:
     build: ./extraction
     profiles: ["tools"]
     user: "10001:10001"
+    # GraphDB + data wiring for `make ingest` (chunk 5): acquisition and
+    # normalization write data/corpus/** through the same ./data bind mount
+    # as server/loader, and Document nodes are written via SPARQL UPDATE
+    # over the GraphDB HTTP endpoint (see design.md D1, D6).
+    environment:
+      GRAPHDB_URL: http://graphdb:7200
+      GRAPHDB_REPO: msr
+      MSR_CORPUS_DIR: /data/corpus
+    volumes:
+      - ./data:/data
+    depends_on:
+      graphdb:
+        condition: service_healthy
 
 volumes:
   # GraphDB's dedicated repository storage volume (see graphdb service
