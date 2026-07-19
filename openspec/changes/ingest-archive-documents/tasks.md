@@ -52,7 +52,7 @@
 - [x] 9.4 Segmenter tests: offset round-trip (`normalized_text[char_start:char_end] == text` for every segment); decimals/abbreviations not over-split
 - [x] 9.5 Document-emission tests: a fixed manifest record → the exact expected `INSERT DATA` triples against a fake SPARQL client; deterministic IRI, no blank nodes
 - [x] 9.6 Evolution-target gate test: committed fixture excerpts of the actual target sentences (solubility + value + unit; graphite-as-moderator) → detection patterns match, pinning the gate hermetically
-- [ ] 9.7 Guarded corpus integration (opt-in env flag, mirroring chunk 1's `GRAPHDB_REQUIRED`): after a real `make ingest`, 12 `Document` nodes present, curated OCR contains the target patterns, and a second run leaves `urn:msr:data` triple counts unchanged
+- [x] 9.7 Guarded corpus integration (opt-in env flag, mirroring chunk 1's `GRAPHDB_REQUIRED`): after a real `make ingest`, 12 `Document` nodes present, curated OCR contains the target patterns, and a second run leaves `urn:msr:data` triple counts unchanged
 
 ## 10. Documentation
 
