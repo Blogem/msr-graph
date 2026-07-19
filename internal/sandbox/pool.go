@@ -52,6 +52,14 @@ type Pool struct {
 	done      chan struct{}
 	closeOnce sync.Once
 
+	// mu guards closed and serializes replenishment spawns against Close, so
+	// that no wg.Add can ever happen after Close's wg.Wait has returned
+	// (which would both be a WaitGroup misuse and risk enqueuing a freshly
+	// created container into ready after Close has already drained it,
+	// orphaning it and violating design D8).
+	mu     sync.Mutex
+	closed bool
+
 	wg sync.WaitGroup
 }
 
@@ -68,6 +76,16 @@ type Pool struct {
 // error, so misconfiguration (bad image, unreachable daemon, ...) surfaces
 // at startup rather than mid-demo (design D8).
 func New(ctx context.Context, cfg Config, rt Runtime) (*Pool, error) {
+	if cfg.PoolSize <= 0 {
+		return nil, fmt.Errorf("sandbox: invalid config: PoolSize must be > 0, got %d", cfg.PoolSize)
+	}
+	if cfg.Timeout <= 0 {
+		return nil, fmt.Errorf("sandbox: invalid config: Timeout must be > 0, got %s", cfg.Timeout)
+	}
+	if cfg.IdleTTL <= cfg.Timeout {
+		return nil, fmt.Errorf("sandbox: invalid config: IdleTTL (%s) must exceed Timeout (%s)", cfg.IdleTTL, cfg.Timeout)
+	}
+
 	if err := rt.Reap(ctx); err != nil {
 		return nil, fmt.Errorf("sandbox: startup sweep (Reap) failed: %w", err)
 	}
@@ -142,19 +160,38 @@ func (p *Pool) Run(ctx context.Context, script []byte) (stdout, stderr []byte, e
 	}
 
 	// Replenishment happens off the request path (design D1, D8).
-	p.wg.Add(1)
-	go p.replenish()
+	p.startReplenish()
 
+	// The caller's ctx is checked first so ErrTimeout is only reported when
+	// the pool's own timer fired while the caller's ctx was still live --
+	// otherwise a caller-supplied ctx deadline would be misreported as the
+	// pool's ErrTimeout, since runCtx inherits ctx's deadline too.
 	switch {
-	case errors.Is(runCtx.Err(), context.DeadlineExceeded):
-		return nil, nil, 0, ErrTimeout
 	case ctx.Err() != nil:
 		return nil, nil, 0, fmt.Errorf("sandbox: %w", ctx.Err())
+	case errors.Is(runCtx.Err(), context.DeadlineExceeded):
+		return nil, nil, 0, ErrTimeout
 	case execErr != nil:
 		return nil, nil, 0, fmt.Errorf("sandbox: exec failed: %w", execErr)
 	default:
 		return res.Stdout, res.Stderr, res.ExitCode, nil
 	}
+}
+
+// startReplenish registers and starts a replenish goroutine, unless the pool
+// is already closed. Registering the wg.Add under the same mutex that Close
+// sets closed and closes done under guarantees every wg.Add happens-before
+// Close's wg.Wait -- so Close can never return while a replenishment it
+// didn't know about is still in flight, and no post-close replenish can slip
+// a container into ready after Close has already drained it (design D8).
+func (p *Pool) startReplenish() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.closed {
+		return
+	}
+	p.wg.Add(1)
+	go p.replenish()
 }
 
 // replenish creates one fresh container and enqueues it into ready,
@@ -215,10 +252,23 @@ func (p *Pool) replenish() {
 // the time the wait completes, ready holds exactly the containers left to
 // clean up here -- nothing is dropped and nothing is drained out from under
 // a goroutine still in flight.
+//
+// closed is set and done is closed under the same mutex startReplenish
+// locks, before wg.Wait is called, so every wg.Add is guaranteed to have
+// happened-before this wg.Wait (see startReplenish). Note that because
+// replenish creates containers with a detached context.Background(), a
+// Close concurrent with a replenish blocked inside a wedged daemon Create
+// call can block in wg.Wait until that call returns; this is an accepted
+// trade-off, since abandoning the wait would risk leaving a half-created
+// container un-tracked and un-removed.
 func (p *Pool) Close() error {
 	var err error
 	p.closeOnce.Do(func() {
+		p.mu.Lock()
+		p.closed = true
 		close(p.done)
+		p.mu.Unlock()
+
 		p.wg.Wait()
 
 		for {
