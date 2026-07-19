@@ -21,15 +21,19 @@ The system SHALL provide a `loader nist` subcommand that ingests the vendored NI
 - **THEN** the loader runs the NIST ingest and exits zero on success
 
 #### Scenario: Unknown data-type code aborts
-- **WHEN** a row carries a `Data type` code outside the documented set (`P1`, `P2`, `P3`, `+E`, `DP`)
+- **WHEN** a row carries a `Data type` code outside the full documented set (`P1`, `P2`, `P3`, `P4`, `+E`, `E1`, `E2`, `DP`, `I1`, `I2`, `I3`, `I4`)
 - **THEN** the loader fails loudly with an error naming the offending code and does not silently skip the row
+
+#### Scenario: Documented isotherm and extended-Arrhenius codes are ingested, not skipped
+- **WHEN** a row carries `E1` (pure BeF2 viscosity) or `I2`/`I3`/`I4` (KF-ZrF4 / NaF-ZrF4 composition isotherms)
+- **THEN** the loader maps it to the matching `msr:EquationForm` individual and ingests it into both stores like any other documented code
 
 ### Requirement: Coefficient rows written to the measurement store
 The loader SHALL write one `measurement_value` row per kept NIST measurement with `source='nist'`, `doc_id` unset, `salt` in canonical form, the property name, the mapped `equation_form`, `t_min`/`t_max` from the validity range, `uncertainty` from the source column, coefficients `c0..c4` from `Data 1..5`, and `locator` in the contract form `nist-srd27/{property}#{canonical-salt}`. Numeric coefficients live only in SQLite; the graph does not carry them.
 
 #### Scenario: FLiBe density coefficients land in SQLite
-- **WHEN** the FLiBe density row (`LiF-BeF2, 34.0-66.0, P1`) is ingested
-- **THEN** `measurement_value` holds a row with locator `nist-srd27/density#BeF2-LiF|66.0-34.0`, `source='nist'`, `c0=2.413`, and `c1=-4.88e-4`
+- **WHEN** the FLiBe density row (`BeF2-LiF, 34.0-66.0, P1`) is ingested
+- **THEN** `measurement_value` holds a row with locator `nist-srd27/density#BeF2-LiF|34.0-66.0`, `source='nist'`, `c0=2.413`, and `c1=-4.88e-4`
 
 #### Scenario: Coefficients are not emitted as triples
 - **WHEN** a NIST measurement is loaded
@@ -45,6 +49,13 @@ The loader SHALL emit `MoltenSalt`, `Constituent`, and `PropertyMeasurement` tri
 #### Scenario: Seed hand-curated edges survive the load
 - **WHEN** `loader nist` runs after the seed A-Box is loaded
 - **THEN** the seed's `hasRole` / `usedIn` / `citedIn` edges remain present in `urn:msr:data`
+
+### Requirement: Composition-isotherm measurements
+The loader SHALL treat a row carrying an isotherm `Data type` code (`I1`–`I4`) as a composition-isotherm measurement rather than a temperature-dependent one: it SHALL mint a range-composition salt whose varying constituent carries `moleFractionMin`/`moleFractionMax` (per the `salt-canonicalization` range-salt rule), and it SHALL write a `PropertyMeasurement` whose `equationForm` is the matching `msr:Isotherm{n}` individual, whose `validTempMin` equals `validTempMax` (the single temperature the sweep was measured at), and which carries a `msr:compositionComponent` naming the varying compound.
+
+#### Scenario: KF-ZrF4 isotherm row produces a range-composition salt and measurement
+- **WHEN** a KF-ZrF4 row with `Composition range` `0.0-33.3 ZrF4` and `Data type` `I3` is ingested
+- **THEN** the loader mints a salt whose `ZrF4` constituent has `moleFractionMin=0.0` and `moleFractionMax=0.333` and whose `KF` constituent has `moleFractionMin=0.667` and `moleFractionMax=1.0`, and writes a `PropertyMeasurement` with `equationForm msr:Isotherm3`, `validTempMin = validTempMax`, and `msr:compositionComponent` naming `ZrF4`
 
 ### Requirement: Idempotent re-runs across both stores
 Re-running `loader nist` SHALL leave both stores unchanged: catalog triples re-assert as a set-semantics no-op via deterministic IRIs, and SQLite rows upsert on the `locator` primary key. Per-graph triple counts and row counts MUST be identical after a second run.
@@ -66,4 +77,4 @@ On completion the loader SHALL print a summary reporting, per property file, row
 
 #### Scenario: Anchor salts are present
 - **WHEN** the load completes
-- **THEN** the FLiBe MSRE-coolant salt (`LiF-BeF2` ~66-34 mol%) and FLiNaK (`LiF-NaF-KF`) are present among the loaded salts
+- **THEN** the FLiBe MSRE-coolant salt (`BeF2-LiF` 34.0-66.0 mol%) and FLiNaK (`KF-LiF-NaF`) are present among the loaded salts

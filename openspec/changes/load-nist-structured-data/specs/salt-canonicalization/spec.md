@@ -21,22 +21,30 @@ The system SHALL normalize every salt at the ingest boundary to a canonical form
 The loader SHALL mint salt, constituent, and measurement IRIs deterministically from the canonical form, using no blank nodes, and matching the seed A-Box minting scheme: salt `msrd:salt-{formula}-{composition}`, constituent `{salt-iri}-c-{compound}`, measurement `msrd:m-{locator-slug}` (locator with `/ # |` replaced by `-`).
 
 #### Scenario: Salt IRI matches the seed
-- **WHEN** the loader mints the IRI for the FLiBe coolant salt (canonical `BeF2-LiF | 66.0-34.0`)
-- **THEN** the IRI is `msrd:salt-BeF2-LiF-66.0-34.0`, identical to the seed A-Box individual
+- **WHEN** the loader mints the IRI for the FLiBe coolant salt (canonical `BeF2-LiF | 34.0-66.0`)
+- **THEN** the IRI is `msrd:salt-BeF2-LiF-34.0-66.0`, identical to the seed A-Box individual
 
 #### Scenario: Measurement IRI is a slugged locator
-- **WHEN** the loader mints the IRI for the FLiBe density measurement with locator `nist-srd27/density#BeF2-LiF|66.0-34.0`
-- **THEN** the IRI is `msrd:m-nist-srd27-density-BeF2-LiF-66.0-34.0`
+- **WHEN** the loader mints the IRI for the FLiBe density measurement with locator `nist-srd27/density#BeF2-LiF|34.0-66.0`
+- **THEN** the IRI is `msrd:m-nist-srd27-density-BeF2-LiF-34.0-66.0`
 
-### Requirement: Positional-vs-range composition disambiguation
-The loader SHALL disambiguate the `Composition range` column: when the value count equals the component count and the values sum to approximately 100 (within a fixed tolerance), the values are positional single-composition mole fractions; when they instead encode a per-component min–max range, the loader emits `moleFractionMin`/`moleFractionMax`; when neither interpretation holds, the row SHALL be flagged for manual review and skipped rather than silently dropped.
+#### Scenario: Range-composition (isotherm) salt canonicalizes and mints
+- **WHEN** the raw isotherm row `KF-ZrF4, 0.0-33.3 ZrF4` is canonicalized
+- **THEN** the canonical string is `KF-ZrF4 | ZrF4 0.0-33.3`, the salt IRI is `msrd:salt-KF-ZrF4-ZrF4-0.0-33.3`, and the constituents carry `moleFractionMin`/`moleFractionMax` (`ZrF4`: `0.0`/`0.333`; `KF`: `0.667`/`1.0`) instead of a single `moleFraction`
+
+### Requirement: Positional-vs-range composition disambiguation driven by the equation-form code
+The loader SHALL determine how to interpret the `Composition range` column from the row's `Data type` equation-form code, not from the shape of the values: isotherm codes (`I1`–`I4`) always encode a per-component composition range (`X-Y COMPONENT`), emitted as `moleFractionMin`/`moleFractionMax`; every other documented code (`P1`–`P4`, `+E`, `E1`, `E2`, `DP`) always encodes a positional single composition, with values expected to sum to approximately 100 within a **±2.0 mol% tolerance**. A positional row whose values fail that tolerance SHALL be flagged for manual review and skipped rather than silently dropped.
 
 #### Scenario: Positional composition
-- **WHEN** a two-component salt has two composition values summing to ≈100
+- **WHEN** a non-isotherm row has composition values summing to ≈100 within ±2.0 mol% (e.g. `26.04-72.96`, summing to 99.0)
 - **THEN** each value becomes that constituent's `moleFraction`
 
-#### Scenario: Ambiguous composition flagged
-- **WHEN** a composition can be read neither as a positional set summing to ≈100 nor as a per-component range
+#### Scenario: Isotherm composition is always a range
+- **WHEN** a row carries an isotherm `Data type` code (`I1`–`I4`)
+- **THEN** its `Composition range` column is parsed as a per-component min–max range regardless of whether the values would also sum to ≈100
+
+#### Scenario: Out-of-tolerance positional composition flagged
+- **WHEN** a non-isotherm row's composition values sum to more than ±2.0 mol% away from 100
 - **THEN** the row is flagged for manual review, reported in the run summary, and not written to either store
 
 ### Requirement: Shared canonicalization fixture
