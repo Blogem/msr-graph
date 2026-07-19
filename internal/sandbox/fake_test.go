@@ -51,6 +51,12 @@ type fakeRuntime struct {
 
 	calls []callRecord
 
+	// createAttempts counts every Create call that reaches the method,
+	// whether it succeeds or fails, so tests can assert on the number of
+	// retries a failing daemon provokes (e.g. bounded-backoff, 6.x). It is
+	// distinct from len(createdIDs), which only counts successful calls.
+	createAttempts int
+
 	createdIDs        []string
 	createdSpecs      []sandbox.ContainerSpec
 	removedIDs        []string
@@ -100,6 +106,7 @@ func newFakeRuntime() *fakeRuntime {
 
 func (f *fakeRuntime) Create(ctx context.Context, spec sandbox.ContainerSpec) (string, error) {
 	f.mu.Lock()
+	f.createAttempts++
 	err := f.createErr
 	delay := f.createDelay
 	f.mu.Unlock()
@@ -294,3 +301,13 @@ func (f *fakeRuntime) ReapCalls() int {
 func (f *fakeRuntime) CreateCount() int { return len(f.CreatedIDs()) }
 func (f *fakeRuntime) RemoveCount() int { return len(f.RemovedIDs()) }
 func (f *fakeRuntime) ExecCount() int   { return len(f.ExecedIDs()) }
+
+// CreateAttempts reports how many times Create has been called so far,
+// counting both successful and failed calls -- unlike CreateCount, which
+// only counts successes. Used to assert that replenishment retries a
+// failing daemon a bounded number of times rather than busy-spinning.
+func (f *fakeRuntime) CreateAttempts() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.createAttempts
+}
