@@ -299,14 +299,17 @@ def _resolve_components(
 
     When `known_compounds` is None, this is a no-op passthrough --
     preserving the pre-existing (unvalidated) behavior exactly for backward
-    compatibility. When provided, every component must resolve to a known
-    compound: either directly (already-clean, e.g. "BeF2"), or via the
-    comma/period-as-subscript OCR reconstruction (e.g. "BeF," -> "BeF2")
-    when the stripped root uniquely maps to exactly one known compound. Any
-    component that cannot be resolved this way -- including one whose root
-    is unknown, or whose root is ambiguous between multiple known compounds
-    -- means the whole span is unresolved, so this returns None (no
-    partial/guessed salt, design.md D1).
+    compatibility. When provided, a component that does NOT carry the OCR
+    subscript-dropped artifact (i.e. does not end in ',' or '.') is already
+    clean and passes through unchanged, regardless of whether it happens to
+    appear in `known_compounds` -- there is nothing to reconstruct, and
+    validating it further would risk rejecting a correct formula merely
+    because `known_compounds` (built from a noisy known-entity catalog) does
+    not happen to list it. Only a component ending in ',' or '.' requires
+    resolution: strip the trailing punctuation, and the stripped root must
+    map via the skeleton map to exactly one known compound -- otherwise the
+    whole span is unresolved, so this returns None (no partial/guessed salt,
+    design.md D1).
     """
     if known_compounds is None:
         return components
@@ -314,12 +317,10 @@ def _resolve_components(
     skeleton_map = _skeleton_map(known_compounds)
     resolved: list[str] = []
     for token in components:
-        if token in known_compounds:
-            resolved.append(token)
-            continue
         match = _OCR_SUBSCRIPT_TAIL_RE.match(token)
         if not match:
-            return None
+            resolved.append(token)
+            continue
         root = match.group(1)
         candidates = skeleton_map.get(root, ())
         if len(candidates) != 1:

@@ -121,11 +121,7 @@ _COMPOSITION_TAIL = (
     r"\(?\s*\d+(?:\.\d+)?(?:\s*-\s*\d+(?:\.\d+)?)+\s*mol\.?\s{0,4}e?\.?\s{0,4}%\s*\)?"
 )
 # `formula` is a named group covering just the token(s), separate from the
-# optional `tail` (composition group) -- this lets `_has_ocr_subscript_artifact`
-# below check for a comma/period subscript stand-in only in the formula
-# portion, never mistaking punctuation that's actually part of the
-# composition tail itself (e.g. the "mol.%" spelling's own literal period)
-# for a dropped-subscript artifact.
+# optional `tail` (composition group).
 _FORMULA_CANDIDATE_RE = re.compile(
     rf"(?P<formula>{_FORMULA_TOKEN}(?:{_FORMULA_SEP}{_FORMULA_TOKEN})+)"
     rf"(?:\s*(?P<tail>{_COMPOSITION_TAIL}))?"
@@ -134,32 +130,17 @@ _FORMULA_CANDIDATE_RE = re.compile(
 # Known-compound labels (task 3.1): single-token, formula-shaped labels among
 # `known_entities` -- e.g. "LiF", "BeF2" but not "Lithium fluoride" or
 # "LiF-BeF2" (the latter has a separator, so it doesn't fullmatch). Fed to
-# `formula.normalize_salt_span` as `known_compounds` so it can resolve a
-# composed OCR salt span (e.g. "LiF-BeF," + "(66-34 mole %)") even though the
-# comma-for-subscript surface never matches a *canonical* formula string.
-# Over-inclusion is harmless *for a span that actually needs the
-# reconstruction*: `normalize_salt_span`/`canonicalize` and the `known_iris`
-# gate in `link_segment` reject anything that isn't a real loaded salt. It
-# is NOT harmless in general, though -- `known_entities` commonly carries
-# short all-caps acronyms (e.g. "MSRE") that happen to be shaped like a
-# formula token; if such a stray entry ends up in `known_compounds`,
-# `formula._resolve_components`'s all-or-nothing validation would then
-# reject an otherwise-clean, uncorrupted formula (e.g. "LiF-BeF2") merely
-# because "LiF"/"BeF2" themselves were never separately registered. So
-# `known_compounds` is only ever passed to `normalize_salt_span` for a
-# candidate span that itself shows the comma/period subscript artifact (see
-# `_has_ocr_subscript_artifact`) -- an already-clean span always resolves via
-# `known_compounds=None` (plain passthrough), exactly as it did before this
-# parameter existed, regardless of what noise the known-entity catalog's
-# labels happen to contain.
+# `formula.normalize_salt_span` as `known_compounds` on every layer-3
+# candidate span so it can resolve a composed OCR salt span (e.g.
+# "LiF-BeF," + "(66-34 mole %)") even though the comma-for-subscript surface
+# never matches a *canonical* formula string. Over-inclusion is harmless:
+# `formula._resolve_components` only ever validates a component that itself
+# carries the comma/period subscript-dropped artifact against this set --
+# an already-clean component (e.g. "LiF", "BeF2") passes through unchanged
+# regardless of whether `known_compounds` happens to list it, so a stray
+# formula-shaped catalog entry (e.g. "MSRE") can never cause a clean formula
+# to be rejected.
 _KNOWN_COMPOUND_RE = re.compile(rf"(?:{_ELEMENT_UNIT}){{1,4}}")
-
-# A letter immediately followed by a comma/period that is itself followed by
-# a separator, whitespace/paren, or the end of the formula part -- i.e. the
-# subscript-standin artifact from `_FORMULA_TOKEN`'s new optional trailing
-# `[,.]`, not a decimal point or the composition tail's own "mol.%" spelling
-# (both of which only ever occur *after* `formula`, in `tail`).
-_ARTIFACT_TOKEN_RE = re.compile(r"[A-Za-z][,.](?:[-\s(]|$)")
 
 _WORD_RE = re.compile(r"\w+", re.UNICODE)
 
@@ -215,9 +196,10 @@ def _build_known_compounds(known_entities: list[KnownEntity]) -> frozenset[str]:
     once per link run (`link_report`/`link_segment` cache it, never
     recomputing per candidate span). May be empty, and may contain stray
     formula-shaped-but-not-actually-a-compound labels (e.g. "MSRE") -- see
-    `_has_ocr_subscript_artifact` for why that's safe: this set is only ever
-    handed to `normalize_salt_span` for a candidate span that itself shows
-    the comma/period subscript artifact, never for an already-clean span.
+    the module-level comment above `_KNOWN_COMPOUND_RE` for why that's safe:
+    `formula._resolve_components` only validates a component that itself
+    carries the OCR subscript-dropped artifact against this set, so a
+    stray entry can never reject an already-clean component.
     """
     return frozenset(
         label
@@ -225,30 +207,6 @@ def _build_known_compounds(known_entities: list[KnownEntity]) -> frozenset[str]:
         for label in entity.labels
         if _KNOWN_COMPOUND_RE.fullmatch(label)
     )
-
-
-def _formula_part(surface: str) -> str:
-    """The `formula` portion of a `_find_formula_candidates` surface, with
-    any trailing composition-tail group stripped off (or `surface`
-    unchanged if it carries no tail) -- what `_has_ocr_subscript_artifact`
-    scans, so it never mistakes the tail's own punctuation (a decimal
-    point, or the "mol.%" spelling's literal period) for a dropped-subscript
-    artifact."""
-    match = _FORMULA_CANDIDATE_RE.fullmatch(surface)
-    return match.group("formula") if match else surface
-
-
-def _has_ocr_subscript_artifact(surface: str) -> bool:
-    """True iff `surface`'s formula portion (not its composition tail, if
-    any) contains a comma/period standing in for an OCR-dropped subscript
-    digit -- e.g. "BeF," in "LiF-BeF, (66-34 mole %)". Gates whether
-    `known_compounds` is passed to `normalize_salt_span` at all (see the
-    comment above `_KNOWN_COMPOUND_RE`): an already-clean candidate span
-    never needs -- and must never risk -- the known-compound validation,
-    since `known_entities` may carry unrelated formula-shaped noise (e.g.
-    "MSRE") that would otherwise cause `_resolve_components` to reject an
-    otherwise-unambiguous clean formula."""
-    return bool(_ARTIFACT_TOKEN_RE.search(_formula_part(surface)))
 
 
 def fuzzy_link(
@@ -370,14 +328,12 @@ def link_segment(
         start = seg.char_start + local_start
         end = seg.char_start + local_end
         salt_target_iri: str | None = None
-        # Only a candidate span that itself shows the comma/period
-        # subscript artifact gets `known_compounds` at all -- see the
-        # comment above `_KNOWN_COMPOUND_RE`/`_has_ocr_subscript_artifact`
-        # for why an already-clean span must never risk it.
-        span_known_compounds = (
-            known_compounds if _has_ocr_subscript_artifact(surface) else None
-        )
-        curie = formula.normalize_salt_span(surface, known_compounds=span_known_compounds)
+        # `known_compounds` is always passed -- `formula._resolve_components`
+        # itself only validates a component that carries the OCR
+        # subscript-dropped artifact against it; an already-clean component
+        # passes through unchanged regardless (see the comment above
+        # `_KNOWN_COMPOUND_RE`).
+        curie = formula.normalize_salt_span(surface, known_compounds=known_compounds)
         if curie is not None:
             expanded = expand_curie(curie)
             if expanded in known_iris:
