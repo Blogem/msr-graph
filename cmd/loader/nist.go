@@ -141,8 +141,17 @@ func buildInsertData(ms []nist.Measurement) string {
 	seenCompound := make(map[string]bool)
 	seenSalt := make(map[string]bool)
 	seenConstituent := make(map[string]bool)
+	seenMeasurement := make(map[string]bool)
 
 	for _, m := range ms {
+		if seenMeasurement[m.IRI] {
+			// Defensive: a repeated measurement IRI should never occur once
+			// nist.Process disambiguates colliding locators, but never emit
+			// two blocks for the same subject if it somehow does.
+			continue
+		}
+		seenMeasurement[m.IRI] = true
+
 		for _, c := range m.Salt.Constituents {
 			if c.Compound == "" || seenCompound[c.Compound] {
 				continue
@@ -231,10 +240,20 @@ func quoteLiteral(s string) string {
 }
 
 // formatFloat renders v as the shortest decimal that round-trips to the
-// same float64 (e.g. 0.34, 800, 0.333) -- never scientific notation, so
-// values like 800 read as plain "800" rather than "8e+02".
+// same float64 (e.g. 0.34, 800.0, 0.333) -- never scientific notation, so
+// values like 800 read as "800.0" rather than "8e+02". Whole numbers always
+// get an explicit ".0" so the emitted literal parses as xsd:decimal, never
+// xsd:integer: the hand-curated seed (ontology/example-flibe.ttl) writes
+// msr:validTempMin 800.0 and msr:moleFraction 1.0 as decimals, and under
+// RDF set semantics 800 (xsd:integer) is a distinct triple object from 800.0
+// (xsd:decimal) -- without this, re-asserting the FLiBe measurement would
+// add a second validTempMin triple instead of being the intended no-op.
 func formatFloat(v float64) string {
-	return strconv.FormatFloat(v, 'f', -1, 64)
+	s := strconv.FormatFloat(v, 'f', -1, 64)
+	if !strings.ContainsAny(s, ".eE") {
+		s += ".0"
+	}
+	return s
 }
 
 // printNistSummary prints the per-file, distinct-salt, and equation-form

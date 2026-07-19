@@ -6,14 +6,17 @@ import (
 )
 
 // slugify turns a canonical string or locator into the hyphen-only slug used
-// to mint salt and measurement IRIs: ' ', '/', '#', '|', and '=' become '-',
-// repeated hyphens collapse to one, and leading/trailing hyphens are
-// trimmed.
+// to mint salt and measurement IRIs: ' ', '/', '#', '|', '=', and '@' become
+// '-', repeated hyphens collapse to one, and leading/trailing hyphens are
+// trimmed. '@' is included so a disambiguated locator (see
+// disambiguateLocators in process.go, which appends "@<tmin>" to break
+// collisions between multiple measurements for the same property+salt)
+// still slugifies to a valid msrd: CURIE local name.
 func slugify(s string) string {
 	var b strings.Builder
 	for _, r := range s {
 		switch r {
-		case ' ', '/', '#', '|', '=':
+		case ' ', '/', '#', '|', '=', '@':
 			b.WriteByte('-')
 		default:
 			b.WriteRune(r)
