@@ -79,6 +79,31 @@ def _sparql_select(config: Config, query: str) -> list[dict[str, dict[str, str]]
     return response.json()["results"]["bindings"]
 
 
+def _sparql_ask(config: Config, query: str) -> bool:
+    """Run a SPARQL ASK against the configured GraphDB repository.
+
+    Existence checks use ASK rather than ``SELECT (COUNT(*) …)`` over a
+    fully-ground triple pattern: GraphDB returns 0 for a ground
+    ``{ <s> a <o> }`` COUNT even when the triple exists (an ASK of the same
+    pattern correctly returns true), so a COUNT-based presence check yields
+    false negatives. ASK is the correct, unaffected primitive here.
+    """
+    import httpx
+
+    endpoint = f"{config.graphdb_url}/repositories/{config.graphdb_repo}"
+    response = httpx.post(
+        endpoint,
+        data={"query": query},
+        headers={
+            "Content-Type": "application/x-www-form-urlencoded",
+            "Accept": "application/sparql-results+json",
+        },
+        timeout=30.0,
+    )
+    response.raise_for_status()
+    return bool(response.json()["boolean"])
+
+
 def _curated_records(config: Config) -> list[manifest.ManifestRecord]:
     readme_text = config.readme_path.read_text(encoding="utf-8")
     records = manifest.parse_manifest(readme_text)
@@ -113,16 +138,10 @@ def test_document_nodes_present_for_every_curated_report() -> None:
     )
 
     for report in curated.CURATED_REPORTS:
-        ask_bindings = _sparql_select(
+        present = _sparql_ask(
             config,
-            f"""
-            PREFIX msr: <{MSR}>
-            PREFIX msrd: <{MSRD}>
-            SELECT (COUNT(*) AS ?count)
-            WHERE {{ GRAPH <urn:msr:data> {{ msrd:{report} a msr:Document }} }}
-            """,
+            f"ASK {{ GRAPH <urn:msr:data> {{ <{MSRD}{report}> a <{MSR}Document> }} }}",
         )
-        present = int(ask_bindings[0]["count"]["value"]) >= 1
         assert present, f"msrd:{report} a msr:Document not found in urn:msr:data"
 
 
