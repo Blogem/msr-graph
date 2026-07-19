@@ -76,14 +76,14 @@ func countGraphTriples(t *testing.T, client *graph.Client, iri graph.GraphIRI) i
 // TestSeedLoadExposesFlibeMeasurement pins seed-graph-loading spec.md's
 // "Seed data queryable after load" scenario using the concrete FLiBe
 // example from ontology/example-flibe.ttl:
-// msrd:m-nist-srd27-density-BeF2-LiF-66.0-34.0, a msr:PropertyMeasurement
-// with msr:dataLocator "nist-srd27/density#BeF2-LiF|66.0-34.0".
+// msrd:m-nist-srd27-density-BeF2-LiF-34.0-66.0, a msr:PropertyMeasurement
+// with msr:dataLocator "nist-srd27/density#BeF2-LiF|34.0-66.0".
 func TestSeedLoadExposesFlibeMeasurement(t *testing.T) {
 	client := requireGraphDB(t)
 	runLoaderSeed(t, graphDBBaseURL())
 
-	const measurementIRI = "https://w3id.org/msr-kg/data#m-nist-srd27-density-BeF2-LiF-66.0-34.0"
-	const wantLocator = "nist-srd27/density#BeF2-LiF|66.0-34.0"
+	const measurementIRI = "https://w3id.org/msr-kg/data#m-nist-srd27-density-BeF2-LiF-34.0-66.0"
+	const wantLocator = "nist-srd27/density#BeF2-LiF|34.0-66.0"
 
 	query := fmt.Sprintf(`
 		PREFIX msr: <https://w3id.org/msr-kg/ontology#>

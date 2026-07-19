@@ -18,31 +18,11 @@
 msrd:LiF  a msr:ChemicalCompound ; rdfs:label "LiF"  ; skos:closeMatch voc:lithium-fluorides .
 msrd:BeF2 a msr:ChemicalCompound ; rdfs:label "BeF2" ; skos:closeMatch voc:beryllium-fluorides .
 
-# LiF-BeF2 melt, 34 mol% LiF / 66 mol% BeF2 — canonical form: BeF2-LiF | 66.0-34.0
-# (from the verified NIST density row `LiF-BeF2,34.0-66.0,P1,800,1080,,2.413,-4.88E-4`)
-msrd:salt-BeF2-LiF-66.0-34.0 a msr:MoltenSalt ;
-    rdfs:label "BeF2-LiF (66.0-34.0 mol%)" ;
-    msr:hasConstituent msrd:salt-BeF2-LiF-66.0-34.0-c-BeF2 ,
-                       msrd:salt-BeF2-LiF-66.0-34.0-c-LiF ;
-    skos:closeMatch voc:flibe .
-msrd:salt-BeF2-LiF-66.0-34.0-c-BeF2 a msr:Constituent ;
-    msr:ofCompound msrd:BeF2 ; msr:moleFraction 0.66 .
-msrd:salt-BeF2-LiF-66.0-34.0-c-LiF a msr:Constituent ;
-    msr:ofCompound msrd:LiF ; msr:moleFraction 0.34 .
-
-# its density: ρ(T) = 2.413 − 4.88e-4·T (coefficients live in SQLite, not here)
-msrd:m-nist-srd27-density-BeF2-LiF-66.0-34.0 a msr:PropertyMeasurement ;
-    msr:ofSalt msrd:salt-BeF2-LiF-66.0-34.0 ;
-    msr:forProperty msr:density ;
-    msr:hasUnit unit:GM-PER-CentiM3 ;
-    msr:equationForm msr:Linear ;
-    msr:validTempMin 800.0 ; msr:validTempMax 1080.0 ;
-    msr:dataLocator "nist-srd27/density#BeF2-LiF|66.0-34.0" ;
-    prov:wasDerivedFrom msrd:nist-srd27 ;
-    msr:citedIn msrd:ORNL-TM-2316 .
-
-# MSRE and its coolant salt — canonical FLiBe, 66 mol% LiF / 34 mol% BeF2
-# (canonical form: BeF2-LiF | 34.0-66.0; exact NIST row confirmed on parse)
+# MSRE and its coolant salt — canonical FLiBe, 34 mol% BeF2 / 66 mol% LiF
+# canonical form BeF2-LiF | 34.0-66.0, from the verified NIST density row:
+#   BeF2-LiF,34.0-66.0,P1,800,1080,,2.413,-4.88E-4
+# The chunk-2 loader re-asserts this exact salt + measurement as a set-semantics no-op;
+# the hasRole/usedIn/citedIn edges are hand-curated facts the loader cannot derive from NIST.
 msrd:MSRE a msr:MoltenSaltReactor ; rdfs:label "MSRE" ; skos:closeMatch voc:msre-reactor .
 msrd:salt-BeF2-LiF-34.0-66.0 a msr:MoltenSalt ;
     rdfs:label "BeF2-LiF (34.0-66.0 mol%)" ;
@@ -55,6 +35,17 @@ msrd:salt-BeF2-LiF-34.0-66.0-c-BeF2 a msr:Constituent ;
     msr:ofCompound msrd:BeF2 ; msr:moleFraction 0.34 .
 msrd:salt-BeF2-LiF-34.0-66.0-c-LiF a msr:Constituent ;
     msr:ofCompound msrd:LiF ; msr:moleFraction 0.66 .
+
+# its density: ρ(T) = 2.413 − 4.88e-4·T  (coefficients live in SQLite, not here)
+msrd:m-nist-srd27-density-BeF2-LiF-34.0-66.0 a msr:PropertyMeasurement ;
+    msr:ofSalt msrd:salt-BeF2-LiF-34.0-66.0 ;
+    msr:forProperty msr:density ;
+    msr:hasUnit unit:GM-PER-CentiM3 ;
+    msr:equationForm msr:Linear ;
+    msr:validTempMin 800.0 ; msr:validTempMax 1080.0 ;
+    msr:dataLocator "nist-srd27/density#BeF2-LiF|34.0-66.0" ;
+    prov:wasDerivedFrom msrd:nist-srd27 ;
+    msr:citedIn msrd:ORNL-TM-2316 .
 
 # provenance
 msrd:nist-srd27   a msr:Dataset  ; rdfs:label "NIST Molten Salts DB (SRD 27)" ; dcterms:identifier "doi:10.18434/mds2-2298" .
