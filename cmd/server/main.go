@@ -26,8 +26,11 @@ func main() {
 
 	// The measurement store is opened read-only: the chat request path must
 	// never write SQLite (spec "Stateless POST /api/chat endpoint"). The
-	// SELECT-only guard in internal/agent's sql_query tool is the
-	// guaranteed safety net regardless of how the connection behaves.
+	// SELECT-only guard in internal/agent's sql_query tool rejects any
+	// statement that isn't a single read-only SELECT before it reaches this
+	// connection; this mode=ro open is the defense-in-depth compensating
+	// control on the main database, not a substitute for the guard (e.g. it
+	// does not stop ATTACH from opening a separate, writable database file).
 	db, err := sql.Open("sqlite", "file:"+cfg.dbPath+"?mode=ro&_pragma=busy_timeout(5000)")
 	if err != nil {
 		log.Fatalf("server: open read-only measurement store %s: %v", cfg.dbPath, err)

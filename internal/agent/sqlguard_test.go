@@ -38,6 +38,18 @@ func TestGuardSelectOnly(t *testing.T) {
 			name:  "select star from t with write fully inside a block comment",
 			query: "SELECT * FROM t /* ; DROP TABLE t */",
 		},
+		{
+			name:  "keyword INSERT inside a string literal",
+			query: "SELECT * FROM measurement_value WHERE source = 'insert-derived'",
+		},
+		{
+			name:  "semicolon inside a string literal",
+			query: "SELECT c0 FROM measurement_value WHERE locator = 'a;b'",
+		},
+		{
+			name:  "comment tokens inside a string literal",
+			query: "SELECT c0 FROM t WHERE note = 'has -- dashes and /* comment */ text'",
+		},
 
 		// --- REJECT: writes ---
 		{
@@ -101,6 +113,43 @@ func TestGuardSelectOnly(t *testing.T) {
 		{
 			name:    "block comment splitting select, then a drop statement",
 			query:   "SELECT/**/1;DROP TABLE t",
+			wantErr: true,
+		},
+
+		// --- REJECT: block-comment-across-string-literals bypass (HIGH-severity repro) ---
+		{
+			name:    "block comment delimiters smuggled across separate string literals to drop a table",
+			query:   "SELECT '/*' ; DROP TABLE measurement_value ; SELECT '*/'",
+			wantErr: true,
+		},
+		{
+			name:    "block comment delimiters smuggled across separate string literals to attach and create a file",
+			query:   "SELECT '/*' ; ATTACH DATABASE '/tmp/evil.db' AS e ; CREATE TABLE e.pwned(x) ; SELECT '*/'",
+			wantErr: true,
+		},
+		{
+			name:    "stacked statement after a quoted identifier",
+			query:   `SELECT "a" ; DROP TABLE t`,
+			wantErr: true,
+		},
+		{
+			name:    "unterminated string literal",
+			query:   "SELECT 'abc",
+			wantErr: true,
+		},
+		{
+			name:    "unterminated block comment",
+			query:   "SELECT 1 /* unterminated block comment",
+			wantErr: true,
+		},
+		{
+			name:    "single attach statement",
+			query:   "ATTACH DATABASE '/tmp/x.db' AS e",
+			wantErr: true,
+		},
+		{
+			name:    "load_extension call",
+			query:   "SELECT load_extension('x')",
 			wantErr: true,
 		},
 
