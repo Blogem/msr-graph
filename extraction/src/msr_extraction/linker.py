@@ -27,9 +27,18 @@ pre-pass over ``normalized.txt``; this module owns layers 2-5:
    :func:`msr_extraction.disambiguation.disambiguate`); no disambiguator
    (or a "novel"/rejected result) records the span as ``novel``.
 
-Layers 2-5 never emit an overlapping duplicate for a span an earlier layer
-already resolved -- see :func:`link_segment`'s ``_is_free`` helper (design.md
-D2: "the resolving layer is recorded per span").
+Overlap precedence is mostly "already resolved wins, never re-emit a
+duplicate" (see :func:`link_segment`'s ``_is_free`` helper; design.md D2:
+"the resolving layer is recorded per span") -- with one deliberate
+exception: a **successful** layer-3 composed-salt match supersedes an
+overlapping layer-2 exact match (never the reverse, and never a *bare*,
+unresolved formula candidate), since a vocab concept's altLabel set
+commonly includes the bare chemical formula itself (e.g. `voc:flibe`'s
+`"LiF-BeF2"` altLabel) -- without this exception a composed mention like
+`"LiF-BeF2 (66-34 mol%)"` would resolve to the concept via its exact-match
+sub-span rather than the loaded salt individual, contradicting design.md
+D3's "a mention carrying a composition resolves to the specific
+`msrd:salt-...` individual."
 
 Only stdlib + the pure ``msr_extraction.formula`` module (itself stdlib-only)
 are imported at module level; ``rapidfuzz`` is deferred into
@@ -217,10 +226,25 @@ def link_segment(
 
     Offsets on the returned records are absolute (``seg.char_start`` plus
     the local match offset), matching chunk 5's `segments.jsonl` offset
-    convention. Results are de-duplicated so a span already resolved by an
-    earlier (lower-numbered) layer is never re-emitted by a later layer
-    that happens to overlap it, and are returned sorted by
-    ``(char_start, char_end)``.
+    convention. Results are returned sorted by ``(char_start, char_end)``.
+
+    Overlap precedence is *not* simply "earliest layer wins": a
+    **successful layer-3 composed-salt match** (the formula normalizer
+    produced a CURIE that expands into `known_iris`) is structurally more
+    specific than a layer-2 exact match it overlaps, and supersedes it --
+    dropping the overlapped layer-2 record in favor of the salt individual
+    (design.md D3's "Salt mention resolves to the loaded individual"
+    scenario: e.g. the vocab's `voc:flibe` concept commonly carries a bare
+    `"LiF-BeF2"` altLabel, so layer 2 alone would otherwise resolve a
+    *composed* `"LiF-BeF2 (66-34 mol%)"` mention to the concept, never the
+    individual, since its exact-match sub-span is found first). A *bare*
+    formula mention (layer 3 finds no composition, so `normalize_salt_span`
+    returns `None`) does **not** supersede anything -- the layer-2 concept
+    match stands, preserving D3's bare-formula-to-concept rule.
+
+    Every other overlap (layer 4/5 candidates against anything already
+    resolved, including the layer-3 salt spans themselves) keeps the
+    simple "already resolved wins, never re-emit a duplicate" rule.
 
     ``prompt_prefix`` is accepted for interface symmetry with the layer-5
     Flash call (built once per run via `KGSchemaPromptCache` and threaded
@@ -233,10 +257,34 @@ def link_segment(
     def _is_free(start: int, end: int) -> bool:
         return not any(_overlaps(start, end, r.char_start, r.char_end) for r in resolved)
 
-    # Layer 2: expanded exact matching (already seeded by the caller).
+    # Formula-shaped candidate spans, evaluated once up front so layer 3's
+    # successful salt resolutions are known *before* layer 2 is applied --
+    # this is what lets a composed match supersede an overlapping exact
+    # match rather than merely losing an "earliest layer wins" tie.
+    candidates: list[tuple[int, int, str, str | None]] = []
+    for local_start, local_end, surface in _find_formula_candidates(seg.text):
+        start = seg.char_start + local_start
+        end = seg.char_start + local_end
+        salt_target_iri: str | None = None
+        curie = formula.normalize_salt_span(surface)
+        if curie is not None:
+            expanded = expand_curie(curie)
+            if expanded in known_iris:
+                salt_target_iri = expanded
+        candidates.append((start, end, surface, salt_target_iri))
+
+    salt_spans = [(start, end) for start, end, _surface, salt_iri in candidates if salt_iri is not None]
+
+    def _overlaps_a_salt_span(start: int, end: int) -> bool:
+        return any(_overlaps(start, end, s_start, s_end) for s_start, s_end in salt_spans)
+
+    # Layer 2: expanded exact matching (already seeded by the caller) --
+    # skipping any span a successful layer-3 salt match overlaps.
     for m in matcher.match(seg.text):
         start = seg.char_start + m.start
         end = seg.char_start + m.end
+        if _overlaps_a_salt_span(start, end):
+            continue
         if not _is_free(start, end):
             continue
         resolved.append(
@@ -254,37 +302,36 @@ def link_segment(
             )
         )
 
-    # Candidate spans for layers 3-5: formula-shaped substrings of the raw
-    # segment text, independent of whatever layer 2 already recognized.
+    # Layer 3: emit the successful composed-salt matches.
+    for start, end, surface, salt_iri in candidates:
+        if salt_iri is None:
+            continue
+        if not _is_free(start, end):
+            continue
+        resolved.append(
+            MentionRecord(
+                report=seg.report,
+                seg_index=seg.index,
+                char_start=start,
+                char_end=end,
+                surface_form=surface,
+                status="linked",
+                target_iri=salt_iri,
+                target_kind="salt",
+                layer=LAYER_FORMULA,
+                score=None,
+            )
+        )
+
+    # Layers 4-5: whatever candidate spans are still unresolved (bare
+    # formulas the formula normalizer couldn't compose, or composed
+    # candidates whose canonical IRI isn't in this run's known-IRI set).
     known_labels = _known_labels(known_entities)
     kind_by_iri = {entity.target_iri: entity.kind for entity in known_entities}
 
-    for local_start, local_end, surface in _find_formula_candidates(seg.text):
-        start = seg.char_start + local_start
-        end = seg.char_start + local_end
+    for start, end, surface, _salt_iri in candidates:
         if not _is_free(start, end):
             continue
-
-        # Layer 3: chemical-formula normalizer -- structural, never fuzzy.
-        curie = formula.normalize_salt_span(surface)
-        if curie is not None:
-            target_iri = expand_curie(curie)
-            if target_iri in known_iris:
-                resolved.append(
-                    MentionRecord(
-                        report=seg.report,
-                        seg_index=seg.index,
-                        char_start=start,
-                        char_end=end,
-                        surface_form=surface,
-                        status="linked",
-                        target_iri=target_iri,
-                        target_kind="salt",
-                        layer=LAYER_FORMULA,
-                        score=None,
-                    )
-                )
-                continue
 
         # Layer 4: bounded rapidfuzz fallback.
         fuzzy_result = fuzzy_link(

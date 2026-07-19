@@ -40,6 +40,9 @@ _MENTIONS_JSONL_KEYS = {
 }
 
 
+FLIBE_CONCEPT_IRI = "https://w3id.org/msr-kg/vocab#flibe"
+
+
 def _known_entities() -> list[KnownEntity]:
     return [
         KnownEntity(target_iri=VISCOSITY_IRI, labels=("viscosity",), kind="concept"),
@@ -49,10 +52,25 @@ def _known_entities() -> list[KnownEntity]:
             kind="concept",
         ),
         # Deliberately NOT registering a bare "LiF-BeF2"/"BeF2-LiF" exact
-        # label here: the composed-mention fixtures below rely on layer 3
-        # (the formula normalizer) resolving those spans, and a bare-label
-        # exact match would otherwise shadow a shorter, overlapping formula
-        # candidate (layer 2 wins overlap ties -- see link_segment).
+        # label on any concept here: these fixtures only need layer 3 (the
+        # formula normalizer) to resolve the composed-mention spans, without
+        # also exercising the salt-supersedes-concept overlap precedence --
+        # that precedence (a real requirement: the actual vocab registers
+        # `voc:flibe` with altLabel "LiF-BeF2") is covered on its own below
+        # by TestComposedSaltSupersedesOverlappingConcept.
+        KnownEntity(target_iri=SALT_IRI, labels=("BeF2-LiF (34.0-66.0 mol%)",), kind="salt"),
+    ]
+
+
+def _known_entities_with_flibe_altlabel() -> list[KnownEntity]:
+    """Mirrors the real seed data: `voc:flibe` carries the bare formula
+    "LiF-BeF2" as a `skos:altLabel`, alongside the loaded salt individual."""
+    return [
+        KnownEntity(
+            target_iri=FLIBE_CONCEPT_IRI,
+            labels=("FLiBe", "LiF-BeF2"),
+            kind="concept",
+        ),
         KnownEntity(target_iri=SALT_IRI, labels=("BeF2-LiF (34.0-66.0 mol%)",), kind="salt"),
     ]
 
@@ -61,14 +79,17 @@ def _segment(report: str, text: str, *, index: int = 0) -> Segment:
     return Segment(report=report, index=index, text=text, char_start=0, char_end=len(text))
 
 
-def _link(text: str, *, disambiguator=None) -> list[MentionRecord]:
-    known = _known_entities()
+def _link_with(known: list[KnownEntity], text: str, *, disambiguator=None) -> list[MentionRecord]:
     known_iris = {e.target_iri for e in known}
     matcher = build_matcher(known)
     seg = _segment("ORNL-TM-2316", text)
     return link_segment(
         seg, matcher, known, known_iris, Config(), disambiguator=disambiguator
     )
+
+
+def _link(text: str, *, disambiguator=None) -> list[MentionRecord]:
+    return _link_with(_known_entities(), text, disambiguator=disambiguator)
 
 
 class TestAnchorSpans:
@@ -111,6 +132,44 @@ class TestOrderUnification:
         assert salt_a.target_iri == SALT_IRI
         assert salt_b.target_iri == SALT_IRI
         assert salt_a.target_iri == salt_b.target_iri
+
+
+class TestComposedSaltSupersedesOverlappingConcept:
+    """Pins design.md D3's "Salt mention resolves to the loaded individual"
+    scenario against a realistic overlap: `voc:flibe` carries a bare
+    "LiF-BeF2" altLabel (as the real seed vocab does), so layer 2's exact
+    matcher finds that sub-span inside a *composed* mention too. Layer 3's
+    successful, more-specific salt match must supersede it -- while a truly
+    bare mention (no composition anywhere) still resolves to the concept.
+    """
+
+    def test_composed_mention_resolves_to_the_salt_individual_not_the_concept(self) -> None:
+        known = _known_entities_with_flibe_altlabel()
+        records = _link_with(
+            known, "The LiF-BeF2 (66-34 mol%) coolant was circulated through the primary loop."
+        )
+
+        salt = next(r for r in records if r.target_iri == SALT_IRI)
+        assert salt.status == "linked"
+        assert salt.target_kind == "salt"
+        assert salt.layer == 3
+
+        # The concept must not also appear linked for the superseded span.
+        assert not any(r.target_iri == FLIBE_CONCEPT_IRI for r in records)
+
+    def test_bare_mention_with_no_composition_still_resolves_to_the_concept(self) -> None:
+        known = _known_entities_with_flibe_altlabel()
+        records = _link_with(known, "FLiBe (i.e. LiF-BeF2) was used as the primary coolant.")
+
+        concept_matches = [r for r in records if r.target_iri == FLIBE_CONCEPT_IRI]
+        assert len(concept_matches) >= 1
+        for match in concept_matches:
+            assert match.status == "linked"
+            assert match.target_kind == "concept"
+            assert match.layer == 2
+
+        # No salt individual should appear -- there is no composition anywhere.
+        assert not any(r.target_iri == SALT_IRI for r in records)
 
 
 class TestBoundedFuzzyFallback:
