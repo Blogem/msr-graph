@@ -5,6 +5,15 @@ Feed them to OpenSpec one at a time; they're ordered by dependency. Each lists a
 scope, dependencies, and concrete acceptance criteria (the seed for the change's test
 section). Grounded in `docs/ARCHITECTURE.md`.
 
+> **Re-sequencing (trust foundation).** A new phase **P3.5 — Trust Foundation** = chunks
+> **12 `provenance-model` + 13 `shacl-validation`** is inserted **between P3 and P4** and
+> **gates P4**: provenance and SHACL validation land *before* the pipelines that
+> mass-produce facts (7, 8), so those facts are born provenance-complete and validation-clean
+> rather than retrofitted. Both operate on real data we already hold. The higher numbers are
+> just draft order; the **Phases** table below is authoritative. Rationale and model:
+> `docs/PROVENANCE_AND_TRUST_DESIGN.md`. (The safety / requirements / regulatory-traceability
+> ambition is **not** a bespoke schema — it is the real **IAEA** ingest, chunk 11.)
+
 ## Summary
 
 | # | Change (suggested id) | Track | Tech | Depends on | Phase |
@@ -20,6 +29,11 @@ section). Grounded in `docs/ARCHITECTURE.md`.
 | 9 | `apply-ontology-changes` | evolution | Go | 1, 8 | P5 |
 | 10 | `web-frontend` | UI | SvelteKit | 4, 9 | P6 |
 | 11 | `ingest-iaea-safety` *(stretch)* | unstructured | Python | 6–10 | — |
+| 12 | `provenance-model` | trust | Go, Python, RDF/PROV-O | 2, 4 | **P3.5** |
+| 13 | `shacl-validation` | trust | GraphDB SHACL, Go | 1, 12 | **P3.5** |
+
+> Chunks **12–13** (Phase **P3.5**) execute **between P3 and P4** despite their numbers — see
+> the re-sequencing note above and `docs/PROVENANCE_AND_TRUST_DESIGN.md`.
 
 **Two tracks** run after the foundation: a **structured** track (2 · 3 → 4) that lands the
 grounded-analysis demo early (chat API with full trace, before any UI), and an
@@ -28,9 +42,11 @@ single frontend. The analysis agent (4) is schema-generic, so it automatically b
 from data added by 7 and 9 with **no rework**. Chunk 6 depends on 2 on purpose: the salt
 catalog loads **before** NER so mentions link to existing salt individuals.
 
-**Milestones:** one per phase (M1–M6, defined under *Phases* below); the headline ones are
-**M3** (chunk 4 — grounded-analysis demo works, traced, via API) and **M6** (chunk 10 —
-both demos in the web app, incl. checkpoint/reset re-runs).
+**Milestones:** one per phase (M1–M6, plus **M3.5** for the inserted trust foundation,
+defined under *Phases* below); the headline ones are **M3** (chunk 4 — grounded-analysis
+demo works, traced, via API), **M3.5** (provenance everywhere, SHACL-enforced) and **M6**
+(chunk 10 — both demos in the web app, incl. checkpoint/reset re-runs). **P4 does not start
+until M3.5 is met.**
 
 ## Phases — parallel execution & milestones
 
@@ -45,7 +61,8 @@ chunk 1) — keep changes to those additive and rebase frequently.
 | **P1** | 1 `bootstrap-graph-infra` | **M1 — stores live.** GraphDB + SQLite up via `make up`; seed ontology/vocab/A-Box loaded and queryable through the core-dataset client; staging exclusion pinned by test. |
 | **P2** | 2 `load-nist-structured-data` · 3 `sandbox-exec-pool` · 5 `ingest-archive-documents` | **M2 — data landed, execution ready.** NIST fluoride subset in SQLite + catalog triples in the graph; curated corpus normalized/segmented with the evolution-demo targets verified present; sandbox pool runs scripts against the read-only DB with isolation properties tested. |
 | **P3** | 4 `grounded-analysis-agent` · 6 `ner-entity-linking` | **M3 — demo #1: grounded analysis.** The agent answers the density question over the chat API with a full SSE trace, all computation in sandbox scripts; text mentions linked to vocab concepts and the loaded salt individuals at ≥ 0.90 precision. |
-| **P4** | 7 `extract-property-relations` · 8 `mine-ontology-candidates` | **M4 — knowledge grows from text.** Text-derived measurements answerable by the *unchanged* agent; `solubility` + `graphite` proposals sit in staging with evidence, invisible to the core dataset. |
+| **P3.5** | 12 `provenance-model` · 13 `shacl-validation` | **M3.5 — trust foundation.** Every asserted fact carries resolvable provenance, **enforced by SHACL at commit** (violations rejected); the agent stamps every answer grounded-vs-ungrounded and returns the provenance chain of the facts it used. Both run on real data already held. Sequenced: 12 → 13. **Gates P4.** See `docs/PROVENANCE_AND_TRUST_DESIGN.md`. |
+| **P4** | 7 `extract-property-relations` · 8 `mine-ontology-candidates` | **M4 — knowledge grows from text.** Text-derived measurements answerable by the *unchanged* agent, **born provenance-complete and SHACL-valid**; `solubility` + `graphite` proposals carry evidence + provenance. |
 | **P5** | 9 `apply-ontology-changes` | **M5 — evolution loop closed (API-level).** Approve routes proposal bundles into core (the agent now answers solubility questions); reject/edit work; checkpoint → approve → restore reverts everything and the approval can be re-run. |
 | **P6** | 10 `web-frontend` | **M6 — demo #2: the full POC.** One web app serving chat + trace timeline, review with rendered ontology diff, and admin checkpoint/reset; both demos re-runnable end-to-end from a pre-demo checkpoint. |
 | *stretch* | 11 `ingest-iaea-safety` | Safety branch grown via the same loop (post-M6). |
@@ -83,6 +100,16 @@ Fixed here so each OpenSpec change references them instead of re-deciding. Detai
   `urn:msr:vocab`; staging = `urn:msr:staging` + `urn:msr:proposal/{id}`. GraphDB queries
   with no dataset clause see **all** graphs — every core read goes through the shared
   `internal/graph` client, which injects the three `FROM` clauses.
+- **Provenance & validation** *(established by P3.5; binds every chunk that writes facts or
+  emits answers)* — **no asserted fact enters the core dataset, and no answer leaves the
+  agent, without a resolvable link to its source.** Fact-bearing individuals carry required
+  PROV-O edges (`prov:wasDerivedFrom` a `Dataset`/`Document`; `prov:wasGeneratedBy` an
+  `Activity` with agent + version + time); measurements keep `dataLocator` + `citedIn`.
+  Enforcement is declarative: **SHACL shapes validated by GraphDB on commit reject
+  un-provenanced or malformed triples** (chunk 13). The agent stamps each answer
+  grounded-vs-ungrounded and returns the provenance chain of the facts it used; `run_python`
+  provenance references the locators the script read. This is a *requirement checked by
+  machinery*, not a convention. Full model: `docs/PROVENANCE_AND_TRUST_DESIGN.md`.
 - **SQLite — one shared table** for NIST and text-derived values:
 
   ```sql
@@ -225,8 +252,32 @@ Fixed here so each OpenSpec change references them instead of re-deciding. Detai
 - **Test seed:** vitest component tests — trace timeline (each event type renders; script + provenance visible) against a mocked SSE stream; diff render (added nodes/edges highlighted); queue/detail and admin flows against a mocked API.
 
 ## 11 — `ingest-iaea-safety`  *(stretch)*
-- **Goal:** Add the IAEA PUB2027 MSR-safety sections as a second NER genre → a `Safety` ontology branch via the same evolution loop.
-- **Depends on:** 6–10 (reuses the whole pipeline). Deferred per `DATA_SCOPE.md`.
+- **Goal:** Add the IAEA PUB2027 MSR-safety sections as a second NER genre → a `Safety` ontology branch (`SafetyFunction`, `Confinement`, `DefenceInDepth`, `DesignBasis`, `Requirement`) via the same evolution loop. **This is the real home of the safety / requirements / regulatory-traceability ambition** — grown from real IAEA text, not a hand-authored schema. It inherits the P3.5 provenance + SHACL contract for free.
+- **Depends on:** 6–10 (reuses the whole pipeline). Deferred per `DATA_SCOPE.md`. IAEA usage restrictions (attribution, no substantial verbatim redistribution) are acceptable for this non-commercial hobby POC.
+
+---
+
+## Phase P3.5 — Trust Foundation (chunks 12 + 13)
+
+Inserted between P3 and P4; **gates P4**. Full model and rationale in
+`docs/PROVENANCE_AND_TRUST_DESIGN.md`. Sequenced **12 → 13**. Both run on real data already
+held.
+
+## 12 — `provenance-model`  *(trust)*
+- **Goal:** Make provenance a first-class, **required** property of every fact and every answer — the cross-cutting invariant that is currently only convention.
+- **Scope:** a PROV-O slice in the ontology (`prov:Entity`/`Activity`/`Agent`); **complete + required** provenance on all fact-bearing individuals (`prov:wasDerivedFrom` a `Dataset`/`Document`, `prov:wasGeneratedBy` an `Activity` with agent + `owl:versionInfo` + timestamp); per-source/run named graphs (`urn:msr:src:*`, `urn:msr:run:*`) each with an `Activity` record (coarse audit dimension). **Retrofit** the NIST loader to emit `citedIn` and a self-contained dataset node with DOI (not load-order-dependent) and the seed likewise. **Answer-time enforcement** in the agent: stamp every answer grounded-vs-ungrounded and return the provenance chain of the facts used — gated in `loop.go`, surfaced as a first-class SSE event, so a bare number can't reach the user unmarked. **Compute-time:** `run_python` provenance references the `dataLocator`(s) the script read.
+- **Interfaces:** extends `internal/graph` writes, `cmd/loader`, `internal/agent` (loop, events, tools) and the extraction writers; **defines the provenance vocabulary** chunks 13, 14, 7 and 8 conform to.
+- **Depends on:** 2 (loader), 4 (agent).
+- **Acceptance:** every `PropertyMeasurement`/`Mention` has `wasDerivedFrom` + a source; NIST rows carry `citedIn` + DOI regardless of load order; the agent flags an ungrounded answer as such and will not present a numeric result without a provenance chain; a `run_python` result references its source locator(s).
+- **Test seed:** Go tests that loader output includes `citedIn`/DOI for every row; an agent-loop test that an answer with no provenance event is stamped ungrounded; event-schema test for the grounded/ungrounded + provenance-chain events; extraction pytest that written mentions carry `Activity` provenance.
+
+## 13 — `shacl-validation`  *(trust)*
+- **Goal:** Turn the provenance and schema invariants into **declarative gates the database enforces on write** — the missing validation layer.
+- **Scope:** enable GraphDB's native SHACL (`ShaclSail`) on the `msr` repo — a bootstrap change to `scripts/ensure-repo.sh` / repo config (verify the exact 11.4.2 config surface). Author the shape catalogue: **provenance invariants** (measurements/mentions/thread-nodes require `wasDerivedFrom` + source; measurements require `dataLocator` + `citedIn` + `forProperty`/`ofSalt`/`hasUnit`/`equationForm`) and **data-quality invariants** (unit ∈ QUDT allowlist; valid-range present and `validTempMin ≤ validTempMax`; `linksTo` target-kind). Load shapes into the reserved shapes graph; wire validation into the loader/extraction write path; choose a bulk-load strategy (incremental vs load-then-validate); surface validation reports legibly.
+- **Interfaces:** repo config (`ensure-repo.sh`, `docker-compose.yml`) + the `internal/graph` write path; consumes the provenance vocabulary from 12.
+- **Depends on:** 1 (bootstrap/repo), 12 (shapes encode the model).
+- **Acceptance:** a write of a measurement/mention missing required provenance is **rejected on commit with a report**; a measurement with a non-allowlist unit or inverted temp-range is rejected; valid data loads unchanged; `ensure-repo.sh` idempotently creates a SHACL-enabled repo.
+- **Test seed:** opt-in GraphDB-required integration tests asserting rejection of malformed/un-provenanced triples and acceptance of valid ones; a shapes-graph load test; `ensure-repo` idempotency.
 
 ---
 
