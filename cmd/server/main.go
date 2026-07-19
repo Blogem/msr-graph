@@ -28,10 +28,16 @@ func main() {
 	// never write SQLite (spec "Stateless POST /api/chat endpoint"). The
 	// SELECT-only guard in internal/agent's sql_query tool rejects any
 	// statement that isn't a single read-only SELECT before it reaches this
-	// connection; this mode=ro open is the defense-in-depth compensating
-	// control on the main database, not a substitute for the guard (e.g. it
-	// does not stop ATTACH from opening a separate, writable database file).
-	db, err := sql.Open("sqlite", "file:"+cfg.dbPath+"?mode=ro&_pragma=busy_timeout(5000)")
+	// connection; this mode=ro open (plus query_only, below) is the
+	// defense-in-depth compensating control on the connection, not a
+	// substitute for the guard. mode=ro alone still lets ATTACH open a
+	// separate, writable database file and write to it (SQLite's read-only
+	// open only protects the file named in the DSN); the query_only pragma
+	// additionally puts the whole connection into read-only mode, which
+	// SQLite documents as rejecting writes to attached databases too, so a
+	// query that slipped past the guard still can't write anywhere via this
+	// connection.
+	db, err := sql.Open("sqlite", readOnlyMeasurementStoreDSN(cfg.dbPath))
 	if err != nil {
 		log.Fatalf("server: open read-only measurement store %s: %v", cfg.dbPath, err)
 	}
@@ -75,4 +81,14 @@ func main() {
 	if err := http.ListenAndServe(cfg.addr, mux); err != nil {
 		log.Fatal(err)
 	}
+}
+
+// readOnlyMeasurementStoreDSN builds the modernc.org/sqlite DSN used to open
+// the measurement store for the chat request path. See the comment at its
+// call site in main for why both mode=ro and query_only are needed: mode=ro
+// alone does not stop a query from ATTACHing a separate, writable database
+// file and writing to it, but query_only puts the whole connection (all
+// attached databases included) into read-only mode.
+func readOnlyMeasurementStoreDSN(dbPath string) string {
+	return "file:" + dbPath + "?mode=ro&_pragma=busy_timeout(5000)&_pragma=query_only(true)"
 }
