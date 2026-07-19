@@ -10,17 +10,21 @@ Pins two things about ``msr_extraction.graph_reader.GraphReader``:
    never reach ``read_known_entities()``/``known_iris()`` -- not because
    the reader filters it out after the fact, but because the reader never
    asks the store about that graph in the first place. The fake
-   ``select_fn`` below documents this: it asserts the params it receives
-   are always core-graph-only, then returns rows for exactly what a
-   correctly-scoped SELECT would see (the approved concept only).
+   ``select_fn`` below documents this: ``read_known_entities()`` issues
+   four separate SELECTs (SKOS concepts, ontology classes, physical
+   properties, molten salts); the fake dispatches on a query substring and
+   returns bindings for the approved concept only on the SKOS-concept
+   SELECT, and an empty result for every other SELECT -- exactly what a
+   correctly core-scoped store would produce, since the staging-only
+   concept was never in scope to begin with.
 """
 
 from __future__ import annotations
 
 from msr_extraction.graph_reader import CORE_GRAPHS, GraphReader
 
-APPROVED_IRI = "voc:approved"
-STAGING_ONLY_IRI = "voc:staging-only"
+APPROVED_IRI = "https://w3id.org/msr-kg/vocab#approved"
+STAGING_ONLY_IRI = "https://w3id.org/msr-kg/vocab#staging-only"
 
 QUERY_ENDPOINT = "http://x/repositories/msr"
 
@@ -59,25 +63,29 @@ class TestBuildQueryParams:
             assert "urn:msr:proposal" not in value
 
 
-def _fake_select_fn_core_dataset_only(query_endpoint: str, params: list[tuple[str, str]]):
+def _binding(iri: str, label: str) -> dict[str, dict[str, str]]:
+    return {
+        "c": {"value": iri, "type": "uri"},
+        "label": {"value": label, "type": "literal"},
+    }
+
+
+def _fake_select_fn_core_dataset_only(query: str) -> list[dict[str, dict[str, str]]]:
     """Stand-in for the real SPARQL SELECT transport.
 
-    Documents the core-dataset contract at the boundary: asserts the
-    reader always hands it a core-graph-only dataset, then returns rows
-    for exactly what a store scoped that way would produce. A
-    staging-only concept is absent from this return value on purpose --
-    it is never queried, not filtered post-hoc.
+    ``read_known_entities()`` issues four separate SELECTs, distinguishable
+    by a substring in the query text (see ``graph_reader.py``'s
+    ``_SKOS_CONCEPTS_QUERY`` / ``_ONTOLOGY_CLASSES_QUERY`` /
+    ``_PHYSICAL_PROPERTIES_QUERY`` / ``_MOLTEN_SALTS_QUERY``). Only the
+    SKOS-concept SELECT yields a row here (the approved concept); every
+    other SELECT returns empty. A staging-only concept is absent from this
+    fake's data on purpose -- a real store restricted to CORE_GRAPHS (via
+    build_query_params) would never surface it, since urn:msr:staging is
+    never part of the dataset asked for.
     """
-    assert query_endpoint == QUERY_ENDPOINT
-
-    graph_values = {value for key, value in params if key == "default-graph-uri"}
-    assert graph_values == set(CORE_GRAPHS)
-    assert "urn:msr:staging" not in graph_values
-    assert "urn:msr:proposal" not in graph_values
-
-    return [
-        {"target_iri": APPROVED_IRI, "label": "Approved Concept", "kind": "concept"},
-    ]
+    if "skos:Concept" in query:
+        return [_binding(APPROVED_IRI, "Approved Concept")]
+    return []
 
 
 class TestReadKnownEntitiesCoreDatasetGuard:
