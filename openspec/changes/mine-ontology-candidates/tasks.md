@@ -1,0 +1,58 @@
+# Tasks: mine-ontology-candidates
+
+## 1. Extraction project setup
+
+- [ ] 1.1 Add novelty-mining modules under `extraction/src/msr_extraction/`: lexical term-candidate pass, chunk-6 miss reader, document-frequency scorer, triage classifier, proposal builder + QUDT-allowlist validator, staging/proposal-graph writer, instance auto-accept writer, and a `mine` CLI subcommand (extending chunk 6's `cli.py` dispatcher)
+- [ ] 1.2 Extend the config module with the salience threshold (document-frequency cutoff) and corpus paths (curated `mentions.jsonl` dir + the full-corpus OCR dir `data/corpus/msr-archive/`); injectable for tests. Reuse chunk 6's `DEEPSEEK_BASE_URL` / `LLM_MODEL_EXTRACT` config
+- [ ] 1.3 Confirm no new third-party dependency is needed (reuse chunk 6's Flash client, KG-schema prompt builder, and core-dataset graph reader; chunk 5's SPARQL-UPDATE helper); the `extraction` image is unchanged
+
+## 2. Governance vocabulary in the seed ontology (`change-proposal-schema`)
+
+- [ ] 2.1 Add the `msr:ChangeProposal` governance TBox to `ontology/msr.ttl` — `msr:ChangeProposal` class plus `msr:kind`, `msr:reviewStatus`, `msr:term`, `msr:docFrequency`, `msr:hasProposalGraph`, `msr:hasEvidence` + `msr:Evidence`/`msr:evidenceText`, and `msr:autoAccepted`; reuse chunk-1 `msr:citedIn` and chunk-6 `msr:startOffset`/`msr:endOffset` for evidence provenance; keep it additive and rdflib-valid
+- [ ] 2.2 Update the README/bootstrap order so `make load-seed` loads the governance TBox **at bootstrap, before `load-nist`/`link`/`mine`**; document that `load-seed` graph-**replaces** `urn:msr:data` (`example-flibe.ttl` `PUT`), so it must NOT be re-run after the data pipeline (it would wipe salts, mentions, and `msr:autoAccepted` instances) — `load-nist` already runs `load-seed` as a prerequisite
+
+## 3. Novelty detection (`novelty-detection`)
+
+- [ ] 3.1 Implement the lexical term-candidate pass over the curated `normalized.txt`/`segments.jsonl` (unigram + short n-grams, case-folded, stopword- and pure-number-filtered) — this is the source of plain novel terms (`solubility`, `graphite`) that chunk 6's rules-only `spacy.blank` linker never surfaces; no NER re-run
+- [ ] 3.2 Read the chunk-6 `status:"novel"` records from each curated `data/corpus/{report#}/mentions.jsonl` as supplementary instance-kind candidates (unresolved salt-formula spans), retaining surface form, report number, and offsets
+- [ ] 3.3 Build the exclusion set from chunk 6's linked mentions (`status:"linked"` records / `msr:Mention` triples) **and** the core dataset via `graph_reader.GraphReader` (three `FROM` graphs; staging/proposal graphs excluded), and drop already-linked/already-known candidates
+- [ ] 3.4 Implement the document-frequency scorer over the full 637-doc OCR corpus (`config.archive_dir` = `data/corpus/msr-archive/`, case-folded scan; build a doc→terms index once per run) and keep only candidates at/above the configurable **fixed** cutoff (POC decision — tf-idf/relative scoring deferred); default the cutoff conservatively so the demo targets clear it (`solubility` 280/637, `graphite` 388/637) while staying precision-biased against low-frequency OCR noise
+- [ ] 3.5 Attach curated-set evidence items to each retained candidate (sentence text + `msr:citedIn` document + start/end offsets)
+
+## 4. Candidate triage (`candidate-triage`)
+
+- [ ] 4.1 Implement the cheap context-signal pre-classifier (value+unit → property; formula/reactor surface → instance; material/moderator context → class; recurring S-V-O between known types → relation)
+- [ ] 4.2 Implement the Flash triage classifier reusing `disambiguation.FlashClient` (`Completer`) + `kg_prompt.KGSchemaPromptCache`; request DeepSeek JSON output mode; send candidate term + evidence as per-call context only
+- [ ] 4.3 Validate parsed classifier output app-side (shape check); drop the candidate on malformed/schema-violating output; record proposed placement (broader class / `quantityKind` / `canonicalUnit` / domain-range) and any QUDT/INIS reference as reviewer-verifiable claims
+
+## 5. Proposal emission (`proposal-staging`)
+
+- [ ] 5.1 Build the proposal bundle per triaged candidate: `msr:ChangeProposal` resource (kind, `pending` status, term, `docFrequency`, evidence, `hasProposalGraph`) → `urn:msr:staging`; proposed triples → `urn:msr:proposal/{kind}-{term-slug}`; deterministic IRIs, no blank nodes
+- [ ] 5.2 Implement the QUDT-allowlist guard: validate any concrete asserted `unit:`/`qk:` IRI against `ontology/qudt-units.json` (`allowedUnits`/`allowedQuantityKinds`), reject (drop, do not write) the whole proposal on a miss; leave a unit-ambiguous property's `canonicalUnit`/`quantityKind` unset so it is not rejected
+- [ ] 5.3 Write bundles via additive `INSERT DATA` through the chunk-5 SPARQL-UPDATE helper into the explicit target graphs (never `PUT`); ensure a re-run leaves staging + proposal-graph triple counts unchanged
+- [ ] 5.4 Assemble the `solubility` property proposal (property + `voc:solubility` concept, unit unset) and the `graphite` class+relation bundle (`msr:Moderator` class, `msr:moderatedBy` property, `msrd:graphite` individual, MSRE edge) from real triage output
+
+## 6. Instance auto-accept (`instance-auto-accept`)
+
+- [ ] 6.1 Implement the auto-accept path: an `instance` candidate whose type/edges resolve within the current core schema → direct `INSERT DATA` into `urn:msr:data` with a deterministic IRI, `msr:autoAccepted true`, and `msr:citedIn` provenance; no `ChangeProposal`
+- [ ] 6.2 Implement the rides-with-proposal exception: an individual depending on proposed schema is written into that proposal's `urn:msr:proposal/{id}` graph instead of `urn:msr:data`; decide auto-accept-vs-ride by whether the individual's type/edges resolve entirely within core
+
+## 7. `mine` orchestration, wiring & docs
+
+- [ ] 7.1 Implement the `mine` CLI umbrella: read misses → exclude known → score → triage → build bundles → write proposals + auto-accepted instances, over the curated set; print a run summary (candidates, per-kind proposal counts, auto-accepted count, rejected count)
+- [ ] 7.2 Add the `make mine` target (one-shot Compose run of the extraction container invoking `mine`, ordered after `make link`); update the README bootstrap order
+
+## 8. Tests
+
+- [ ] 8.1 Candidate-enumeration + salience-scorer tests: the lexical pass surfaces a plain term (e.g. "solubility") absent from the chunk-6 misses; a chunk-6 `status:"novel"` salt-formula record becomes an instance candidate; a small fixture corpus → expected document-frequency counts; threshold boundary (kept at/above, dropped below); already-linked / core-known terms excluded
+- [ ] 8.2 Core-dataset exclusion guard test: a term present only in `urn:msr:staging` is NOT excluded; a term present in core `urn:msr:vocab` IS excluded (three `FROM` graphs injected)
+- [ ] 8.3 Triage tests with a **stubbed Flash** returning fixed classifications → candidate routed to the right kind; the emitted proposal graph validates against the `msr:ChangeProposal` mini-schema; a `graphite`-shaped fixture yields the mixed class+relation+rides-with bundle; a `solubility`-shaped fixture yields a property proposal with unit unset; malformed classifier JSON → candidate dropped
+- [ ] 8.4 QUDT-allowlist rejection test: a stubbed classifier asserting a concrete out-of-allowlist `unit:`/`qk:` IRI → proposal rejected (nothing written); an in-allowlist IRI → kept
+- [ ] 8.5 Proposal-emission tests: a fixed candidate → the exact expected `INSERT DATA` triples (deterministic IRIs, no blank nodes) against a fake SPARQL client, split correctly across `urn:msr:staging` and `urn:msr:proposal/{id}`; idempotent re-run yields identical triples
+- [ ] 8.6 Instance direct-write tests: an instance under an existing class → `urn:msr:data` write flagged `msr:autoAccepted`; an instance depending on proposed schema → rides the proposal bundle, nothing in `urn:msr:data`; auto-accept idempotency
+- [ ] 8.7 Staging-invisibility test: a mined proposal is absent from a core-dataset read but present in a raw staging/proposal-graph query
+- [ ] 8.8 Guarded integration test (opt-in env flag, mirroring chunk 1's `GRAPHDB_REQUIRED`): after seed + catalog + `link` + a real `mine`, `solubility` and `graphite` appear as proposals with correct kinds + evidence, an instance candidate is in `urn:msr:data` flagged `autoAccepted`, the proposals are invisible via the core client, and a second `mine` leaves staging/proposal triple counts unchanged
+
+## 9. Manual acceptance run
+
+- [ ] 9.1 After a full bootstrap (`make up` → `load-seed` → `load-nist` → `ingest` → `link` → `mine`), do a real end-to-end `mine` over the actual curated documents and manually inspect the output: confirm `solubility` (property) and `graphite` (class+relation bundle) proposals in `urn:msr:staging` with correct triage kinds and evidence, spot-check the proposal graphs, confirm at least one `msr:autoAccepted` instance in `urn:msr:data`, and verify the core-dataset client sees none of the pending proposals — the change is done only after this manual verification passes, not on green tests alone
