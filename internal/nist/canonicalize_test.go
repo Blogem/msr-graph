@@ -116,11 +116,19 @@ func TestCanonicalize_Fixture(t *testing.T) {
 				if found.MoleFractionMin == nil || found.MoleFractionMax == nil {
 					t.Fatalf("fixture case %q: varying constituent %q missing MoleFractionMin/Max", tc.Name, tc.VaryComponent)
 				}
-				if tc.VaryMin != nil && math.Abs(*found.MoleFractionMin-*tc.VaryMin) > molePercentEpsilon {
-					t.Errorf("constituent %s: MoleFractionMin = %v, want %v", tc.VaryComponent, *found.MoleFractionMin, *tc.VaryMin)
+				// vary_min/vary_max in the fixture are mole percentages (like
+				// mole_percent), while MoleFractionMin/Max are fractions.
+				if tc.VaryMin != nil {
+					wantMin := *tc.VaryMin / 100.0
+					if math.Abs(*found.MoleFractionMin-wantMin) > molePercentEpsilon {
+						t.Errorf("constituent %s: MoleFractionMin = %v, want %v", tc.VaryComponent, *found.MoleFractionMin, wantMin)
+					}
 				}
-				if tc.VaryMax != nil && math.Abs(*found.MoleFractionMax-*tc.VaryMax) > molePercentEpsilon {
-					t.Errorf("constituent %s: MoleFractionMax = %v, want %v", tc.VaryComponent, *found.MoleFractionMax, *tc.VaryMax)
+				if tc.VaryMax != nil {
+					wantMax := *tc.VaryMax / 100.0
+					if math.Abs(*found.MoleFractionMax-wantMax) > molePercentEpsilon {
+						t.Errorf("constituent %s: MoleFractionMax = %v, want %v", tc.VaryComponent, *found.MoleFractionMax, wantMax)
+					}
 				}
 			}
 		})
@@ -243,7 +251,10 @@ func TestCanonicalize_Disambiguation(t *testing.T) {
 		if got.IsRange {
 			t.Fatalf("IsRange = true, want false for a positional row")
 		}
-		want := map[string]float64{"LiF": 0.2604, "NaF": 0.7296}
+		// Canonicalize formats each mole-% to one decimal place (spec:
+		// salt-canonicalization "Canonical salt form"): 26.04 -> 26.0,
+		// 72.96 -> 73.0, so the resulting fractions are 0.26 / 0.73.
+		want := map[string]float64{"LiF": 0.26, "NaF": 0.73}
 		for _, c := range got.Constituents {
 			if c.MoleFraction == nil {
 				t.Fatalf("constituent %s: MoleFraction is nil", c.Compound)
