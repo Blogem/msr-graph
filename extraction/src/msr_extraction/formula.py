@@ -84,7 +84,7 @@ _INLINE_COMPOSITION_RE = re.compile(
 # A comma/period standing in for a single subscript digit at the end of a
 # formula component, e.g. "BeF," or "BeF." (OCR artifact, design.md D1). The
 # root (everything before the trailing ,/.) is resolved against the known
-# compound skeleton map -- see `_skeleton_map` and `_resolve_ocr_component`.
+# compound skeleton map -- see `_skeleton_map` and `_resolve_components`.
 _OCR_SUBSCRIPT_TAIL_RE = re.compile(r"^(.+)[,.]$")
 
 # A trailing run of digits, stripped to produce a compound's "skeleton" for
