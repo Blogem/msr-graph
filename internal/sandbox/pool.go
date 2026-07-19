@@ -31,7 +31,7 @@ const (
 // enough to identify it to the Runtime. It carries no other state because
 // containers are single-use -- there is nothing to reset or reuse (design
 // D1).
-type container struct {
+type warmContainer struct {
 	id string
 }
 
@@ -47,7 +47,7 @@ type Pool struct {
 	spec    ContainerSpec
 	timeout time.Duration
 
-	ready chan container
+	ready chan warmContainer
 
 	done      chan struct{}
 	closeOnce sync.Once
@@ -87,7 +87,7 @@ func New(ctx context.Context, cfg Config, rt Runtime) (*Pool, error) {
 		rt:      rt,
 		spec:    spec,
 		timeout: cfg.Timeout,
-		ready:   make(chan container, cfg.PoolSize),
+		ready:   make(chan warmContainer, cfg.PoolSize),
 		done:    make(chan struct{}),
 	}
 
@@ -103,7 +103,7 @@ func New(ctx context.Context, cfg Config, rt Runtime) (*Pool, error) {
 			return nil, fmt.Errorf("sandbox: failed to warm initial pool (created %d/%d): %w", i, cfg.PoolSize, err)
 		}
 		created = append(created, id)
-		p.ready <- container{id: id}
+		p.ready <- warmContainer{id: id}
 	}
 
 	return p, nil
@@ -120,7 +120,7 @@ func New(ctx context.Context, cfg Config, rt Runtime) (*Pool, error) {
 // pool's configured wall-clock timeout (ErrTimeout, design D7), or an
 // infrastructure/daemon failure from the Runtime.
 func (p *Pool) Run(ctx context.Context, script []byte) (stdout, stderr []byte, exitCode int, err error) {
-	var c container
+	var c warmContainer
 	select {
 	case <-ctx.Done():
 		return nil, nil, 0, fmt.Errorf("sandbox: %w", ctx.Err())
@@ -197,7 +197,7 @@ func (p *Pool) replenish() {
 				log.Printf("sandbox: failed to remove freshly created container %s during shutdown: %v", id, rmErr)
 			}
 			return
-		case p.ready <- container{id: id}:
+		case p.ready <- warmContainer{id: id}:
 			return
 		}
 	}
