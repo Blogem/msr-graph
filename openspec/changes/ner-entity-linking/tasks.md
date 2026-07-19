@@ -3,14 +3,14 @@
 ## 1. Extraction project setup
 
 - [ ] 1.1 Grow the `extraction/` package with NER modules under `extraction/src/msr_extraction/`: graph reader/ruler-seeder, formula normalizer, layered linker, Flash disambiguator + validator, KG-schema prompt builder, mention-triple writer, and a `link` CLI subcommand
-- [ ] 1.2 Add runtime dependencies to `pyproject.toml` (`spaCy` + its pinned English model, `rapidfuzz`, an OpenAI-compatible client for DeepSeek); pin versions
-- [ ] 1.3 Extend the config module with `DEEPSEEK_BASE_URL`, `LLM_MODEL_EXTRACT`, the fuzzy threshold + min-token-length, and corpus paths (injectable for tests)
-- [ ] 1.4 Extend the `extraction/` Dockerfile to install spaCy + model + `rapidfuzz`; confirm the image still builds
+- [x] 1.2 Add runtime dependencies to `pyproject.toml` (`spaCy` + its pinned English model, `rapidfuzz`, an OpenAI-compatible client for DeepSeek); pin versions
+- [x] 1.3 Extend the config module with `DEEPSEEK_BASE_URL`, `LLM_MODEL_EXTRACT`, the fuzzy threshold + min-token-length, and corpus paths (injectable for tests)
+- [x] 1.4 Extend the `extraction/` Dockerfile to install spaCy + model + `rapidfuzz`; confirm the image still builds
 
 ## 2. Mention vocabulary in the seed ontology (`mention-graph-writing`)
 
-- [ ] 2.1 Add the mention TBox to `ontology/msr.ttl` — `msr:Mention` class plus `msr:linksTo`, `msr:inDocument` (range `msr:Document`), `msr:surfaceForm`, `msr:startOffset`, `msr:endOffset`; keep it additive and rdflib-valid
-- [ ] 2.2 Update the README/bootstrap order so `make load-seed` (re-`PUT` of `urn:msr:ontology`) precedes `make link`
+- [x] 2.1 Add the mention TBox to `ontology/msr.ttl` — `msr:Mention` class plus `msr:linksTo`, `msr:inDocument` (range `msr:Document`), `msr:surfaceForm`, `msr:startOffset`, `msr:endOffset`; keep it additive and rdflib-valid
+- [x] 2.2 Update the README/bootstrap order so `make load-seed` (re-`PUT` of `urn:msr:ontology`) precedes `make link`
 
 ## 3. Graph reader & matcher seeding (`entity-ruler-seeding`)
 
@@ -50,7 +50,7 @@
 ## 9. `link` orchestration, wiring & docs
 
 - [ ] 9.1 Implement the `link` CLI umbrella: build prompt → seed matcher → link segments → disambiguate → write mentions + `mentions.jsonl`, over the curated set; print a run summary (per doc: spans, linked, novel, per-layer counts)
-- [ ] 9.2 Add the `make link` target (one-shot Compose run of the extraction container invoking `link`, ordered after `load-nist` + `ingest`); update the README bootstrap order and the `data/corpus/{report#}/mentions.jsonl` layout note
+- [x] 9.2 Add the `make link` target (one-shot Compose run of the extraction container invoking `link`, ordered after `load-nist` + `ingest`); update the README bootstrap order and the `data/corpus/{report#}/mentions.jsonl` layout note
 
 ## 10. Tests
 
