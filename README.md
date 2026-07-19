@@ -99,3 +99,53 @@ fixed non-root UID **10001**.
   or run `chown -R 10001 ./data`.
 
 `data/` is gitignored except `data/nist/` (the vendored NIST thesaurus).
+
+## Sandboxed Python execution (`internal/sandbox`)
+
+The grounded-analysis agent runs every computation as model-authored Python
+rather than doing arithmetic itself or pushing it into SQL, so the script and
+its output appear verbatim in the chat trace. That code is untrusted, so it
+runs in a warm pool of throwaway, hardened Docker containers managed by
+`internal/sandbox`.
+
+The pool's public surface is `Run(ctx, script) (stdout, stderr []byte,
+exitCode int, err error)`: the script is fed to `python -` on stdin, and
+stdout/stderr/exit code come back verbatim and unparsed. A non-zero exit
+code is a normal result (surfaced in the trace), not an error; `err` is
+reserved for infrastructure failures, including a distinguishable timeout
+error when a script exceeds its wall-clock limit. A container serves
+exactly **one** script run, is then always force-removed, and is replaced
+in the background — no state ever survives from one run to the next.
+
+Every sandbox is hardened: no network (`--network none`), a read-only root
+filesystem with a `noexec` tmpfs `/tmp` for scratch space, non-root user
+(UID 10001), dropped Linux capabilities and no-new-privileges, CPU/memory
+(no swap)/pids limits, and a wall-clock timeout enforced by force-removing
+the container. The shared SQLite data directory is bind-mounted read-only
+at `/data` (the DB lives at `/data/msr.db`) — scripts can query it but never
+write to it.
+
+Configuration is two environment variables on the `server` service, already
+wired in `docker-compose.yml`:
+
+- `MSR_DATA_HOST_DIR` — the **host** path of the data directory
+  (`${PWD}/data`), because sandboxes are Docker siblings created over the
+  mounted `/var/run/docker.sock`: the daemon resolves bind-mount sources
+  against the host filesystem, not the server's own container namespace, so
+  the host path must be supplied explicitly rather than derived from the
+  server's internal `/data`.
+- `MSR_SANDBOX_IMAGE` — the sandbox image reference (defaults to the tag
+  `make up` builds).
+
+Because a crash, kill, or restart can skip graceful shutdown, every sandbox
+carries a distinctive label; pool startup force-removes every pre-existing
+labelled container before warming a fresh pool, so a restarted server always
+begins clean regardless of how its predecessor died. As a backstop, each
+sandbox idles on a bounded TTL well above the run timeout and is
+auto-removed by Docker if it's ever abandoned and no server returns to sweep
+it.
+
+**Known limitation:** the server holds `/var/run/docker.sock`, which makes
+it host-root-equivalent — sandbox hardening protects against the untrusted
+*script*, not against a compromised server process. This is an accepted,
+documented ceiling for a single-host proof of concept.
