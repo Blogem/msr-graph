@@ -3,9 +3,19 @@
 A fake ``select_fn`` is injected everywhere so these tests never touch
 httpx or a real GraphDB endpoint. The behavioral core-dataset read-guard
 acceptance test (design.md D10, task 10.4) is authored separately.
+
+One test (``test_default_select_form_encodes_core_dataset_params``) does
+NOT inject a ``select_fn`` and instead drives ``_default_select`` directly
+by monkeypatching ``httpx.post`` — this guards the httpx "list-of-tuples
+passed as ``data=``" encoding bug that crashed the live ``link`` run
+(``build_query_params`` must return repeated ``default-graph-uri`` params
+as a list of tuples, but httpx's ``data=`` expects a Mapping and silently
+mishandles a list of tuples as request content).
 """
 
 from __future__ import annotations
+
+from urllib.parse import parse_qsl
 
 from msr_extraction.config import Config
 from msr_extraction.graph_reader import (
@@ -65,6 +75,55 @@ def test_read_version_returns_none_when_absent() -> None:
 
     reader = GraphReader("http://example", select_fn=select_fn)
     assert reader.read_version() is None
+
+
+def test_default_select_form_encodes_core_dataset_params(monkeypatch) -> None:
+    """Guard the httpx "list-of-tuples to data=" encoding bug.
+
+    ``build_query_params`` must return a list of tuples (``default-graph-uri``
+    is repeated three times), but httpx's ``data=`` parameter expects a
+    Mapping and mishandles a list of tuples as raw request content, which
+    crashed the live ``link`` run with
+    ``TypeError: sequence item 1: expected a bytes-like object, tuple found``.
+    This drives the real (non-injected) ``_default_select`` path by
+    monkeypatching ``httpx.post`` instead of injecting a fake ``select_fn``.
+    """
+    captured: dict[str, object] = {}
+
+    class _FakeResponse:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict:
+            return {"results": {"bindings": [{"version": {"value": "9.9.9", "type": "literal"}}]}}
+
+    def fake_post(url, *, content=None, headers=None, timeout=None, **kwargs):
+        captured["url"] = url
+        captured["content"] = content
+        captured["headers"] = headers
+        captured["timeout"] = timeout
+        return _FakeResponse()
+
+    monkeypatch.setattr("httpx.post", fake_post)
+
+    reader = GraphReader("http://x/repositories/msr")
+    result = reader.read_version()
+
+    content = captured["content"]
+    assert isinstance(content, str)
+
+    parsed = dict(parse_qsl(content))
+    assert "query" in parsed
+
+    graph_values = [value for key, value in parse_qsl(content) if key == "default-graph-uri"]
+    assert len(graph_values) == 3
+    assert set(graph_values) == set(CORE_GRAPHS)
+    assert "urn:msr:staging" not in graph_values
+    assert not any(v.startswith("urn:msr:proposal") for v in graph_values)
+
+    assert captured["headers"]["Content-Type"] == "application/x-www-form-urlencoded"
+
+    assert result == "9.9.9"
 
 
 def test_read_known_entities_merges_labels_and_classifies_by_source() -> None:
