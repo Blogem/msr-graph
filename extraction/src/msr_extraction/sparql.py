@@ -29,7 +29,15 @@ class SparqlClient:
         # httpx is added to pyproject by a parallel build-wiring change and
         # is not available at module import time in this branch.
         """
-        raise NotImplementedError("task 7.1")
+        import httpx
+
+        response = httpx.post(
+            self.endpoint,
+            data={"update": sparql_update},
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+            timeout=self.timeout,
+        )
+        response.raise_for_status()
 
     @classmethod
     def from_config(cls, config: Config) -> SparqlClient:

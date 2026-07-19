@@ -11,6 +11,22 @@ from __future__ import annotations
 from msr_extraction.manifest import ManifestRecord
 from msr_extraction.sparql import SparqlClient
 
+_PREFIXES = """\
+PREFIX msr: <https://w3id.org/msr-kg/ontology#>
+PREFIX msrd: <https://w3id.org/msr-kg/data#>
+PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+PREFIX dcterms: <http://purl.org/dc/terms/>"""
+
+
+def _escape_literal(s: str) -> str:
+    """Escape a string for use inside a double-quoted Turtle/SPARQL literal."""
+    return (
+        s.replace("\\", "\\\\")
+        .replace('"', '\\"')
+        .replace("\n", "\\n")
+        .replace("\t", "\\t")
+    )
+
 
 def document_triples(record: ManifestRecord) -> str:
     """Return the Turtle body describing one Document node.
@@ -24,7 +40,15 @@ def document_triples(record: ManifestRecord) -> str:
 
     The IRI ``msrd:{report#}`` is deterministic; no blank nodes are used.
     """
-    raise NotImplementedError("task 7.2")
+    report_number = record.report_number
+    title = _escape_literal(record.title)
+    date = _escape_literal(record.date)
+    return (
+        f"msrd:{report_number} a msr:Document ;\n"
+        f'    rdfs:label "{title}" ;\n'
+        f'    dcterms:identifier "{report_number}" ;\n'
+        f'    dcterms:date "{date}" .'
+    )
 
 
 def insert_data_update(records: list[ManifestRecord]) -> str:
@@ -36,7 +60,20 @@ def insert_data_update(records: list[ManifestRecord]) -> str:
     (``https://w3id.org/msr-kg/ontology#``), ``msrd:``
     (``https://w3id.org/msr-kg/data#``), ``rdfs:``, and ``dcterms:``.
     """
-    raise NotImplementedError("task 7.2")
+    blocks = []
+    for record in records:
+        triples = document_triples(record)
+        indented = "\n".join(f"    {line}" for line in triples.splitlines())
+        blocks.append(indented)
+    body = "\n\n".join(blocks)
+    return (
+        f"{_PREFIXES}\n"
+        "INSERT DATA {\n"
+        "  GRAPH <urn:msr:data> {\n"
+        f"{body}\n"
+        "  }\n"
+        "}"
+    )
 
 
 def write_documents(records: list[ManifestRecord], client: SparqlClient) -> None:
@@ -46,4 +83,6 @@ def write_documents(records: list[ManifestRecord], client: SparqlClient) -> None
     ``client.update``. Additive and idempotent: deterministic IRIs mean
     repeated calls with the same records are a no-op.
     """
-    raise NotImplementedError("task 7.2")
+    if not records:
+        return
+    client.update(insert_data_update(records))
