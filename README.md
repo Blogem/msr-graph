@@ -63,6 +63,14 @@ make ingest     # one-shot Compose run of the extraction container: acquire ->
                 # writes are set-semantics no-ops. Requires the stack up and
                 # seeded (needs GraphDB and the graphdb.license from setup).
 
+make link       # one-shot Compose run of the extraction container: seed the
+                # spaCy matcher from the graph -> link segments -> Flash
+                # disambiguation for unresolved spans -> write msr:Mention
+                # triples + data/corpus/{report#}/mentions.jsonl (see
+                # openspec/changes/ner-entity-linking/design.md). Requires
+                # `make load-seed` to have run first (the mention T-Box lives
+                # in ontology/msr.ttl) as well as `make ingest` (segments.jsonl).
+
 make test       # GRAPHDB_REQUIRED=1 go test ./...
                 # integration tests FAIL (not skip) if the stack isn't up
 ```
@@ -93,6 +101,34 @@ for the full design):
   `normalized.txt` (OCR-cleaned text) and `segments.jsonl` (one JSON object
   per sentence, with absolute character offsets into `normalized.txt`).
 - `data/corpus/` is a gitignored subtree of `data/` (see below).
+
+## Entity linking (`make link`)
+
+`make link` runs the `extraction` container's NER linking pipeline (see
+[`openspec/changes/ner-entity-linking/design.md`](openspec/changes/ner-entity-linking/design.md)
+for the full design): it rebuilds a spaCy matcher from the graph's current
+vocab/ontology/salt catalog, links spans in each curated document's
+`segments.jsonl`, falls back to a DeepSeek V4 Flash disambiguation layer for
+spans the lexical layers can't settle, and writes the results both as
+`msr:Mention` triples in `urn:msr:data` and as a JSONL artifact:
+
+- **`data/corpus/{report#}/mentions.jsonl`** — one JSON object per recognized
+  span, with fields:
+  - `report` — the report number the mention belongs to.
+  - `seg_index` — index into that report's `segments.jsonl`.
+  - `char_start` / `char_end` — absolute character offsets into
+    `normalized.txt`, matching the segment's own offsets.
+  - `surface_form` — the matched text.
+  - `status` — `"linked"` (resolved to a known entity) or `"novel"`
+    (recorded for chunk 8's novelty mining, never written to the graph).
+  - `target_iri` / `target_kind` — the resolved concept/class/individual IRI
+    and its kind, when `status` is `"linked"`.
+  - `layer` — which matching layer resolved the span (expanded exact,
+    formula normalizer, bounded fuzzy match, or Flash disambiguation).
+  - `score` — the resolving layer's confidence/match score.
+
+  The file is regenerated wholesale on each `make link` run, so it is
+  idempotent like the graph writes.
 
 ## `data/` bind-mount ownership
 

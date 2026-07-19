@@ -6,6 +6,16 @@ requires-python = ">=3.12"
 dependencies = [
     "pysbd==0.3.4",
     "httpx==0.28.1",
+    "spacy==3.8.7",
+    "en_core_web_sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl",
+    # Pinned explicitly: spacy's `cli` submodule (imported unconditionally by
+    # `import spacy`) does `from click import NoSuchOption` directly, but its
+    # `typer<1.0.0,>=0.3.0` dependency resolves to typer>=0.16 by default,
+    # which no longer requires click transitively -> ModuleNotFoundError
+    # without this direct pin.
+    "click==8.1.8",
+    "rapidfuzz==3.10.1",
+    "openai==1.57.0",
 ]
 
 [project.optional-dependencies]
@@ -20,3 +30,9 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/msr_extraction"]
+
+[tool.hatch.metadata]
+# Required by hatchling to allow the `en_core_web_sm @ https://...` direct
+# URL dependency above (a pinned spaCy model wheel release asset) in
+# `project.dependencies`.
+allow-direct-references = true
