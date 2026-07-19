@@ -22,7 +22,7 @@ def test_defaults_for_new_fields() -> None:
     assert config.deepseek_api_key == ""
     assert config.llm_model_extract == "deepseek-v4-flash"
     assert config.fuzzy_threshold == 90.0
-    assert config.fuzzy_min_token_length == 4
+    assert config.fuzzy_min_token_length == 3
 
 
 def test_from_env_empty_mapping_keeps_defaults() -> None:
