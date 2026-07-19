@@ -10,7 +10,8 @@
 #   make ingest     # one-shot extraction run: acquire -> manifest ->
 #                   # normalize/segment -> documents (see
 #                   # openspec/changes/ingest-archive-documents/design.md).
-#   make test       # go test ./... with the GraphDB acceptance gate enabled.
+#   make test       # go test ./... with the GraphDB and sandbox Docker
+#                   # acceptance gates enabled.
 #   make down       # stop the stack and remove its volumes.
 
 .PHONY: up down load-seed ingest test
@@ -38,6 +39,9 @@ up:
 	docker compose up -d
 	@echo "==> building extraction and sandbox base images"
 	docker compose build server extraction
+	@# Tag must match the server's MSR_SANDBOX_IMAGE default (internal/sandbox,
+	@# see docker-compose.yml "server" service) so the pool's configured image
+	@# reference resolves to this build.
 	docker build -t msr-sandbox-base:latest docker/sandbox
 	@echo "==> waiting for graphdb to report healthy at $(GRAPHDB_URL)"
 	@timeout=180; elapsed=0; \
@@ -66,5 +70,5 @@ ingest:
 	docker compose run --rm extraction ingest
 
 test:
-	@echo "==> running go test with the GraphDB acceptance gate enabled (GRAPHDB_REQUIRED=1)"
-	GRAPHDB_REQUIRED=1 go test ./...
+	@echo "==> running go test with the GraphDB and sandbox Docker acceptance gates enabled (GRAPHDB_REQUIRED=1, SANDBOX_DOCKER_REQUIRED=1)"
+	GRAPHDB_REQUIRED=1 SANDBOX_DOCKER_REQUIRED=1 go test ./...

@@ -82,10 +82,16 @@ services:
       GRAPHDB_URL: http://graphdb:7200
       GRAPHDB_REPO: msr
       MSR_DB_PATH: /data/msr.db
+      # Sandbox pool (chunk 3, internal/sandbox): the server launches sandbox
+      # SIBLING containers over the mounted Docker socket. Bind-mount SOURCES are
+      # resolved by the daemon on the HOST, not inside this container, so the
+      # server must be told the HOST path of ./data explicitly (design D5).
+      MSR_DATA_HOST_DIR: ${PWD}/data
+      MSR_SANDBOX_IMAGE: msr-sandbox-base:latest
     volumes:
       - ./data:/data
-      # Declared now for chunk 3's sandbox pool (container-managed exec of
-      # sandbox tasks); unused by this scaffold.
+      # Used by chunk 3's sandbox pool (internal/sandbox) to launch sandbox
+      # SIBLING containers via the Docker daemon on the host.
       - /var/run/docker.sock:/var/run/docker.sock
     ports:
       - "8080:8080"
