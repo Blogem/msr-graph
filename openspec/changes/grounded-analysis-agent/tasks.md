@@ -2,16 +2,16 @@
 
 ## 1. Agent package scaffolding and LLM client
 
-- [ ] 1.1 Create `internal/agent` with the injected OpenAI-compatible LLM client interface (method(s) for a chat/tool-use turn) and a DeepSeek-backed implementation constructed from `DEEPSEEK_BASE_URL` + `LLM_MODEL_ANALYSIS` (default model id `deepseek-v4-pro`); default the loop to 10 iterations and a 120 s per-turn deadline (both config-overridable)
-- [ ] 1.2 Define the trace-event types (`text`, `tool_call`, `tool_result`, `script_run`, `provenance`, `done`) as typed Go structs with their payload fields
-- [ ] 1.3 Implement the bounded tool-use loop: send system prompt + conversation, execute requested tool calls, feed results back, return the final answer when no tool is requested; enforce a max-iterations guard emitting an error event on overrun
+- [x] 1.1 Create `internal/agent` with the injected OpenAI-compatible LLM client interface (method(s) for a chat/tool-use turn) and a DeepSeek-backed implementation constructed from `DEEPSEEK_BASE_URL` + `LLM_MODEL_ANALYSIS` (default model id `deepseek-v4-pro`); default the loop to 10 iterations and a 120 s per-turn deadline (both config-overridable)
+- [x] 1.2 Define the trace-event types (`text`, `tool_call`, `tool_result`, `script_run`, `provenance`, `done`) as typed Go structs with their payload fields
+- [x] 1.3 Implement the bounded tool-use loop: send system prompt + conversation, execute requested tool calls, feed results back, return the final answer when no tool is requested; enforce a max-iterations guard emitting an error event on overrun
 
 ## 2. Tools
 
 - [ ] 2.1 Implement the `sparql_query` tool over the chunk-1 `internal/graph.Select` core-dataset client (do not expose `SelectRaw`); grounding walk resolves mention → SKOS pref/altLabel + salt label → `skos:closeMatch` salt → `PropertyMeasurement` (property, unit, equation form, `validTempMin`/`Max`, `dataLocator`, `citedIn`, `prov:wasDerivedFrom`), with no salt/property name hardcoded
 - [ ] 2.2 Implement the `sql_query` tool over an `internal/store` read-only connection with a SELECT-only guard rejecting INSERT/UPDATE/DELETE, DDL, PRAGMA writes, multi-statement, and comment-smuggled writes before reaching SQLite
 - [ ] 2.3 Implement the `run_python` tool over the chunk-3 `sandbox.Run` interface, capturing stdout/stderr/exit code and surfacing non-zero exits as tool results (not crashes); its tool description MUST advertise the runtime contract to the model — read-only DB at `/data/msr.db`, `numpy`/`pandas` available, JSON result on stdout
-- [ ] 2.4 Enforce the no-model-arithmetic invariant and out-of-range temperature handling in the loop/prompt: numeric answers come from `run_python`; a requested temperature outside `[validTempMin, validTempMax]` is flagged/refused, not extrapolated
+- [x] 2.4 Enforce the no-model-arithmetic invariant and out-of-range temperature handling in the loop/prompt: numeric answers come from `run_python`; a requested temperature outside `[validTempMin, validTempMax]` is flagged/refused, not extrapolated
 
 ## 3. KG-schema prompt builder
 
@@ -26,7 +26,7 @@
 
 ## 5. Configuration
 
-- [ ] 5.1 Add `DEEPSEEK_BASE_URL` and `LLM_MODEL_ANALYSIS` (default `deepseek-v4-pro`) to the `server` service in `docker-compose.yml` (additive) and read them at server startup; source the API secret from the environment, never committed
+- [x] 5.1 Add `DEEPSEEK_BASE_URL` and `LLM_MODEL_ANALYSIS` (default `deepseek-v4-pro`) to the `server` service in `docker-compose.yml` (additive) and read them at server startup; source the API secret from the environment, never committed
 
 ## 6. Tests
 
