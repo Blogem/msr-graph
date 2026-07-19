@@ -40,6 +40,18 @@ class TestNormalizeSaltSpanOrderUnify:
         # fabricated guess, just None.
         assert normalize_salt_span("LiF-BeF2", "10-20-70") is None
 
+    def test_inline_parenthesized_composition_resolves(self):
+        result = normalize_salt_span("LiF-BeF2 (66-34 mol%)")
+        assert result == "msrd:salt-BeF2-LiF-34.0-66.0"
+
+    def test_inline_unparenthesized_composition_resolves(self):
+        result = normalize_salt_span("LiF-BeF2 66-34 mol%")
+        assert result == "msrd:salt-BeF2-LiF-34.0-66.0"
+
+    def test_truly_bare_formula_with_no_inline_composition_returns_none(self):
+        # No "mol%" group anywhere in the surface -- must not fabricate one.
+        assert normalize_salt_span("LiF-BeF2") is None
+
 
 class TestSlugifyMatchesGo:
     def test_point_canonical(self):

@@ -69,6 +69,15 @@ _LEADING_COEFFICIENT_RE = re.compile(r"^\d+(?=[A-Za-z])")
 # would parse as ["34", "-66"] instead of ["34", "66"]).
 _NUMBER_RE = re.compile(r"\d+(?:\.\d+)?")
 
+# A trailing inline composition group at the end of a mention: an optional
+# '(', 2+ hyphen-separated numbers, "mol%" (case-insensitive, optional
+# internal spacing), and an optional ')'. Matches both "(66-34 mol%)" and
+# the unparenthesized "66-34 mol%".
+_INLINE_COMPOSITION_RE = re.compile(
+    r"\(?\s*(\d+(?:\.\d+)?(?:\s*-\s*\d+(?:\.\d+)?)+)\s*mol\s*%\s*\)?\s*$",
+    re.IGNORECASE,
+)
+
 
 def slugify(s: str) -> str:
     """Identical to Go internal/nist/iri.go slugify.
@@ -240,19 +249,42 @@ def _strip_leading_coefficient(token: str) -> str:
     return _LEADING_COEFFICIENT_RE.sub("", token)
 
 
+def _extract_inline_composition(surface: str) -> tuple[str, str | None]:
+    """Split a trailing inline composition group off the end of a mention.
+
+    Recognizes both the parenthesized ``(a-b mol%)`` / ``(a-b-c mol%)`` form
+    and the unparenthesized ``a-b mol%`` form. Returns
+    ``(formula_part, "a-b[-c...]")`` when found, or ``(surface, None)`` when
+    no inline composition group is present -- leaving `surface` untouched so
+    a truly bare formula still falls through to None.
+    """
+    match = _INLINE_COMPOSITION_RE.search(surface)
+    if not match:
+        return surface, None
+    formula_part = surface[: match.start()].strip()
+    return formula_part, match.group(1)
+
+
 def normalize_salt_span(surface: str, composition_text: str | None = None) -> str | None:
     """Resolve a text salt mention to the composed salt IRI, or None.
 
     Cleans surface-form variants (subscript digits, dot/bullet separators,
     spacing, leading stoichiometric coefficients), splits into formula
-    components, and -- only when an explicit composition is given and its
-    parsed numbers line up one-to-one with the components -- canonicalizes
-    as a point salt (form_code='P1') and returns its `.iri`. With no
-    composition, returns None: a bare formula must not fabricate a composed
-    IRI (the linker resolves it to a concept via the exact-match layer
-    instead, per design.md D3).
+    components, and -- only when a composition is available and its parsed
+    numbers line up one-to-one with the components -- canonicalizes as a
+    point salt (form_code='P1') and returns its `.iri`. The composition may
+    come from the explicit `composition_text` argument, or -- when that is
+    None -- from an inline group embedded in `surface` itself, e.g.
+    "LiF-BeF2 (66-34 mol%)" or "LiF-BeF2 66-34 mol%" (design.md D3 /
+    salt-formula-normalization spec). With no composition anywhere, returns
+    None: a bare formula must not fabricate a composed IRI (the linker
+    resolves it to a concept via the exact-match layer instead).
     """
-    cleaned = _clean_surface(surface)
+    working_surface = surface
+    if composition_text is None:
+        working_surface, composition_text = _extract_inline_composition(surface)
+
+    cleaned = _clean_surface(working_surface)
     if not cleaned:
         return None
 
