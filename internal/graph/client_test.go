@@ -116,6 +116,23 @@ func TestSelect_DatasetClauseGuard(t *testing.T) {
 		{"uppercase FROM NAMED", "SELECT * FROM NAMED <urn:msr:staging> WHERE { ?s ?p ?o }", true},
 		{"lowercase from named", "select * from named <urn:msr:staging> where { ?s ?p ?o }", true},
 		{"mixed-case From Named", "SELECT * From Named <urn:msr:staging> WHERE { ?s ?p ?o }", true},
+		{"newline before FROM", "SELECT *\nFROM <urn:msr:data>\nWHERE { ?s ?p ?o }", true},
+		// False positives the old raw \bfrom\b scan wrongly rejected: a
+		// "from" that is data (string literal, IRI, comment) or an
+		// identifier (variable, prefixed name) is not a dataset clause.
+		{"from inside a string literal", `SELECT * WHERE { ?s ?p ?o FILTER(CONTAINS(?o, "from")) }`, false},
+		{"from inside a single-quoted literal", `SELECT * WHERE { ?s ?p ?o FILTER(CONTAINS(?o, 'from')) }`, false},
+		{"from inside an escaped-quote literal", `SELECT * WHERE { ?s ?p "he said \"from\"" }`, false},
+		{"from inside a long string literal spanning lines", "SELECT * WHERE { ?s ?p \"\"\"multi\nFROM line\"\"\" }", false},
+		{"from as an IRI path segment", "SELECT * WHERE { ?s ?p <http://ex.org/vocab/from> }", false},
+		{"from as a variable name", "SELECT ?from WHERE { ?from ?p ?o }", false},
+		{"from as a prefixed-name local part", "SELECT * WHERE { ?s ?p ex:from }", false},
+		{"from inside a comment", "SELECT * WHERE { ?s ?p ?o } # loaded from seed", false},
+		{"fromDate variable is not FROM", "SELECT ?fromDate WHERE { ?fromDate ?p ?o }", false},
+		{"less-than operator is not an IRI", "SELECT * WHERE { ?s ?p ?a FILTER(?a < ?b) }", false},
+		// Combined: a real FROM clause must still be caught even when a
+		// benign "from" (here a ?from variable) also appears.
+		{"real FROM alongside a ?from variable", "SELECT ?from FROM <urn:msr:data> WHERE { ?from ?p ?o }", true},
 	}
 
 	for _, tc := range tests {

@@ -12,21 +12,121 @@ import (
 	"strings"
 )
 
-// datasetClausePattern matches a standalone "FROM" token, case
-// insensitively. It is a word-boundary scan rather than a naive
-// substring check so it does not fire on "FROM" appearing inside a
-// larger identifier (e.g. "fromage"); "FROM NAMED" is caught by the
-// same pattern since it starts with the "FROM" token.
-var datasetClausePattern = regexp.MustCompile(`(?i)\bfrom\b`)
+// datasetKeywordPattern matches a standalone FROM token (case
+// insensitively) in dataset-clause position: a real FROM / FROM NAMED
+// clause is always whitespace- or start-delimited, so requiring a leading
+// boundary means the pattern does not fire on a "from" that is a variable
+// (?from), a prefixed name (ex:from), or part of a longer word (fromage).
+// FROM NAMED is caught by the same pattern since it begins with FROM. The
+// pattern is applied to text with string literals, IRIs, and comments
+// already neutralised (see stripNonKeywordText), so a "from" inside those
+// is never seen here.
+var datasetKeywordPattern = regexp.MustCompile(`(?i)(?:^|\s)from\b`)
 
 // rejectDatasetClause rejects queries that carry their own FROM/FROM
-// NAMED dataset clause, so a query cannot smuggle in a wider dataset
-// than the protocol parameters Select sends.
+// NAMED dataset clause, so a query cannot smuggle in a wider dataset than
+// the protocol parameters Select sends. The scan ignores a "from" that
+// appears inside a string literal, an IRI, or a comment -- there it is
+// data, not a dataset clause -- so legitimate core reads such as
+// FILTER(CONTAINS(?o, "from")) or a ?from variable are not rejected. The
+// protocol dataset parameters remain the actual isolation boundary; this
+// guard is defense-in-depth plus a clear error pointing at SelectRaw.
 func rejectDatasetClause(query string) error {
-	if datasetClausePattern.MatchString(query) {
+	if datasetKeywordPattern.MatchString(stripNonKeywordText(query)) {
 		return fmt.Errorf("graph: Select does not accept queries with a FROM/FROM NAMED clause (query would override the core-dataset restriction); use SelectRaw for unrestricted reads")
 	}
 	return nil
+}
+
+// stripNonKeywordText replaces SPARQL string literals, IRIs, and comments
+// with single spaces so a keyword scan over the result cannot be fooled by
+// a keyword-looking substring inside quoted text, an IRI path, or a
+// comment. It is deliberately lenient: it neutralises those spans, it does
+// not fully validate SPARQL.
+func stripNonKeywordText(q string) string {
+	var b strings.Builder
+	b.Grow(len(q))
+	for i := 0; i < len(q); {
+		switch c := q[i]; {
+		case c == '#':
+			// Line comment: skip to (but not past) the end of line, so
+			// the newline stays as a token delimiter.
+			j := i + 1
+			for j < len(q) && q[j] != '\n' {
+				j++
+			}
+			b.WriteByte(' ')
+			i = j
+		case c == '"' || c == '\'':
+			b.WriteByte(' ')
+			i = skipString(q, i)
+		case c == '<':
+			if end, ok := iriEnd(q, i); ok {
+				b.WriteByte(' ')
+				i = end
+			} else {
+				// A lone '<' (e.g. a less-than operator), not an IRIREF.
+				b.WriteByte(c)
+				i++
+			}
+		default:
+			b.WriteByte(c)
+			i++
+		}
+	}
+	return b.String()
+}
+
+// skipString consumes a SPARQL string literal starting at q[i] (a quote
+// character) and returns the index just past its closing delimiter. It
+// handles both short ("..."/'...') and long ("""..."""/”'...”') forms
+// and backslash escapes. An unterminated literal is consumed to end of
+// line (short) or end of input (long).
+func skipString(q string, i int) int {
+	quote := q[i]
+	if i+2 < len(q) && q[i+1] == quote && q[i+2] == quote {
+		for j := i + 3; j < len(q); {
+			if q[j] == '\\' {
+				j += 2
+				continue
+			}
+			if q[j] == quote && j+2 < len(q) && q[j+1] == quote && q[j+2] == quote {
+				return j + 3
+			}
+			j++
+		}
+		return len(q)
+	}
+	for j := i + 1; j < len(q); {
+		switch q[j] {
+		case '\\':
+			j += 2
+		case quote:
+			return j + 1
+		case '\n':
+			return j
+		default:
+			j++
+		}
+	}
+	return len(q)
+}
+
+// iriEnd reports whether q[i] (a '<') begins an IRIREF and, if so, the
+// index just past its closing '>'. An IRIREF contains no whitespace and
+// none of <>"{}|^` (or a backslash), and ends with '>'; if those do not
+// hold, the '<' is something else (e.g. a less-than operator) and ok is
+// false.
+func iriEnd(q string, i int) (int, bool) {
+	for j := i + 1; j < len(q); j++ {
+		switch c := q[j]; {
+		case c == '>':
+			return j + 1, true
+		case c <= ' ', c == '<', c == '"', c == '{', c == '}', c == '|', c == '^', c == '`', c == '\\':
+			return 0, false
+		}
+	}
+	return 0, false
 }
 
 // queryEndpoint is the SPARQL 1.1 Protocol query endpoint.
