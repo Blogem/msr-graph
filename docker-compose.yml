@@ -88,6 +88,12 @@ services:
       # server must be told the HOST path of ./data explicitly (design D5).
       MSR_DATA_HOST_DIR: ${PWD}/data
       MSR_SANDBOX_IMAGE: msr-sandbox-base:latest
+      # Analysis-agent LLM (chunk 4, internal/agent): DeepSeek V4 Pro via an
+      # OpenAI-compatible client. Base URL + model id are config; the API key
+      # is sourced from the host environment and never committed.
+      DEEPSEEK_BASE_URL: ${DEEPSEEK_BASE_URL:-https://api.deepseek.com}
+      LLM_MODEL_ANALYSIS: ${LLM_MODEL_ANALYSIS:-deepseek-v4-pro}
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
     volumes:
       - ./data:/data
       # Used by chunk 3's sandbox pool (internal/sandbox) to launch sandbox
