@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"log"
+	"time"
 
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/filters"
@@ -102,6 +104,14 @@ func (r *dockerRuntime) Create(ctx context.Context, spec ContainerSpec) (string,
 	}
 
 	if err := r.cli.ContainerStart(ctx, created.ID, container.StartOptions{}); err != nil {
+		// AutoRemove only fires on exit, and a container that never started
+		// never exits, so without an explicit removal here it would escape
+		// both the D9 backstops and accumulate across replenish retries. Use
+		// a detached context so removal still runs even if ctx is already
+		// past its deadline or cancelled.
+		if rmErr := r.cli.ContainerRemove(context.Background(), created.ID, container.RemoveOptions{Force: true}); rmErr != nil {
+			log.Printf("sandbox: failed to remove container %s after failed start: %v", created.ID, rmErr)
+		}
 		return "", fmt.Errorf("sandbox: start container %s: %w", created.ID, err)
 	}
 
@@ -161,15 +171,32 @@ func (r *dockerRuntime) Exec(ctx context.Context, id string, script []byte) (Exe
 		return ExecResult{}, fmt.Errorf("sandbox: write script to container %s stdin: %w", id, werr)
 	}
 
-	inspect, err := r.cli.ContainerExecInspect(ctx, execCreated.ID)
-	if err != nil {
-		return ExecResult{}, fmt.Errorf("sandbox: exec inspect in container %s: %w", id, err)
+	// A single inspect immediately after StdCopy returns is not reliable:
+	// under a loaded daemon it can still report Running: true / ExitCode: 0
+	// for a script that has not actually finished, silently returning exit 0
+	// for a script that actually failed. Poll until the daemon reports the
+	// exec has stopped running, bounded by ctx, before trusting ExitCode.
+	var exitCode int
+	for {
+		inspect, err := r.cli.ContainerExecInspect(ctx, execCreated.ID)
+		if err != nil {
+			return ExecResult{}, fmt.Errorf("sandbox: exec inspect in container %s: %w", id, err)
+		}
+		if !inspect.Running {
+			exitCode = inspect.ExitCode
+			break
+		}
+		select {
+		case <-ctx.Done():
+			return ExecResult{}, fmt.Errorf("sandbox: exec in container %s: %w", id, ctx.Err())
+		case <-time.After(10 * time.Millisecond):
+		}
 	}
 
 	return ExecResult{
 		Stdout:   stdout.Bytes(),
 		Stderr:   stderr.Bytes(),
-		ExitCode: inspect.ExitCode,
+		ExitCode: exitCode,
 	}, nil
 }
 
