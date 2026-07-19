@@ -12,6 +12,3 @@ __pycache__/
 *.egg-info/
 .venv/
 build/
-
-# Claude Code agent worktrees
-.claude/worktrees/
