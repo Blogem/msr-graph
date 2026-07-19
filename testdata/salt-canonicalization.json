@@ -1,0 +1,72 @@
+{
+  "cases": [
+    {
+      "name": "flibe-real-nist-row",
+      "raw_salt": "BeF2-LiF",
+      "raw_composition": "34.0-66.0",
+      "form_code": "P1",
+      "canonical": "BeF2-LiF | 34.0-66.0",
+      "components": ["BeF2", "LiF"],
+      "mole_percent": [34.0, 66.0],
+      "salt_iri": "msrd:salt-BeF2-LiF-34.0-66.0",
+      "is_range": false
+    },
+    {
+      "name": "flibe-lockstep-reorder",
+      "raw_salt": "LiF-BeF2",
+      "raw_composition": "34.0-66.0",
+      "form_code": "P1",
+      "canonical": "BeF2-LiF | 66.0-34.0",
+      "components": ["BeF2", "LiF"],
+      "mole_percent": [66.0, 34.0],
+      "salt_iri": "msrd:salt-BeF2-LiF-66.0-34.0",
+      "is_range": false
+    },
+    {
+      "name": "flinak-already-sorted",
+      "raw_salt": "KF-LiF-NaF",
+      "raw_composition": "42.0-46.5-11.5",
+      "form_code": "P1",
+      "canonical": "KF-LiF-NaF | 42.0-46.5-11.5",
+      "components": ["KF", "LiF", "NaF"],
+      "mole_percent": [42.0, 46.5, 11.5],
+      "salt_iri": "msrd:salt-KF-LiF-NaF-42.0-46.5-11.5",
+      "is_range": false
+    },
+    {
+      "name": "ternary-reorder",
+      "raw_salt": "LiF-NaF-KF",
+      "raw_composition": "46.5-11.5-42.0",
+      "form_code": "P1",
+      "canonical": "KF-LiF-NaF | 42.0-46.5-11.5",
+      "components": ["KF", "LiF", "NaF"],
+      "mole_percent": [42.0, 46.5, 11.5],
+      "salt_iri": "msrd:salt-KF-LiF-NaF-42.0-46.5-11.5",
+      "is_range": false
+    },
+    {
+      "name": "pure-lif",
+      "raw_salt": "LiF",
+      "raw_composition": "100",
+      "form_code": "P1",
+      "canonical": "LiF | 100.0",
+      "components": ["LiF"],
+      "mole_percent": [100.0],
+      "salt_iri": "msrd:salt-LiF-100.0",
+      "is_range": false
+    },
+    {
+      "name": "isotherm-range-kf-zrf4",
+      "raw_salt": "KF-ZrF4",
+      "raw_composition": "0.0-33.3 ZrF4",
+      "form_code": "I3",
+      "canonical": "KF-ZrF4 | ZrF4 0.0-33.3",
+      "components": ["KF", "ZrF4"],
+      "vary_component": "ZrF4",
+      "vary_min": 0.0,
+      "vary_max": 33.3,
+      "salt_iri": "msrd:salt-KF-ZrF4-ZrF4-0.0-33.3",
+      "is_range": true
+    }
+  ]
+}
