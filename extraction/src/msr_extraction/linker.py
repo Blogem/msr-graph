@@ -400,17 +400,16 @@ def link_segment(
         if not _is_free(start, end):
             continue
 
-        # Layer 4: bounded rapidfuzz fallback. Uses the chemistry-specific
-        # minimum-token-length knob (not `config.fuzzy_min_token_length`)
-        # since every span reaching this loop is already a formula-shaped
-        # candidate span (never general prose) -- this is what makes a
-        # short 3-char token like "LiF"/"BeF" eligible without lowering the
-        # general fuzzy floor (task 3.2/4.1).
+        # Layer 4: bounded rapidfuzz fallback. `config.fuzzy_min_token_length`
+        # defaults to the chemistry-token floor of 3 -- since every span
+        # reaching this loop is already a formula-shaped candidate span
+        # (never general prose), this makes a short 3-char token like
+        # "LiF"/"BeF" eligible (task 3.2/4.1).
         fuzzy_result = fuzzy_link(
             surface,
             known_labels,
             config.fuzzy_threshold,
-            config.fuzzy_min_token_length_chemistry,
+            config.fuzzy_min_token_length,
         )
         if fuzzy_result is not None:
             target_iri, kind, score = fuzzy_result

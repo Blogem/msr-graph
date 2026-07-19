@@ -39,15 +39,13 @@ class Config:
     deepseek_api_key: str = ""
     llm_model_extract: str = "deepseek-v4-flash"
     fuzzy_threshold: float = 90.0
-    fuzzy_min_token_length: int = 4
-    # Dedicated minimum-token-length knob for the layer-4 fuzzy fallback when
-    # applied to formula-shaped candidate spans (chunk 6, task 3.2/4.1):
-    # `fuzzy_min_token_length`'s default of 4 would disqualify short but
-    # legitimate 3-char chemistry tokens like "LiF"/"BeF" -- since the fuzzy
-    # layer only ever runs on already formula-shaped candidate spans (never
-    # general prose), a lower floor here doesn't broaden precision risk the
-    # way lowering the general knob would.
-    fuzzy_min_token_length_chemistry: int = 3
+    # The layer-4 fuzzy fallback's minimum-token-length floor (chunk 6, task
+    # 3.2/4.1). `fuzzy_link` has exactly one call site, and that call site
+    # only ever runs on already formula-shaped candidate spans (never general
+    # prose) -- so a floor of 3 (the intended chemistry-token minimum, per
+    # design.md D5) doesn't broaden precision risk the way lowering a
+    # general-prose fuzzy floor would.
+    fuzzy_min_token_length: int = 3
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> Config:
@@ -72,12 +70,6 @@ class Config:
             ),
             fuzzy_min_token_length=int(
                 env.get("MSR_FUZZY_MIN_TOKEN_LENGTH", cls.fuzzy_min_token_length)
-            ),
-            fuzzy_min_token_length_chemistry=int(
-                env.get(
-                    "MSR_FUZZY_MIN_TOKEN_LENGTH_CHEMISTRY",
-                    cls.fuzzy_min_token_length_chemistry,
-                )
             ),
         )
 
