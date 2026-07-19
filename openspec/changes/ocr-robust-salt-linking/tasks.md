@@ -26,9 +26,9 @@
 - [ ] 5.2 Formula-normalizer tests: `LiF-BeF, (66-34 mole %)` → `msrd:salt-BeF2-LiF-34.0-66.0`; `mole %`/`mol %` parsing; unknown-component form → unresolved; the shared `testdata/salt-canonicalization.json` still passes unchanged
 - [ ] 5.3 Matcher/linker tests on real-OCR fixture sentences (comma-subscript compounds → concept, e.g. `BeF,`→beryllium-fluorides; composed OCR salt → loaded individual at layer 3; ternary/quaternary `LiF-BeF,-ThF,-UF,`; precedence preserved)
 - [ ] 5.4 Bounded-fuzzy tests for short chemistry tokens: accept-above-threshold / no-link-below-threshold
-- [ ] 5.5 Precision harness: add real-OCR-derived composed-salt cases (from the actual corpus normalized text) expecting the loaded salt IRIs to the gold fixture; precision ≥ 0.90 gate holds, recall reported not gated
+- [ ] 5.5 Precision harness: add real-OCR-derived composed-salt cases drawn from MULTIPLE curated docs (e.g. `LiF-BeF, (66-34 mol %)`, `LiF-BeF,-ThF, (72-16-12 mol %)`, `LiF-UF, (73-27 mol %)`, `NaF-ZrF, (53-47 mol %)`) expecting the loaded salt IRIs; precision ≥ 0.90 gate holds, recall reported not gated
 - [ ] 5.6 Regression: full chunk-6 extraction suite stays green with the real-OCR salt cases now covered
 
 ## 6. Manual acceptance re-run
 
-- [ ] 6.1 Rebuild the extraction image and re-run `link` over the real ORNL-TM-2316 corpus; confirm `layer3 > 0`, the anchor `LiF-BeF2` (OCR `LiF-BeF, … mole %`) resolves to `msrd:salt-BeF2-LiF-34.0-66.0`, spot-check `mentions.jsonl` + the `msr:Mention` triples in `urn:msr:data`, and confirm re-run idempotency — then re-check `ner-entity-linking` task 11.1
+- [ ] 6.1 Rebuild the extraction image and re-run `link` over the full curated corpus; confirm `layer3 > 0` in every document (currently 0 corpus-wide), the anchor `LiF-BeF2` (OCR `LiF-BeF, … mol %`) resolves to `msrd:salt-BeF2-LiF-34.0-66.0`, spot-check `mentions.jsonl` + the `msr:Mention` triples in `urn:msr:data`, and confirm re-run idempotency — then re-check `ner-entity-linking` task 11.1

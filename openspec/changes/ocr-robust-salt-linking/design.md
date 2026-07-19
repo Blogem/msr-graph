@@ -7,7 +7,8 @@ Chunk 6 (`ner-entity-linking`) shipped a layered, precision-biased linker (exact
 The cause is corpus OCR that the synthetic fixture never modeled:
 
 - Subscript digits are OCR'd as commas/periods: `BeF2`→`BeF,`, `ThF4`→`ThF,`, `UF4`→`UF,` — e.g. `"LiF-BeF,-ThF,-UF, (65-28-5-1-1 mole %)"`, `"LiF-BeF, (66-34 mole %)"`.
-- Compositions are written `mole %` (29 occurrences), never `mol%` (0).
+- Compositions are written `mol %` (528×, spaced) or `mole %` (160×), overwhelmingly rather than the clean `mol%` (19×) — corpus-wide counts.
+- A no-DeepSeek `link` run over all 11 curated documents confirmed the failure is **universal**: `layer3=0` in every document (not an ORNL-TM-2316 quirk). The salt forms span binary through quaternary and multiple compounds (`LiF-BeF,`, `LiF-BeF,-ThF,`, `LiF-UF,`, `NaF-ZrF,`, plus `BeF,`/`UF,`/`ThF,`/`ZrF,`/`PuF,`/`KF,`/`NaF,` comma-subscript compounds), so both the reconstruction and the test fixtures must be catalog-anchored and multi-document, not single-example.
 
 So exact-match against `voc:flibe`'s `"LiF-BeF2"` altLabel fails (`"LiF-BeF,"` ≠ `"LiF-BeF2"`), the formula normalizer fails (its candidate regex/parse want real subscript digits and a `mol%` tail), and the bounded fuzzy layer is disqualified by `fuzzy_min_token_length = 4` (the tokens `LiF`/`BeF` are 3 chars). Concepts/compounds still link (`LiF`→lithium-fluorides, `viscosity`, `MSRE`), and Flash even recovered a couple of garbled forms — but the salt catalog is unused.
 
