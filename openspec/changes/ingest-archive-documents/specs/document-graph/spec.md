@@ -19,5 +19,5 @@ Document IRIs SHALL be deterministic and keyed by report number (`msrd:{report#}
 - **THEN** the `urn:msr:data` triple count after the second run equals the count after the first run
 
 #### Scenario: Re-asserting a seed Document is a no-op
-- **WHEN** the ingest writes `msrd:ORNL-TM-2316` (already present in the seed A-Box)
-- **THEN** no duplicate node is created and the graph is unchanged for that document
+- **WHEN** the ingest writes `msrd:ORNL-TM-2316` (already typed `a msr:Document` in the seed A-Box, which deliberately carries no hand-authored label/identifier/date so the manifest is the single source of Document metadata)
+- **THEN** no duplicate node is created and no conflicting or duplicate metadata triples arise — the node ends with exactly one `rdfs:label` (the manifest's), and a repeat ingest leaves `urn:msr:data` unchanged

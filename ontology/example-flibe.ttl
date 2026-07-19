@@ -58,4 +58,11 @@ msrd:salt-BeF2-LiF-34.0-66.0-c-LiF a msr:Constituent ;
 
 # provenance
 msrd:nist-srd27   a msr:Dataset  ; rdfs:label "NIST Molten Salts DB (SRD 27)" ; dcterms:identifier "doi:10.18434/mds2-2298" .
-msrd:ORNL-TM-2316 a msr:Document ; rdfs:label "Physical Properties of MSR Fuel, Coolant, and Flush Salts (Cantor, 1968)" ; dcterms:identifier "ORNL-TM-2316" .
+# Document provenance node. Typed here so the seed A-Box is self-consistent
+# (it is the range of msr:citedIn above) and re-asserting `a msr:Document`
+# during `make ingest` is a set-semantics no-op. Descriptive metadata
+# (rdfs:label, dcterms:identifier, dcterms:date) is owned by the parsed
+# msr-archive manifest and written by chunk 5's ingest — it is deliberately
+# NOT hand-authored here, so a divergent hand-written label cannot coexist
+# with the manifest's (chunk 5 / ingest-archive-documents, decision D6).
+msrd:ORNL-TM-2316 a msr:Document .
