@@ -362,6 +362,13 @@ func TestSandboxIntegration(t *testing.T) {
 		}
 		label := sandbox.SandboxLabel + "=1"
 
+		// Prior subtests' Runs replenish asynchronously (design D1/D8), so
+		// the pool may not yet be back to cfg.PoolSize labelled containers
+		// at this point -- wait for it to settle before taking the "before"
+		// snapshot, exactly as the post-Run snapshot below already does.
+		waitFor(t, 5*time.Second, func() bool {
+			return len(dockerContainerIDsWithLabel(t, label)) == cfg.PoolSize
+		})
 		before := dockerContainerIDsWithLabel(t, label)
 		if len(before) != cfg.PoolSize {
 			t.Fatalf("expected %d labelled container(s) before Run, got %v", cfg.PoolSize, before)
