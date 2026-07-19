@@ -57,35 +57,50 @@ A pure `internal`-style package (e.g. `cmd/loader` sub-package or `internal/nist
 2. reorders composition values in lockstep with the components,
 3. formats each mole-% to one decimal (`34` → `34.0`).
 
-Canonical string form: `BeF2-LiF | 66.0-34.0`; locator form uses `|` (`nist-srd27/density#BeF2-LiF|66.0-34.0`); IRI/slug form replaces `/ # |` with `-` (`msrd:salt-BeF2-LiF-66.0-34.0`, measurement `msrd:m-nist-srd27-density-BeF2-LiF-66.0-34.0`, constituent `{salt-iri}-c-{compound}`) — identical to the seed A-Box.
+Canonical string form: `BeF2-LiF | 34.0-66.0` (the real vendored row is `BeF2-LiF,34.0-66.0,P1,800,1080,,2.413,-4.88E-4` — components are already byte-canonical, so no reorder is needed); locator form uses `|` (`nist-srd27/density#BeF2-LiF|34.0-66.0`); IRI/slug form replaces `/ # |` with `-` (`msrd:salt-BeF2-LiF-34.0-66.0`, measurement `msrd:m-nist-srd27-density-BeF2-LiF-34.0-66.0`, constituent `{salt-iri}-c-{compound}`) — identical to the seed A-Box.
 
 The raw→canonical cases are frozen in **`testdata/salt-canonicalization.json`** (this chunk authors it). Chunk 6's Python normalizer must pass the same file — the drift guard for the deliberately-duplicated rule. The fixture covers the canonical _string + ordered mole-%_ (what makes Go and Python land on one IRI), not range semantics.
 
 - _Why byte-wise sort?_ Deterministic and reproducible in both Go and Python with no locale/collation dependency; the FLiBe seed (`BeF2-LiF`) and FLiNaK (`KF-LiF-NaF`) fall out correctly.
 
-### D4 — Positional-vs-range mole-% disambiguation
+### D4 — Positional-vs-range mole-% disambiguation (equation-form code drives interpretation)
 
-The `Composition range` column is positional to the formula but may encode a single composition or a range. Rule (per the plan):
+Confirmed on the real vendored files: the `Composition range` column's shape is not ambiguous per row — the **NIST `Data type` code** (see D5) tells the loader which interpretation applies, so the loader dispatches on the code rather than guessing from the values:
 
-- value count **==** component count **and** values sum to ≈100 (within a small tolerance) → **positional single composition**; each value is that component's `moleFraction` (as a fraction, `66.0` → `0.66`).
-- otherwise interpretable as a per-component min–max range → **range semantics**; emit `moleFractionMin` / `moleFractionMax` per constituent.
-- neither → **flag for manual review** (row skipped, surfaced in the run summary and as a non-zero signal, not silently dropped).
+- **Isotherm codes (`I1`–`I4`)** → the row is a **composition isotherm**: the `Composition range` column carries a per-component range plus the varying component's name, e.g. `0.0-33.3 ZrF4` (trailing token names the varying compound; `0.0-33.3` is its mole-% range). Emit `moleFractionMin`/`moleFractionMax` per constituent — the varying component `0.0`→`0.333`, the complement `0.667`→`1.0` — and set `validTempMin = validTempMax = Tmin` (a single temperature; `Tmax` is empty on isotherm rows). See D5a for the range-composition salt and IRI shape.
+- **Every other code** (`P1`–`P4`, `+E`, `E1`, `E2`, `DP`) → the row is **temperature-dependent** with a **positional single composition**: each value is that component's `moleFraction` (as a fraction, `66.0` → `0.66`). Values SHOULD sum to ≈100 within a **±2.0 mol% tolerance** — wide enough to admit the real `26.04-72.96` row (sums to 99.0) without misclassifying it. A positional row that fails the tolerance check is **flagged for manual review and skipped**, not silently dropped.
 
-The exact NIST range encoding is confirmed on first parse (see Open Questions); the heuristic and the review-flag path are pinned by tests regardless.
+This replaces the earlier value-shape heuristic (count==components & sum≈100 vs. range) drafted before the real files were inspected: composition ranges turn out to appear only on `I*` rows, so the equation-form code alone disambiguates and the manual-review path is retained purely as a safety net for malformed positional rows.
 
-### D5 — Equation-form mapping, fail-loud on unknown codes
+### D5 — Equation-form mapping, full documented code set, fail-loud only outside it
 
-NIST `Data type` code → `msr:EquationForm` individual:
+The vendored fluoride subset turned out to carry more than the originally-assumed 5 codes: `E1` (pure BeF2 viscosity) and `I2`/`I3`/`I4` (KF-ZrF4 / NaF-ZrF4 composition isotherms) also appear. Rather than skip them, this chunk models the **full documented NIST equation-form set** from `molten-salt-data.pdf`, so the TBox and loader cover every code the dataset defines, not just the subset seen in chunk 1's seed. `T` is in Kelvin throughout; the exponential forms carry the `8.31441` gas constant; `C` is the isotherm's independent composition variable (mole % of the named varying component, see D5a):
 
-| NIST code | EquationForm        | Coefficient meaning              |
-| --------- | ------------------- | -------------------------------- |
-| `P1`      | `msr:Linear`        | `c0 + c1·T`                      |
-| `P2`      | `msr:Polynomial2`   | `c0 + c1·T + c2·T²`              |
-| `P3`      | `msr:Polynomial3`   | `c0 + c1·T + c2·T³`              |
-| `+E`      | `msr:Arrhenius`     | `c0·exp(c1/T)`                   |
-| `DP`      | `msr:DiscretePoint` | `c0` = value, `c1` = temperature |
+| NIST code | EquationForm             | Formula                                | Independent variable                       | Coefficients |
+| --------- | ------------------------ | --------------------------------------- | ------------------------------------------- | ------------- |
+| `DP`      | `msr:DiscretePoint`      | value `D1` at `T = D2` K                | temperature (single point)                  | `c0`=value, `c1`=temperature |
+| `+E`      | `msr:Arrhenius`          | `c0·exp(c1/(8.31441·T))`                | temperature                                 | `c0,c1` |
+| `E1`      | `msr:ExtendedArrhenius1` | `c0·exp((c1/(8.31441·T)) + c2/T²)`      | temperature                                 | `c0,c1,c2` |
+| `E2`      | `msr:ExtendedArrhenius2` | `c0·exp(c1/(8.31441·(T−c2)))`           | temperature                                 | `c0,c1,c2` |
+| `P1`      | `msr:Linear`             | `c0 + c1·T`                             | temperature                                 | `c0,c1` |
+| `P2`      | `msr:Polynomial2`        | `c0 + c1·T + c2·T²`                     | temperature                                 | `c0..c2` |
+| `P3`      | `msr:Polynomial3`        | `c0 + c1·T + c2·T² + c3·T³`             | temperature                                 | `c0..c3` |
+| `P4`      | `msr:Polynomial4`        | `c0 + c1·T + c2·T² + c3·T³ + c4·T⁴`     | temperature                                 | `c0..c4` |
+| `I1`      | `msr:Isotherm1`          | `c0 + c1·C`                             | composition (mol % of the named component)  | `c0,c1` |
+| `I2`      | `msr:Isotherm2`          | `c0 + c1·C + c2·C²`                     | composition                                 | `c0..c2` |
+| `I3`      | `msr:Isotherm3`          | `c0 + c1·C + c2·C² + c3·C³`             | composition                                 | `c0..c3` |
+| `I4`      | `msr:Isotherm4`          | `c0 + c1·C + c2·C² + c3·C³ + c4·C⁴`     | composition                                 | `c0..c4` |
 
-An unrecognized code is a fatal error (the input is out of the documented contract). Forms are verified against `molten-salt-data.pdf` on ingest (open item 3).
+Note: an earlier draft of this table had `+E → c0·exp(c1/T)`, omitting the `8.31441` gas-constant divisor documented in `molten-salt-data.pdf`; corrected above.
+
+An unrecognized code — one **outside this full 12-entry set** — is a fatal error (genuinely out of the documented contract; previously any code beyond the 5-code subset was treated as unknown, which would have wrongly rejected `E1`/`I2`/`I3`/`I4`). Forms are verified against `molten-salt-data.pdf` on ingest (open item 3).
+
+### D5a — Isotherm rows model as range-composition salts
+
+Composition-isotherm rows (`I1`–`I4`) describe a family of measurements swept across a composition range at a single temperature, not one salt at one composition — so they need their own salt and IRI shape, distinct from point salts:
+
+- **Range-composition salt & constituents**: the varying component's constituent gets `moleFractionMin`/`moleFractionMax` (e.g. `0.0`/`0.333` for `ZrF4` in `KF-ZrF4, 0.0-33.3 ZrF4`), and the complement gets the reciprocal range (`0.667`/`1.0`). The measurement carries `msr:compositionComponent` naming the varying compound, and each `EquationForm` individual carries `msr:independentVariable` (`temperature` or `composition`) so a consumer can tell which axis is swept without inspecting the NIST code. Isotherm measurements set `validTempMin = validTempMax` (the single temperature the sweep was run at); `Tmax` is not populated.
+- **Range-salt IRI rule**: canonical form appends the varying component and its range after the formula — `KF-ZrF4 | ZrF4 0.0-33.3` — locator `nist-srd27/{property}#KF-ZrF4|ZrF4=0.0-33.3`, salt IRI `msrd:salt-KF-ZrF4-ZrF4-0.0-33.3`. Same `/ # |` → `-` slugging rule as point salts, extended with the varying-component name and `=`/`-` separators for the range. Only `KF-ZrF4` and `NaF-ZrF4` are in scope for isotherms in the vendored fluoride subset.
 
 ### D6 — Fluoride-subset filter
 
@@ -105,7 +120,7 @@ A flat vendored allowlist — a **committed file at `ontology/qudt-units.json`**
 
 ### D8 — DATA_SCOPE open items recorded from the real parse
 
-On completion `loader nist` prints a summary: rows read / kept / out-of-scope / flagged per property file, the distinct canonical salts loaded, and the equation forms seen. Items 1–3 in `DATA_SCOPE.md` are updated with the actual numbers (fluoride counts per file, FLiNaK + FLiBe-66-34 coolant presence confirmed, equation forms verified). An integration test asserts the FLiBe coolant salt and FLiNaK are present.
+On completion `loader nist` prints a summary: rows read / kept / out-of-scope / flagged per property file, the distinct canonical salts loaded, and the equation forms seen. Items 1–3 in `DATA_SCOPE.md` are updated with the actual numbers (fluoride counts per file, FLiNaK + FLiBe coolant (`BeF2-LiF` 34.0-66.0 mol%) presence confirmed, equation forms verified). An integration test asserts the FLiBe coolant salt and FLiNaK are present.
 
 ### D9 — Test strategy
 
@@ -115,11 +130,11 @@ Pure Go table-driven unit tests (no GraphDB): parser/canonicalizer against the s
 
 - **Seed `PUT` after nist `INSERT` wipes NIST triples** → loader is strictly additive (`INSERT DATA`, never `PutGraph`); documented seed→nist ordering; combined target chains them; both idempotent so a re-run repairs state.
 - **Go/Python canonicalization drift** → shared `testdata/salt-canonicalization.json` both test suites must pass; this chunk authors it, chunk 6 consumes it.
-- **NIST composition range encoding unknown until first parse** → positional-vs-range heuristic with a tolerance and an explicit manual-review flag; ambiguous rows surfaced, not silently dropped; exact encoding confirmed on ingest.
+- **NIST composition range encoding — resolved** → the real parse confirmed ranges appear only on isotherm (`I*`) rows as `X-Y COMPONENT`; every other code carries a positional single composition. The ±2.0 mol% tolerance and the manual-review flag remain as a safety net for malformed positional rows (see D4).
 - **`unit:S-PER-CentiM` (and peers) may not be a canonical QUDT IRI** → the vendored allowlist is authoritative for the POC (referenced, not dereferenced); a wrong spelling is a one-line fix and the fail-loud guard surfaces mismatches immediately.
 - **Invalid / unknown unit at ingest** → **fail loud, by design.** For this chunk fail-loud is the correct terminal behavior: the loader emits a fixed set of 4 known units, so an unknown one is a code bug, not new knowledge. Downstream handling is graded but deliberately never a silent auto-resolve: chunk 7's DeepSeek unit-string→QUDT mapping is validated against this same allowlist and **rejected** on an unknown IRI (the LLM maps *to* known units, cannot invent them); genuinely new units enter only via a **human-reviewed** proposal in the chunks 8→9 evolution loop ("LLM-asserted, reviewer-verified"). An auto-growing alias/alternative-spelling table is explicitly out of scope — expanding the allowlist is a manual vendored edit or a reviewed evolution change.
 - **NIST dataset revisions** → pin the DOI (`10.18434/mds2-2298`); the vendored copy under `data/nist/` is the frozen input, so re-runs are reproducible independent of upstream.
-- **Positional-vs-range misclassification** → tolerance threshold is tunable and pinned by tests; misclassified rows either land as review-flagged or are caught by the FLiBe/FLiNaK presence assertions.
+- **Positional-vs-range misclassification** → resolved by dispatching on the equation-form code rather than the value shape (D4), so there is no ambiguity to misclassify; the ±2.0 mol% tolerance on positional rows is pinned by tests and misclassified rows either land as review-flagged or are caught by the FLiBe/FLiNaK presence assertions.
 
 ## Migration Plan
 
@@ -127,6 +142,7 @@ Additive on top of chunk 1. Bootstrap order becomes `make up` → `make load-see
 
 ## Open Questions
 
-- **NIST composition range encoding** — confirm on first parse how ranges are written in the `Composition range` column (min–max pairs vs a varying single value), then finalize the D4 heuristic. The manual-review flag guarantees ambiguous rows are surfaced meanwhile.
+- **NIST composition range encoding** — _resolved_ by inspecting the real vendored files: ranges are written as `X-Y COMPONENT` (e.g. `0.0-33.3 ZrF4`), and appear only on isotherm rows (`I1`–`I4`); every other equation-form code carries a positional single composition instead. The code (not the value shape) drives the D4 dispatch; the manual-review flag remains for positional rows that fail the sum check.
+- **Equation forms** — _resolved_ by inspecting the real vendored files: the fluoride subset uses more than the originally-assumed 5 codes. The full documented set from `molten-salt-data.pdf` is `P1`, `P2`, `P3`, `P4`, `+E`, `E1`, `E2`, `DP`, `I1`, `I2`, `I3`, `I4` (D5); the subset actually seen is `P1`/`P2`/`P3`/`+E`/`E1`/`DP`/`I2`/`I3`/`I4`. Only a code outside the full 12-entry set is now a fatal "unknown code" error.
 - **`data/nist/` file names** — upstream serves `density-csv.txt`, `conductivity-csv.txt`, `s-tension-csv.txt`, `viscosity-csv.txt`; confirm exact names/headers when vendoring and pin them in the loader's file manifest.
 - **Allowlist location** — _decided:_ `ontology/qudt-units.json`, a **committed vendored file** (not an embedded Go table, not tracked in the graph; see D7). `ontology/` is already committed and sits next to the TBox that declares `msr:canonicalUnit`, and the name is accurate — QUDT reference data reused by chunk 8, not NIST data. No `.gitignore` change is needed since `ontology/` is already tracked.
