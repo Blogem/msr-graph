@@ -18,6 +18,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from urllib.parse import urlencode
 
 from msr_extraction.config import Config
 
@@ -125,10 +126,19 @@ class GraphReader:
         # to import this module (mirrors sparql.py's convention).
         import httpx
 
+        # `build_query_params` returns a list of tuples (not a Mapping),
+        # since `default-graph-uri` must be repeated once per core graph.
+        # httpx's `data=` parameter expects a Mapping and mishandles a list
+        # of tuples as the request content stream, so the params must be
+        # form-encoded explicitly and sent via `content=` instead.
+        body = urlencode(self.build_query_params(query))
         response = httpx.post(
             self.query_endpoint,
-            data=self.build_query_params(query),
-            headers={"Accept": "application/sparql-results+json"},
+            content=body,
+            headers={
+                "Content-Type": "application/x-www-form-urlencoded",
+                "Accept": "application/sparql-results+json",
+            },
             timeout=self.timeout,
         )
         response.raise_for_status()
