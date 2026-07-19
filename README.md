@@ -192,3 +192,88 @@ it.
 it host-root-equivalent — sandbox hardening protects against the untrusted
 *script*, not against a compromised server process. This is an accepted,
 documented ceiling for a single-host proof of concept.
+
+## Chat API (`POST /api/chat`)
+
+The grounded-analysis agent (`internal/agent`) is reachable over one HTTP
+endpoint, `POST /api/chat`. The endpoint is **stateless**: the request body
+carries the full conversation so far, OpenAI-style, and the server holds no
+server-side session — every request is answered purely from its own body
+plus the read-only stores (GraphDB + SQLite). This request/response shape
+is the interface a future browser frontend consumes; until then, exercise
+it with the `cmd/chatcli` playground (below).
+
+```json
+{
+  "messages": [
+    { "role": "user", "content": "What is the density of FLiBe at 900 K?" }
+  ]
+}
+```
+
+`role` is `"user"` or `"assistant"`; both `role` and `content` are required
+on every message. A malformed body (missing/empty `messages`, or a message
+missing `role`/`content`) gets a client error response and no agent turn is
+started.
+
+The response is a **Server-Sent Events** stream, not a single JSON payload —
+consume it with `fetch` streaming rather than the native `EventSource` API,
+since `EventSource` cannot send a POST body. Nothing about a turn is
+persisted: the trace is ephemeral and exists only for the lifetime of the
+stream, so an interrupted connection needs no server-side recovery — the
+client simply re-sends the conversation.
+
+### SSE trace-event contract
+
+Each SSE frame carries one typed event (`event: <type>` / `data: <json>`).
+Every trace-event type the agent loop can emit is represented in the
+stream:
+
+| `type` | Payload fields | Meaning |
+| --- | --- | --- |
+| `text` | `text` | Assistant text tokens (commentary or the final answer). |
+| `tool_call` | `tool_call.id`, `tool_call.name`, `tool_call.arguments` | The tool name and raw JSON arguments the model requested. |
+| `tool_result` | `tool_result.name`, `tool_result.content`, `tool_result.truncated` | A tool's result, inlined for the trace. |
+| `script_run` | `script_run.source`, `script_run.stdout`, `script_run.stderr`, `script_run.exit_code`, `script_run.sandbox_id`, `script_run.truncated` | One `run_python` execution: the script that ran, its captured stdout/stderr, exit code, and which sandbox container ran it. |
+| `provenance` | `provenance.data_locators`, `provenance.cited_in`, `provenance.dataset_dois`, `provenance.ontology_version` | Grounding provenance for the answer: the measurement's `dataLocator`(s), citing document(s), dataset DOI(s), and the ontology version used. |
+| `done` | *(none)* | Marks the end of the turn, successful or not. |
+| `error` | `error` | A turn-ending error (e.g. an LLM call failure or the max-iterations guard tripping). |
+
+A terminating `done` event always closes every turn, including error
+turns. Large `tool_result` and `script_run` payloads are truncated inline
+(their `truncated` field is set) rather than blowing up the stream, but
+truncation only ever applies to what is shown in the trace — the full
+result is still what was fed back to the model.
+
+### LLM configuration (DeepSeek)
+
+The `server` service talks to DeepSeek V4 Pro through an OpenAI-compatible
+client, configured by three environment variables (`docker-compose.yml`):
+
+- `DEEPSEEK_BASE_URL` — the OpenAI-compatible base URL (default
+  `https://api.deepseek.com`).
+- `LLM_MODEL_ANALYSIS` — the analysis-agent model id (default
+  `deepseek-v4-pro`).
+- `DEEPSEEK_API_KEY` — the DeepSeek API secret. This is a **runtime
+  secret only**: it is sourced from the host environment
+  (`DEEPSEEK_API_KEY=... make up`, or your shell's exported env) and has no
+  default. It must never be committed to the repo or baked into an image.
+
+### Manual smoke-test checklist
+
+With the stack up (`make up` + `make load-nist`) and `DEEPSEEK_API_KEY` set
+in the environment, exercise the agent by hand with `make chat` (an
+interactive REPL against a running `/api/chat`) or `make demo-density` (a
+canonical one-shot question). Confirm, with the full trace visible for
+each:
+
+- **Density answer.** "density of FLiBe (LiF-BeF₂ 66-34 mol%) at 900 K"
+  resolves to ≈ **1.974 g·cm⁻³**, and the trace shows a `script_run` event
+  (a `run_python` execution) immediately preceding that number — the
+  answer comes from the sandboxed script, not model arithmetic.
+- **Out-of-range refusal.** A temperature outside the measurement's valid
+  range is refused or explicitly flagged in the response, never silently
+  extrapolated into a number presented as valid.
+- **Comparative query.** A question like "lowest-viscosity fluoride salt
+  at 700 K" is answered by one script that aggregates over the mounted
+  database, not by multiple ad hoc lookups.

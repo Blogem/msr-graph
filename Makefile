@@ -18,8 +18,13 @@
 #   make test       # go test ./... with the GraphDB and sandbox Docker
 #                   # acceptance gates enabled.
 #   make down       # stop the stack and remove its volumes.
+#   make chat       # manual-verification REPL for POST /api/chat (cmd/chatcli),
+#                   # against the published http://localhost:8080/api/chat —
+#                   # run this against a stack already brought up with `make up`.
+#   make demo-density # one-shot chatcli run of the canonical FLiBe density
+#                     # question, for a quick smoke test of the same endpoint.
 
-.PHONY: up down load-seed load-nist ingest link test
+.PHONY: up down load-seed load-nist ingest link test chat demo-density
 
 # GraphDB's published host port (see docker-compose.yml, service "graphdb").
 GRAPHDB_URL ?= http://localhost:7200
@@ -89,3 +94,11 @@ link:
 test:
 	@echo "==> running go test with the GraphDB and sandbox Docker acceptance gates enabled (GRAPHDB_REQUIRED=1, SANDBOX_DOCKER_REQUIRED=1)"
 	GRAPHDB_REQUIRED=1 SANDBOX_DOCKER_REQUIRED=1 go test ./...
+
+chat:
+	@echo "==> starting chatcli REPL against http://localhost:8080/api/chat (run 'make up' first)"
+	go run ./cmd/chatcli
+
+demo-density:
+	@echo "==> running chatcli one-shot: canonical FLiBe density question"
+	go run ./cmd/chatcli -q "What is the density of FLiBe (the LiF-BeF2 66-34 mol% melt) at 900 K?"
