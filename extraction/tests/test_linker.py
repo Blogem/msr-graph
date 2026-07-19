@@ -559,7 +559,12 @@ class TestBoundedFuzzyShortChemistryTokens:
         matcher = build_matcher(known)
         seg = _segment("ORNL-TM-2316", text)
 
-        low_config = Config(fuzzy_min_token_length=3)
+        # Explicitly pin the dedicated chemistry knob (default 3) rather
+        # than relying on it coincidentally matching the default -- this is
+        # what `link_segment`'s layer-4 call actually reads for
+        # formula-candidate spans (see linker.py); `fuzzy_min_token_length`
+        # is left untouched to show it has no bearing here.
+        low_config = Config(fuzzy_min_token_length_chemistry=3)
         records = link_segment(seg, matcher, known, known_iris, low_config)
         fuzzy = next((r for r in records if r.layer == 4), None)
         assert fuzzy is not None, f"expected a layer-4 fuzzy link, got {records!r}"
@@ -575,7 +580,14 @@ class TestBoundedFuzzyShortChemistryTokens:
         matcher = build_matcher(known)
         seg = _segment("ORNL-TM-2316", text)
 
-        high_config = Config(fuzzy_min_token_length=6)
+        # Layer 4 eligibility for formula-candidate spans is governed by the
+        # dedicated `fuzzy_min_token_length_chemistry` knob (default 3), not
+        # the general `fuzzy_min_token_length` (default 4) -- see
+        # `link_segment`'s layer-4 call in linker.py. Raising the chemistry
+        # knob above the 3-char "BeF" token's length is what disables the
+        # fuzzy fallback here; leaving the general knob untouched confirms
+        # it has no bearing on formula-span eligibility.
+        high_config = Config(fuzzy_min_token_length_chemistry=6)
         records = link_segment(seg, matcher, known, known_iris, high_config)
 
         assert not any(r.layer == 4 for r in records)
