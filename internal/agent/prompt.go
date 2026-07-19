@@ -408,9 +408,12 @@ func renderPrompt(classes []schemaClass, properties []schemaProperty, concepts [
 		"properties, the SKOS controlled vocabulary, and the salt catalog, each " +
 		"sorted deterministically by IRI. It contains no measurement coefficients, " +
 		"mentions, or evidence -- fetch those with sparql_query/sql_query as needed. " +
-		"Ground a mention via its skos:prefLabel/skos:altLabel or a salt's rdfs:label, " +
-		"follow skos:closeMatch to the msr:MoltenSalt individual, then read its " +
-		"msr:PropertyMeasurement.\n\n")
+		"Ground a mention by matching its text to a skos:prefLabel/skos:altLabel " +
+		"(a salt also carries rdfs:label), then follow skos:closeMatch -- in EITHER " +
+		"direction, since the triple may be asserted either way -- to the " +
+		"msr:MoltenSalt individual or msr:PhysicalProperty term, and read the salt's " +
+		"msr:PropertyMeasurement. The sparql_query tool description carries a worked " +
+		"grounding query.\n\n")
 
 	b.WriteString("## Ontology classes\n\n")
 	for _, c := range classes {

@@ -211,10 +211,29 @@ func TestSPARQLTool_SpecDescribesGroundingAndForbidsFrom(t *testing.T) {
 	}
 
 	desc := strings.ToLower(spec.Description)
-	for _, want := range []string{"skos:preflabel", "skos:closematch", "from"} {
+	for _, want := range []string{
+		"skos:preflabel", "skos:closematch", "from",
+		// The closeMatch link is asserted in either direction in the data
+		// (salt->concept, but concept->property term), so the recipe must
+		// traverse it direction-agnostically with a property path. Guards
+		// against reintroducing the one-way pattern that returned no rows.
+		"skos:closematch|^skos:closematch",
+		// SPARQL needs the PREFIX lines declared in the query; the tool does
+		// not inject them (the model previously emitted an undefined prefix).
+		"prefix",
+		// A worked grounding query collapses the model's exploration.
+		"worked example",
+	} {
 		if !strings.Contains(desc, want) {
 			t.Errorf("Spec().Description missing %q; got: %s", want, spec.Description)
 		}
+	}
+
+	// The superseded one-way phrasing must not creep back: it prescribed
+	// following closeMatch FROM the concept TO the salt, which the data does
+	// not support (salts are the subject of closeMatch, not the object).
+	if strings.Contains(desc, "from the matched vocabulary concept to the msr:moltensalt") {
+		t.Errorf("Spec().Description reintroduced the broken one-way closeMatch recipe; got: %s", spec.Description)
 	}
 
 	var schema map[string]any
