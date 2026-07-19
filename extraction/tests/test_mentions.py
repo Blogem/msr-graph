@@ -1,0 +1,137 @@
+"""Mention-emission tests (task 10.7, design.md D7, D8).
+
+Pins the exact ``Mention`` triple shape (deterministic IRI, no blank
+nodes), the ``INSERT DATA { GRAPH <urn:msr:data> { ... } } `` wrapper
+(with required PREFIX declarations), surface-form literal escaping, and
+``write_mentions`` idempotent-shape re-emission against a fake SPARQL
+client (no network).
+"""
+
+from __future__ import annotations
+
+import re
+
+from msr_extraction.mentions import (
+    Mention,
+    insert_data,
+    mention_iri,
+    mention_triples,
+    write_mentions,
+)
+
+
+def _collapse_ws(text: str) -> str:
+    return re.sub(r"\s+", " ", text).strip()
+
+
+SALT_IRI = "https://w3id.org/msr-kg/data#salt-BeF2-LiF-34.0-66.0"
+DOCUMENT_IRI = "https://w3id.org/msr-kg/data#ORNL-TM-2316"
+
+MENTION = Mention(
+    report="ORNL-TM-2316",
+    start=10,
+    end=18,
+    surface_form="LiF-BeF2",
+    target_iri=SALT_IRI,
+    document_iri=DOCUMENT_IRI,
+)
+
+# A surface form with an embedded double quote and a backslash, to pin
+# literal escaping.
+QUOTED_MENTION = Mention(
+    report="ORNL-TM-2316",
+    start=100,
+    end=110,
+    surface_form='Li"F\\BeF2',
+    target_iri=SALT_IRI,
+    document_iri=DOCUMENT_IRI,
+)
+
+
+class _FakeSparqlClient:
+    """Captures ``.update(...)`` calls; never touches the network."""
+
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+
+    def update(self, sparql_update: str) -> None:
+        self.calls.append(sparql_update)
+
+
+def test_mention_iri_is_deterministic() -> None:
+    assert mention_iri("ORNL-TM-2316", 10, 18) == "msrd:mention-ORNL-TM-2316-10-18"
+
+
+def test_mention_triples_exact_shape() -> None:
+    expected = (
+        "msrd:mention-ORNL-TM-2316-10-18 a msr:Mention ;\n"
+        f"    msr:linksTo <{SALT_IRI}> ;\n"
+        f"    msr:inDocument <{DOCUMENT_IRI}> ;\n"
+        '    msr:surfaceForm "LiF-BeF2"^^xsd:string ;\n'
+        '    msr:startOffset "10"^^xsd:integer ;\n'
+        '    msr:endOffset "18"^^xsd:integer .'
+    )
+    assert mention_triples(MENTION) == expected
+
+
+def test_mention_triples_has_no_blank_nodes() -> None:
+    triples = mention_triples(MENTION)
+    assert "[" not in triples
+    assert "_:" not in triples
+
+
+def test_mention_triples_escapes_surface_form() -> None:
+    triples = mention_triples(QUOTED_MENTION)
+    assert '\\"' in triples
+    assert "\\\\" in triples
+    # An unescaped embedded quote/backslash would break out of the literal.
+    assert 'msr:surfaceForm "Li"F\\BeF2"^^xsd:string' not in triples
+
+
+def test_insert_data_wraps_graph_and_prefixes() -> None:
+    update = _collapse_ws(insert_data(mention_triples(MENTION)))
+    assert "INSERT DATA" in update
+    assert "GRAPH <urn:msr:data>" in update
+    assert "PREFIX msr:" in update
+    assert "PREFIX msrd:" in update
+    assert "PREFIX xsd:" in update
+    assert "msrd:mention-ORNL-TM-2316-10-18" in update
+
+
+def test_write_mentions_sends_exactly_one_update_for_nonempty_mentions() -> None:
+    client = _FakeSparqlClient()
+    write_mentions([MENTION], client)
+    assert len(client.calls) == 1
+    assert "INSERT DATA" in client.calls[0]
+    assert "msrd:mention-ORNL-TM-2316-10-18" in client.calls[0]
+
+
+def test_write_mentions_sends_zero_updates_for_empty_mentions() -> None:
+    client = _FakeSparqlClient()
+    write_mentions([], client)
+    assert len(client.calls) == 0
+
+
+def test_write_mentions_is_idempotent_shape() -> None:
+    client = _FakeSparqlClient()
+    write_mentions([MENTION], client)
+    write_mentions([MENTION], client)
+    assert len(client.calls) == 2
+    assert client.calls[0] == client.calls[1]
+
+
+def test_write_mentions_orders_deterministically_regardless_of_input_order() -> None:
+    mention_a = Mention(
+        report="ORNL-TM-2316",
+        start=50,
+        end=60,
+        surface_form="FLiBe",
+        target_iri=SALT_IRI,
+        document_iri=DOCUMENT_IRI,
+    )
+    mention_b = MENTION  # start=10, end=18 — sorts before mention_a
+    client_forward = _FakeSparqlClient()
+    write_mentions([mention_b, mention_a], client_forward)
+    client_reversed = _FakeSparqlClient()
+    write_mentions([mention_a, mention_b], client_reversed)
+    assert client_forward.calls[0] == client_reversed.calls[0]
