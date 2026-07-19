@@ -1,0 +1,4 @@
+# PLACEHOLDER target sentences — the finalization step (task 4.4) replaces
+# these with the ACTUAL quoted sentences from the curated msr-archive OCR.
+
+The solubility of PuF3 in LiF-BeF2 was 2.7 mole % at 600°C.

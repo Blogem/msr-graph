@@ -1,0 +1,4 @@
+# PLACEHOLDER target sentences — the finalization step (task 4.4) replaces
+# these with the ACTUAL quoted sentences from the curated msr-archive OCR.
+
+The MSRE uses graphite as the moderator.
