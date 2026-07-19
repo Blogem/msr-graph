@@ -3,7 +3,13 @@ name = "msr-extraction"
 version = "0.1.0"
 description = "MSR knowledge-graph extraction pipeline (scaffold; real pipeline lands in later chunks)"
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+    "pysbd==0.3.4",
+    "httpx==0.28.1",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=8,<9"]
 
 [project.scripts]
 msr-extraction = "msr_extraction:main"

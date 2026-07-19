@@ -1,23 +1,11 @@
-"""MSR extraction pipeline scaffold.
+"""MSR extraction pipeline.
 
-Empty package proving the project scaffold builds and runs. The real
-extraction pipeline (chunks 5-8) lands in later changes.
+Acquires the openmsr/msr-archive corpus, parses its manifest, normalizes
+and segments the curated document set, and writes Document provenance
+nodes into the graph. See ``openspec/changes/ingest-archive-documents``
+for the design (chunk 5) that grew this package from the chunk-1 scaffold.
 """
 
-import argparse
+from msr_extraction.cli import main
 
 __all__ = ["main"]
-
-
-def main() -> int:
-    """CLI entry point. Currently a no-op scaffold that only supports --help."""
-    parser = argparse.ArgumentParser(
-        prog="msr-extraction",
-        description="MSR knowledge-graph extraction pipeline (scaffold).",
-    )
-    parser.parse_args()
-    return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())
