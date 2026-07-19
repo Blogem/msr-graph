@@ -5,9 +5,13 @@
 ### Requirement: Canonical salt form
 The system SHALL normalize every salt at the ingest boundary to a canonical form: components sorted by byte-wise ascending order of their formula token, composition mole-% values reordered in lockstep with the components, and each mole-% formatted to exactly one decimal place. The canonical form is used identically in the salt IRI, the locator, the SQLite `salt` column, and the `rdfs:label`.
 
-#### Scenario: FLiBe formula canonicalizes
-- **WHEN** the raw salt `LiF-BeF2` with composition `34.0-66.0` is canonicalized
-- **THEN** the canonical string is `BeF2-LiF | 66.0-34.0` (components alphabetized, composition reordered in lockstep, one decimal)
+#### Scenario: Unsorted formula reorders components and composition in lockstep
+- **WHEN** a hypothetical unsorted raw salt `LiF-BeF2` with composition `34.0-66.0` is canonicalized
+- **THEN** the canonical string is `BeF2-LiF | 66.0-34.0` (components alphabetized, composition reordered in lockstep, one decimal) — this demonstrates the lockstep-reorder rule, not the real NIST FLiBe row (see below)
+
+#### Scenario: Real NIST FLiBe row canonicalizes unchanged
+- **WHEN** the real NIST FLiBe row, raw salt `BeF2-LiF` with composition `34.0-66.0` (already byte-sorted), is canonicalized
+- **THEN** the canonical string is `BeF2-LiF | 34.0-66.0`, unchanged from the raw order, and the salt IRI is `msrd:salt-BeF2-LiF-34.0-66.0`, matching the seed A-Box
 
 #### Scenario: Ternary formula canonicalizes deterministically
 - **WHEN** the raw salt `LiF-NaF-KF` is canonicalized
@@ -56,4 +60,4 @@ This change SHALL author `testdata/salt-canonicalization.json` as a set of raw�
 
 #### Scenario: Fixture covers the anchor cases
 - **WHEN** the fixture is authored
-- **THEN** it includes at least the `LiF-BeF2,34.0-66.0` → `BeF2-LiF | 66.0-34.0` case and a ternary reordering case
+- **THEN** it includes at least: the real NIST FLiBe row `BeF2-LiF,34.0-66.0` → `BeF2-LiF | 34.0-66.0` (already sorted, unchanged), the hypothetical unsorted reorder case `LiF-BeF2,34.0-66.0` → `BeF2-LiF | 66.0-34.0`, and a ternary reordering case (`LiF-NaF-KF` → `KF-LiF-NaF`)
