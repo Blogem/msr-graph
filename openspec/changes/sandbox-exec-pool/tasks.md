@@ -2,13 +2,13 @@
 
 ## 1. Package scaffold and dependencies
 
-- [ ] 1.1 Create the `internal/sandbox/` package
+- [x] 1.1 Create the `internal/sandbox/` package
 - [ ] 1.2 Add the Docker Go SDK (`github.com/docker/docker/client`) to `go.mod` and run `go mod tidy`; keep the dependency contained to `internal/sandbox`
-- [ ] 1.3 Define config with the plan defaults: pool size N (default 3), per-container CPU / memory / pids limits, tmpfs `/tmp` size, and wall-clock timeout; read `MSR_DATA_HOST_DIR` and `MSR_SANDBOX_IMAGE` (default `msr-sandbox-base:latest`) from the environment, failing loudly if the host data dir is unset or not a directory
+- [x] 1.3 Define config with the plan defaults: pool size N (default 3), per-container CPU / memory / pids limits, tmpfs `/tmp` size, and wall-clock timeout; read `MSR_DATA_HOST_DIR` and `MSR_SANDBOX_IMAGE` (default `msr-sandbox-base:latest`) from the environment, failing loudly if the host data dir is unset or not a directory
 
 ## 2. Container-runtime interface
 
-- [ ] 2.1 Define the `Runtime` interface — `Create(ctx, ContainerSpec) (id, error)`, `Exec(ctx, id, script) (ExecResult, error)`, `Remove(ctx, id) error` — plus the `ContainerSpec` and `ExecResult{Stdout, Stderr, ExitCode}` types, with no Docker types leaking into the pool
+- [x] 2.1 Define the `Runtime` interface — `Create(ctx, ContainerSpec) (id, error)`, `Exec(ctx, id, script) (ExecResult, error)`, `Remove(ctx, id) error` — plus the `ContainerSpec` and `ExecResult{Stdout, Stderr, ExitCode}` types, with no Docker types leaking into the pool
 - [ ] 2.2 Implement an in-memory `fakeRuntime` for tests: programmable per-call delays and errors, records create/exec/remove calls, and lets tests script exec output/exit codes and slow/hanging execs
 
 ## 3. Docker-backed runtime
@@ -29,8 +29,8 @@
 
 ## 5. Stack configuration (container-stack)
 
-- [ ] 5.1 Add `MSR_DATA_HOST_DIR: ${PWD}/data` and `MSR_SANDBOX_IMAGE: msr-sandbox-base:latest` to the `server` service environment in `docker-compose.yml` (additive; confirm the Docker socket mount from chunk 1 is present)
-- [ ] 5.2 Confirm `make up` still builds/tags `msr-sandbox-base:latest` so the configured image reference resolves (no change expected — pin it with a comment referencing the pool's default)
+- [x] 5.1 Add `MSR_DATA_HOST_DIR: ${PWD}/data` and `MSR_SANDBOX_IMAGE: msr-sandbox-base:latest` to the `server` service environment in `docker-compose.yml` (additive; confirm the Docker socket mount from chunk 1 is present)
+- [x] 5.2 Confirm `make up` still builds/tags `msr-sandbox-base:latest` so the configured image reference resolves (no change expected — pin it with a comment referencing the pool's default)
 
 ## 6. Tests
 
