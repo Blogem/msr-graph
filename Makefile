@@ -39,8 +39,12 @@ up:
 	fi
 	@echo "==> starting graphdb + server"
 	docker compose up -d
-	@echo "==> building extraction and sandbox base images"
-	docker compose build server extraction
+	@echo "==> building server, extraction, loader, and sandbox base images"
+	@# `loader` is in the "tools" profile, so it is skipped by a bare
+	@# `docker compose build`; naming it explicitly keeps its image fresh on
+	@# every `make up` (otherwise `docker compose run loader` reuses a stale
+	@# image and never picks up loader code changes, e.g. new subcommands).
+	docker compose build server extraction loader
 	@# Tag must match the server's MSR_SANDBOX_IMAGE default (internal/sandbox,
 	@# see docker-compose.yml "server" service) so the pool's configured image
 	@# reference resolves to this build.
