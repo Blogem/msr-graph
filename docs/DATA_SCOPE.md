@@ -123,6 +123,75 @@ PuF₃-and-fission-product-solubility-in-LiF-BeF₂ cluster), and the set must c
 **graphite-as-moderator statements in prose** (ORNL-TM-0728, the MSRE design report, is
 expected to cover this — verify on ingest).
 
+### Finalized curated set (2026-07-19)
+
+Finalized against a real clone of `openmsr/msr-archive` (`git clone --depth 1`, 631
+manifest records, 637 OCR sidecars on disk) — task 4.1/4.3/4.4, closes open items 4 & 5
+below. `CURATED_REPORTS` in `extraction/src/msr_extraction/curated.py` is this exact
+11-report list; every report number resolves via the real README manifest
+(`resolve_ocr_path`) **and** has an OCR sidecar file that actually exists on disk.
+
+**Two anchor reconciliations against the real manifest/checkout:**
+
+1. `NSRDS-NBS-61-4` → **`NSRDS-NBS-61-p4`**. The provisional anchor name didn't match the
+   real manifest token; the actual README row is
+   `Physical Properties Data Compilations Relevant to Energy Storage - IV. Molten Salts...`
+   with report number `NSRDS-NBS-61-p4` (`ocr/NSRDS-NBS-61-p4.txt`).
+2. `ORNL-CF-63-9-20` → **`ORNL-3293`** ("Thermodynamic Properties of Molten-Salt
+   Solutions", 1962). The original anchor's README row parses fine and its link target
+   (`ocr/ORNL-CF-63-9-20.txt`) resolves through `resolve_ocr_path`, but that OCR sidecar
+   file **does not exist** in the real msr-archive git tree — confirmed with
+   `git ls-tree -r HEAD` on the clone (empty result) and by direct filesystem check. This
+   is a genuinely broken upstream link, not an LFS/smudge artifact (only `*.pdf` is
+   LFS-tracked in `.gitattributes`; `.txt` sidecars are plain git blobs). `ORNL-3293`
+   fills the same "properties survey" role with real, present OCR text.
+
+**Finalized 11-document curated set:**
+
+| Report | Title | Role |
+|--------|-------|------|
+| `ORNL-TM-2316` | Physical Properties of MSR Fuel, Coolant, Flush Salts (Cantor, 1968) | **Primary property↔NIST bridge** |
+| `ORNL-TM-0728` | MSRE Design and Operations Report Part I: Reactor Design (1965) | Reactor + components; **graphite-as-moderator evidence** |
+| `ORNL-3293` | Thermodynamic Properties of Molten-Salt Solutions (1962) | Properties survey (substitutes `ORNL-CF-63-9-20`; see above) |
+| `ORNL-2150` | Physical Property Summary for ANP Fluoride Mixtures (1956) | Properties |
+| `NSRDS-NBS-61-p4` | Physical Properties Data Compilations — IV. Molten Salts (1988) | NBS→NIST lineage (reconciled report#; see above) |
+| `ORNL-TM-3884` | Migration of Fission Products (Noble Metals) in the MSRE | Chemistry (drives new concepts) |
+| `ORNL-TM-0078` | Thermal-Stress/Strain-Fatigue of MSRE Fuel & Coolant Pump Tanks | Component + property |
+| `ORNL-TM-2256` | Chemical Feasibility of Fueling Molten-Salt Reactors with PuF3 (1968) | Chemistry addition; **solubility-with-unit evidence** |
+| `ORNL-4658` | Chemical Aspects of MSRE Operations (1971) | Chemistry/corrosion addition |
+| `ORNL-4829` | Intergranular Cracking of INOR-8 in the MSRE (1972) | Corrosion addition (INOR-8/Hastelloy-N cluster) |
+| `ORNL-3124` | INOR-8-Graphite-Fused Salt Compatibility Test (1961) | Corrosion addition (INOR-8/Hastelloy-N cluster) |
+
+**Evolution-demo target evidence** (`detect_evolution_targets`, run against the real OCR
+text of every report above — full gate output: `GATE PASSED`):
+
+- **Solubility statement with numeric value + unit** — report `ORNL-TM-2256`,
+  `ocr/ORNL-TM-2256.txt` lines 357–360 (quoted verbatim, OCR noise included):
+
+  > "1. LiF-BeF,: The solubility of PuF; in LiF-Bel, solvents was measured by Bart0n6 for
+  > compositions ranging in BeF, from 28.7 to 48.3 mole % and from 450 to 650°C.
+  > Solubilities of PuF; in LiF-BeF, solvents are compared with those for CeF; in..."
+
+  (`PuF;` = OCR mis-render of `PuF3`; `Bel,`/`BeF,` = `BeF2`; value+unit = "28.7 to 48.3
+  mole %"). `ORNL-TM-2316` also independently trips the solubility detector (a noisy
+  isotope table), and `ORNL-4658`/`NSRDS-NBS-61-p4` carry additional solubility+unit
+  prose — the target is not a single-document fluke.
+
+- **Graphite-as-moderator prose** — report `ORNL-TM-0728`, `ocr/ORNL-TM-0728.txt` line
+  2738 (quoted verbatim):
+
+  > "The Molten-Salt Reactor Experiment (MSRE) is a single-region, un-clad,
+  > graphite-moderated, fluid-fuel type of reactor with a design heat generation rate of
+  > 10 Mw."
+
+  Also present, independently, in `ORNL-TM-3884`, `ORNL-TM-2256`, `ORNL-4658`,
+  `ORNL-4829`, and `ORNL-3124` — 6 of the 11 curated documents carry
+  graphite-as-moderator prose, not just the one anchor.
+
+Both fixtures above are pinned verbatim (with report#/line provenance as a comment
+header) in `extraction/tests/fixtures/target_solubility.txt` and
+`extraction/tests/fixtures/target_graphite.txt`.
+
 ### Licensing
 
 Repo is GPL-3.0 (a code license, applied awkwardly to documents); underlying ORNL/AEC
@@ -203,8 +272,19 @@ in that chunk's acceptance criteria.
 3. Verify the `+E`, `P2`, `P3`, `DP` equation forms against `molten-salt-data.pdf`.
    → **chunk 2**
 4. Finalize the 3–4 additional chemistry/corrosion docs from the manifest.
-   → **chunk 5** (`ingest-archive-documents`)
+   → **chunk 5** (`ingest-archive-documents`). **RESOLVED (2026-07-19):** 4 additions
+   picked (`ORNL-TM-2256`, `ORNL-4658`, `ORNL-4829`, `ORNL-3124`); 2 of the original 7
+   DATA_SCOPE anchors reconciled against the real manifest/checkout
+   (`NSRDS-NBS-61-4`→`NSRDS-NBS-61-p4`, `ORNL-CF-63-9-20`→`ORNL-3293`). Final 11-doc list
+   is `CURATED_REPORTS` in `extraction/src/msr_extraction/curated.py`; full detail in
+   "Finalized curated set (2026-07-19)" above.
 5. Confirm the final curated set actually contains the evolution-demo targets —
    solubility statements with numeric values/units, and graphite-as-moderator prose.
    (Corpus-wide salience counts don't guarantee presence in the 12.) → **chunk 5**;
-   gates chunks 8–10.
+   **RESOLVED (2026-07-19):** verified with `detect_evolution_targets` against the real
+   OCR text of all 11 curated documents — `GATE PASSED`. Solubility-with-unit evidence in
+   `ORNL-TM-2256` ("...28.7 to 48.3 mole %..."); graphite-as-moderator evidence in
+   `ORNL-TM-0728` ("...graphite-moderated..."). Both quoted verbatim, with line-number
+   provenance, in "Finalized curated set (2026-07-19)" above and pinned in
+   `extraction/tests/fixtures/target_solubility.txt` /
+   `extraction/tests/fixtures/target_graphite.txt`. Gates chunks 8–10.

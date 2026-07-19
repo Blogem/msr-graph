@@ -10,19 +10,39 @@ from __future__ import annotations
 
 import re
 
-# The 7 confirmed DATA_SCOPE anchors (docs/DATA_SCOPE.md, "POC core document
-# set"). The 3-4 chemistry/corrosion additions (INOR-8/Hastelloy-N cluster)
-# are appended by the finalization step (task 4.1) once the real manifest is
-# available -- these report-number strings follow docs/DATA_SCOPE.md but are
-# NOT yet verified against the actual msr-archive checkout/manifest.
+# FINALIZED (2026-07-19, design.md D2 / docs/DATA_SCOPE.md, "POC core
+# document set" + "Finalized curated set"): the 7 confirmed DATA_SCOPE
+# anchors plus 4 chemistry/corrosion additions from the INOR-8/Hastelloy-N
+# cluster, selected so the evolution-demo targets (solubility-with-unit,
+# graphite-as-moderator) are demonstrably present in the curated OCR, not
+# merely corpus-wide. All 11 report numbers are verified against the real
+# openmsr/msr-archive README manifest (resolve_ocr_path succeeds for each)
+# AND against the actual OCR sidecar files on disk.
+#
+# One substitution from the original DATA_SCOPE anchor list: `ORNL-CF-63-9-20`
+# ("A Literature Survey of Thermal and Physical Properties of Molten Fluoride
+# and Chloride Salt Mixtures") has a manifest row and a resolvable
+# `ocr/ORNL-CF-63-9-20.txt` link target, but that OCR sidecar file does not
+# actually exist in the openmsr/msr-archive git tree (confirmed via `git
+# ls-tree -r HEAD` on the real clone -- a genuinely broken upstream link, not
+# an LFS/smudge artifact, since only `*.pdf` is LFS-tracked). It is replaced
+# by `ORNL-3293` ("Thermodynamic Properties of Molten-Salt Solutions", 1962),
+# which fills the same "properties survey" role and has real, present OCR
+# text.
 CURATED_REPORTS: list[str] = [
+    # -- 7 DATA_SCOPE anchors (one substituted; see note above) --
     "ORNL-TM-2316",
     "ORNL-TM-0728",
-    "ORNL-CF-63-9-20",
+    "ORNL-3293",  # substitute for ORNL-CF-63-9-20 (missing OCR sidecar upstream)
     "ORNL-2150",
-    "NSRDS-NBS-61-4",
+    "NSRDS-NBS-61-p4",
     "ORNL-TM-3884",
     "ORNL-TM-0078",
+    # -- 4 chemistry/corrosion additions (task 4.3) --
+    "ORNL-TM-2256",  # Chemical Feasibility of Fueling Molten-Salt Reactors with PuF3 -- PuF3 solubility-in-LiF-BeF2 evidence
+    "ORNL-4658",  # Chemical Aspects of MSRE Operations
+    "ORNL-4829",  # Intergranular Cracking of INOR-8 in the MSRE
+    "ORNL-3124",  # INOR-8-Graphite-Fused Salt Compatibility Test
 ]
 
 # A solubility statement carrying a numeric value + unit. Matches the word
