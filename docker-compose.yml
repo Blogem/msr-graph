@@ -138,6 +138,9 @@ services:
       # (chunk 6, ner-entity-linking design.md D5). Left empty by default so
       # the injected client's stubbed/absent-client path is used when unset.
       DEEPSEEK_BASE_URL: ${DEEPSEEK_BASE_URL:-}
+      # Optional bearer credential for the endpoint above; empty default
+      # keeps keyless/compatible endpoints working (see FlashClient).
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
       LLM_MODEL_EXTRACT: ${LLM_MODEL_EXTRACT:-deepseek-v4-flash}
     volumes:
       - ./data:/data

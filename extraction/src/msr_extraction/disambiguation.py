@@ -70,7 +70,11 @@ class FlashClient:
         """
         if not config.deepseek_base_url:
             return None
-        return cls(config.deepseek_base_url, config.llm_model_extract)
+        return cls(
+            config.deepseek_base_url,
+            config.llm_model_extract,
+            api_key=config.deepseek_api_key or None,
+        )
 
     def complete(self, system_prompt: str, user_prompt: str) -> str:
         """Call DeepSeek's chat-completions endpoint and return the reply text.

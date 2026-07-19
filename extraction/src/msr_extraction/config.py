@@ -32,6 +32,11 @@ class Config:
     # Chunk 6 (ner-entity-linking) — the injected DeepSeek client (D5) and the
     # bounded rapidfuzz fallback's tuning knobs (D4).
     deepseek_base_url: str = ""
+    # Optional bearer credential for the DeepSeek endpoint above. Left empty
+    # by default so `make link` still works against keyless/compatible
+    # endpoints (see FlashClient.complete's "unused" fallback) — never
+    # logged.
+    deepseek_api_key: str = ""
     llm_model_extract: str = "deepseek-v4-flash"
     fuzzy_threshold: float = 90.0
     fuzzy_min_token_length: int = 4
@@ -52,6 +57,7 @@ class Config:
             corpus_dir=Path(env.get("MSR_CORPUS_DIR", str(cls.corpus_dir))),
             msr_archive_url=env.get("MSR_ARCHIVE_URL", cls.msr_archive_url),
             deepseek_base_url=env.get("DEEPSEEK_BASE_URL", cls.deepseek_base_url),
+            deepseek_api_key=env.get("DEEPSEEK_API_KEY", cls.deepseek_api_key),
             llm_model_extract=env.get("LLM_MODEL_EXTRACT", cls.llm_model_extract),
             fuzzy_threshold=float(
                 env.get("MSR_FUZZY_THRESHOLD", cls.fuzzy_threshold)

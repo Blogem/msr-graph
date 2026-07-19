@@ -108,3 +108,19 @@ def test_from_config_returns_client_when_deepseek_base_url_set() -> None:
     assert client is not None
     assert client.base_url == "https://api.deepseek.example"
     assert client.model == "deepseek-v4-flash"
+    # No key configured -> None, so `complete` falls back to "unused" against
+    # a keyless/compatible endpoint.
+    assert client.api_key is None
+
+
+def test_from_config_threads_configured_api_key_onto_client() -> None:
+    config = Config(
+        deepseek_base_url="https://api.deepseek.example",
+        llm_model_extract="deepseek-v4-flash",
+        deepseek_api_key="sk-test-secret",
+    )
+
+    client = FlashClient.from_config(config)
+
+    assert client is not None
+    assert client.api_key == "sk-test-secret"
