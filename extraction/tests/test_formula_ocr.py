@@ -169,13 +169,26 @@ class TestInlineCompositionRegexIsBounded:
         surface = f"LiF-BeF2 66-34 {tail}"
         assert formula._INLINE_COMPOSITION_RE.search(surface) is not None
 
-    def test_long_leading_whitespace_before_composition_digits_does_not_match(self) -> None:
+    def test_long_leading_whitespace_before_composition_digits_bounds_the_match_start(
+        self,
+    ) -> None:
         # Second-cycle hardening: the re-review found the LEADING `\(?\s*`
         # run (before the first composition digit) was still unbounded.
-        # A pathological run of whitespace immediately after the opening
-        # paren must not match.
+        # The composition itself ("66-34 mol%)") is still a legitimate,
+        # matchable tail -- bounding the leading run to `\s{0,4}` does not
+        # make the input non-matching, it makes the scan linear. So the
+        # deterministic guard is on WHERE the match starts, not whether it
+        # matches: a bounded `\(?\s{0,4}` cannot consume the whole 50-space
+        # run from the "(", so the match must start within ~4 chars of the
+        # first digit -- never at position 0 (the pre-fix unbounded `\s*`
+        # would happily start there, consuming the entire run).
         surface = "(" + " " * 50 + "66-34 mol%)"
-        assert formula._INLINE_COMPOSITION_RE.search(surface) is None
+        match = formula._INLINE_COMPOSITION_RE.search(surface)
+        assert match is not None
+        # 1 "(" + 50 spaces = index 51 is the first digit; the bounded
+        # leading run may start up to 4 spaces before that, so >= 47 is the
+        # earliest legitimate start. Pre-fix (unbounded `\s*`) this was 0.
+        assert match.start() >= 47
 
     def test_long_internal_separator_whitespace_does_not_match(self) -> None:
         # Second-cycle hardening: the `\s*-\s*` run separating composition
