@@ -14,8 +14,12 @@ from __future__ import annotations
 import argparse
 import logging
 
-from msr_extraction import acquisition, curated, documents, manifest, segmenter
+from msr_extraction import acquisition, curated, documents, linker, manifest, mentions, segmenter
 from msr_extraction.config import Config
+from msr_extraction.disambiguation import FlashClient, disambiguate
+from msr_extraction.graph_reader import GraphReader
+from msr_extraction.kg_prompt import KGSchemaPromptCache
+from msr_extraction.seeding import build_matcher
 from msr_extraction.sparql import SparqlClient
 
 logger = logging.getLogger(__name__)
@@ -86,12 +90,92 @@ def _cmd_ingest(config: Config) -> int:
     return 0
 
 
+def _cmd_link(config: Config) -> int:
+    """Seed the matcher from the graph, link every curated document, write
+    mention triples + `mentions.jsonl`, and print a per-doc run summary
+    (design.md D1/D7, tasks 6.2/9.1).
+
+    Guards a missing `segments.jsonl` per report (logs a warning and skips
+    it) so a partial corpus doesn't crash the whole run.
+    """
+    reader = GraphReader.from_config(config)
+    prompt_prefix = KGSchemaPromptCache().get(reader)
+
+    known = reader.read_known_entities()
+    known_iris = reader.known_iris()
+    matcher = build_matcher(known)
+
+    client = FlashClient.from_config(config)
+    disambiguator: linker.Disambiguator | None = None
+    if client is not None:
+
+        def disambiguator(surface: str, sentence: str) -> tuple[str, str | None]:
+            result = disambiguate(surface, sentence, prompt_prefix, known_iris, client)
+            return result.status, result.target_iri
+
+    else:
+        logger.warning("link: DEEPSEEK_BASE_URL not configured; layer 5 spans fall to novel")
+
+    sparql = SparqlClient.from_config(config)
+
+    logger.info("link: %d curated report(s) to process", len(curated.CURATED_REPORTS))
+    for report in curated.CURATED_REPORTS:
+        segments_path = config.segments_path(report)
+        if not segments_path.exists():
+            logger.warning("link: report=%s missing %s, skipping", report, segments_path)
+            continue
+
+        records = linker.link_report(
+            report,
+            config,
+            matcher,
+            known,
+            known_iris,
+            prompt_prefix=prompt_prefix,
+            disambiguator=disambiguator,
+        )
+        linker.write_mentions_jsonl(report, records, config)
+
+        document_iri = mentions.MSRD + report
+        linked_mentions = [
+            mentions.Mention(
+                report=record.report,
+                start=record.char_start,
+                end=record.char_end,
+                surface_form=record.surface_form,
+                target_iri=record.target_iri,
+                document_iri=document_iri,
+            )
+            for record in records
+            if record.status == "linked"
+        ]
+        mentions.write_mentions(linked_mentions, sparql)
+
+        linked_count = len(linked_mentions)
+        novel_count = len(records) - linked_count
+        layer_counts = {
+            layer: sum(1 for record in records if record.layer == layer)
+            for layer in (2, 3, 4, 5)
+        }
+        summary = (
+            f"link: report={report} spans={len(records)} linked={linked_count} "
+            f"novel={novel_count} layer2={layer_counts[2]} layer3={layer_counts[3]} "
+            f"layer4={layer_counts[4]} layer5={layer_counts[5]}"
+        )
+        logger.info(summary)
+        print(summary)
+
+    logger.info("link: complete")
+    return 0
+
+
 _HANDLERS = {
     "acquire": _cmd_acquire,
     "manifest": _cmd_manifest,
     "normalize": _cmd_normalize,
     "documents": _cmd_documents,
     "ingest": _cmd_ingest,
+    "link": _cmd_link,
 }
 
 
@@ -114,6 +198,10 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     subparsers.add_parser(
         "ingest", help="Run acquire, manifest, normalize, and documents in order."
+    )
+    subparsers.add_parser(
+        "link",
+        help="Link recognized spans to known entities; write msr:Mention triples + mentions.jsonl.",
     )
 
     return parser
