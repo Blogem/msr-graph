@@ -116,9 +116,9 @@ LAYER_FLASH = 5
 _DIGITS = "0-9₀-₉"
 _ELEMENT_UNIT = rf"[A-Z][a-z]?[{_DIGITS}]*"
 _FORMULA_TOKEN = rf"\d{{0,3}}(?:{_ELEMENT_UNIT}){{1,4}}[,.]?"
-_FORMULA_SEP = r"\s*[-·•⋅]\s*"
+_FORMULA_SEP = r"\s{0,4}[-·•⋅]\s{0,4}"
 _COMPOSITION_TAIL = (
-    r"\(?\s*\d+(?:\.\d+)?(?:\s*-\s*\d+(?:\.\d+)?)+\s*mol\.?\s{0,4}e?\.?\s{0,4}%\s*\)?"
+    r"\(?\s{0,4}\d+(?:\.\d+)?(?:\s{0,4}-\s{0,4}\d+(?:\.\d+)?)+\s{0,4}mol\.?\s{0,4}e?\.?\s{0,4}%\s{0,4}\)?"
 )
 # `formula` is a named group covering just the token(s), separate from the
 # optional `tail` (composition group).

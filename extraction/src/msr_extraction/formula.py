@@ -77,7 +77,7 @@ _NUMBER_RE = re.compile(r"\d+(?:\.\d+)?")
 # design.md, task 2.2), and an optional ')'. Matches both "(66-34 mol%)" and
 # the unparenthesized "66-34 mol%".
 _INLINE_COMPOSITION_RE = re.compile(
-    r"\(?\s*(\d+(?:\.\d+)?(?:\s*-\s*\d+(?:\.\d+)?)+)\s*mol\.?\s{0,4}e?\.?\s{0,4}%\s*\)?\s*$",
+    r"\(?\s{0,4}(\d+(?:\.\d+)?(?:\s{0,4}-\s{0,4}\d+(?:\.\d+)?)+)\s{0,4}mol\.?\s{0,4}e?\.?\s{0,4}%\s{0,4}\)?\s{0,4}$",
     re.IGNORECASE,
 )
 
