@@ -1,0 +1,305 @@
+{
+  "report": "ORNL-TM-2316",
+  "mentions": [
+    {
+      "sentence": "The viscosity was measured over a wide temperature range using a rotating cylinder technique.",
+      "surface": "viscosity",
+      "expected_target_iri": "https://w3id.org/msr-kg/vocab#viscosity"
+    },
+    {
+      "sentence": "Dynamic viscosity of the sample decreased steadily with increasing temperature.",
+      "surface": "Dynamic viscosity",
+      "expected_target_iri": "https://w3id.org/msr-kg/vocab#viscosity"
+    },
+    {
+      "sentence": "Measured viscosity values agreed closely with the empirical correlation.",
+      "surface": "viscosity",
+      "expected_target_iri": "https://w3id.org/msr-kg/vocab#viscosity"
+    },
+    {
+      "sentence": "Viscosity measurements followed the expected temperature-dependent trend for molten fluoride mixtures.",
+      "surface": "Viscosity",
+      "expected_target_iri": "https://w3id.org/msr-kg/vocab#viscosity"
+    },
+    {
+      "sentence": "The dynamic viscosity increased slightly as impurity content rose.",
+      "surface": "dynamic viscosity",
+      "expected_target_iri": "https://w3id.org/msr-kg/vocab#viscosity"
+    },
+    {
+      "sentence": "The density was determined by the pycnometer method at each test temperature.",
+      "surface": "density",
+      "expected_target_iri": "https://w3id.org/msr-kg/vocab#density"
+    },
+    {
+      "sentence": "Mass density measurements showed the expected linear decrease with temperature.",
+      "surface": "Mass density",
+      "expected_target_iri": "https://w3id.org/msr-kg/vocab#density"
+    },
+    {
+      "sentence": "Density values reported here supersede the earlier preliminary estimates.",
+      "surface": "Density",
+      "expected_target_iri": "https://w3id.org/msr-kg/vocab#density"
+    },
+    {
+      "sentence": "The measured density agreed with the dilatometer results to within one percent.",
+      "surface": "density",
+      "expected_target_iri": "https://w3id.org/msr-kg/vocab#density"
+    },
+    {
+      "sentence": "Mass density data were fitted to a linear temperature correlation.",
+      "surface": "Mass density",
+      "expected_target_iri": "https://w3id.org/msr-kg/vocab#density"
+    },
+    {
+      "sentence": "Surface tension was measured using the maximum bubble pressure technique.",
+      "surface": "Surface tension",
+      "expected_target_iri": "https://w3id.org/msr-kg/vocab#surface-tension"
+    },
+    {
+      "sentence": "The interfacial tension between the two phases was found to be small.",
+      "surface": "interfacial tension",
+      "expected_target_iri": "https://w3id.org/msr-kg/vocab#surface-tension"
+    },
+    {
+      "sentence": "Surface tension decreased approximately linearly with increasing temperature.",
+      "surface": "Surface tension",
+      "expected_target_iri": "https://w3id.org/msr-kg/vocab#surface-tension"
+    },
+    {
+      "sentence": "Interfacial tension measurements were consistent across repeated trials.",
+      "surface": "Interfacial tension",
+      "expected_target_iri": "https://w3id.org/msr-kg/vocab#surface-tension"
+    },
+    {
+      "sentence": "The MSRE operated successfully for an extended period at full power.",
+      "surface": "MSRE",
+      "expected_target_iri": "https://w3id.org/msr-kg/vocab#msre-reactor"
+    },
+    {
+      "sentence": "The MSRE reactor vessel was inspected during the scheduled maintenance outage.",
+      "surface": "MSRE reactor",
+      "expected_target_iri": "https://w3id.org/msr-kg/vocab#msre-reactor"
+    },
+    {
+      "sentence": "The molten salt reactor experiment demonstrated stable operation for many months.",
+      "surface": "molten salt reactor experiment",
+      "expected_target_iri": "https://w3id.org/msr-kg/vocab#msre-reactor"
+    },
+    {
+      "sentence": "Instrumentation on the MSRE recorded temperature at several core locations.",
+      "surface": "MSRE",
+      "expected_target_iri": "https://w3id.org/msr-kg/vocab#msre-reactor"
+    },
+    {
+      "sentence": "The MSRE reactor design incorporated a graphite-moderated core configuration.",
+      "surface": "MSRE reactor",
+      "expected_target_iri": "https://w3id.org/msr-kg/vocab#msre-reactor"
+    },
+    {
+      "sentence": "Operating experience from the molten salt reactor experiment informed later designs.",
+      "surface": "molten salt reactor experiment",
+      "expected_target_iri": "https://w3id.org/msr-kg/vocab#msre-reactor"
+    },
+    {
+      "sentence": "Molten salts offer favorable heat-transfer properties for high-temperature systems.",
+      "surface": "Molten salts",
+      "expected_target_iri": "https://w3id.org/msr-kg/vocab#molten-salts"
+    },
+    {
+      "sentence": "Fused salts of this type remain liquid over a wide temperature range.",
+      "surface": "Fused salts",
+      "expected_target_iri": "https://w3id.org/msr-kg/vocab#molten-salts"
+    },
+    {
+      "sentence": "Ionic liquids of the fluoride family were considered for the coolant loop.",
+      "surface": "Ionic liquids",
+      "expected_target_iri": "https://w3id.org/msr-kg/vocab#molten-salts"
+    },
+    {
+      "sentence": "Molten salt coolants were selected for their favorable neutronic properties.",
+      "surface": "Molten salt coolants",
+      "expected_target_iri": "https://w3id.org/msr-kg/vocab#molten-salts"
+    },
+    {
+      "sentence": "Molten salt reactors combine a liquid fuel with a compact core design.",
+      "surface": "Molten salt reactors",
+      "expected_target_iri": "https://w3id.org/msr-kg/vocab#molten-salt-reactors"
+    },
+    {
+      "sentence": "An MSR concept was proposed as an alternative to solid-fuel systems.",
+      "surface": "MSR",
+      "expected_target_iri": "https://w3id.org/msr-kg/vocab#molten-salt-reactors"
+    },
+    {
+      "sentence": "Early molten salt reactors demonstrated the feasibility of liquid-fuel operation.",
+      "surface": "molten salt reactors",
+      "expected_target_iri": "https://w3id.org/msr-kg/vocab#molten-salt-reactors"
+    },
+    {
+      "sentence": "The fuel salt circulated continuously through the primary loop.",
+      "surface": "fuel salt",
+      "expected_target_iri": "https://w3id.org/msr-kg/vocab#fuel-salt"
+    },
+    {
+      "sentence": "Samples of the fuel salt were withdrawn periodically for chemical analysis.",
+      "surface": "fuel salt",
+      "expected_target_iri": "https://w3id.org/msr-kg/vocab#fuel-salt"
+    },
+    {
+      "sentence": "The fuel salt composition was adjusted to maintain criticality margins.",
+      "surface": "fuel salt",
+      "expected_target_iri": "https://w3id.org/msr-kg/vocab#fuel-salt"
+    },
+    {
+      "sentence": "The coolant salt transferred heat from the primary to the secondary loop.",
+      "surface": "coolant salt",
+      "expected_target_iri": "https://w3id.org/msr-kg/vocab#coolant-salt"
+    },
+    {
+      "sentence": "Coolant salt samples were analyzed for trace impurity content.",
+      "surface": "Coolant salt",
+      "expected_target_iri": "https://w3id.org/msr-kg/vocab#coolant-salt"
+    },
+    {
+      "sentence": "The coolant salt loop operated at a lower average temperature than the fuel loop.",
+      "surface": "coolant salt",
+      "expected_target_iri": "https://w3id.org/msr-kg/vocab#coolant-salt"
+    },
+    {
+      "sentence": "Corrosion of the structural alloy was minimal after prolonged exposure.",
+      "surface": "Corrosion",
+      "expected_target_iri": "https://w3id.org/msr-kg/vocab#corrosion"
+    },
+    {
+      "sentence": "Corrosion rates were determined from weight-loss specimens exposed in the loop.",
+      "surface": "Corrosion",
+      "expected_target_iri": "https://w3id.org/msr-kg/vocab#corrosion"
+    },
+    {
+      "sentence": "Localized corrosion was not observed at any of the inspected weld joints.",
+      "surface": "corrosion",
+      "expected_target_iri": "https://w3id.org/msr-kg/vocab#corrosion"
+    },
+    {
+      "sentence": "Corrosion product deposits were examined using metallographic techniques.",
+      "surface": "Corrosion",
+      "expected_target_iri": "https://w3id.org/msr-kg/vocab#corrosion"
+    },
+    {
+      "sentence": "FLiBe was selected as the primary coolant for the reference design.",
+      "surface": "FLiBe",
+      "expected_target_iri": "https://w3id.org/msr-kg/vocab#flibe"
+    },
+    {
+      "sentence": "LiF-BeF2 was chosen as the reference composition for early experiments.",
+      "surface": "LiF-BeF2",
+      "expected_target_iri": "https://w3id.org/msr-kg/vocab#flibe"
+    },
+    {
+      "sentence": "The FLiBe eutectic exhibits a comparatively low melting point.",
+      "surface": "FLiBe",
+      "expected_target_iri": "https://w3id.org/msr-kg/vocab#flibe"
+    },
+    {
+      "sentence": "A LiF-BeF2 mixture was proposed as a substitute for the standard fuel carrier.",
+      "surface": "LiF-BeF2",
+      "expected_target_iri": "https://w3id.org/msr-kg/vocab#flibe"
+    },
+    {
+      "sentence": "The reference composition was LiF-BeF2 (66-34 mol%) for the coolant loop.",
+      "surface": "LiF-BeF2 (66-34 mol%)",
+      "expected_target_iri": "https://w3id.org/msr-kg/data#salt-BeF2-LiF-34.0-66.0"
+    },
+    {
+      "sentence": "Later measurements used BeF2-LiF (34-66 mol%) as the working fluid in the loop.",
+      "surface": "BeF2-LiF (34-66 mol%)",
+      "expected_target_iri": "https://w3id.org/msr-kg/data#salt-BeF2-LiF-34.0-66.0"
+    },
+    {
+      "sentence": "A LiF-BeF2 (66.0-34.0 mol%) mixture was prepared for the reference measurements described above.",
+      "surface": "LiF-BeF2 (66.0-34.0 mol%)",
+      "expected_target_iri": "https://w3id.org/msr-kg/data#salt-BeF2-LiF-34.0-66.0"
+    },
+    {
+      "sentence": "The BeF2-LiF (34.0-66.0 mol%) mixture matches the standard reference composition.",
+      "surface": "BeF2-LiF (34.0-66.0 mol%)",
+      "expected_target_iri": "https://w3id.org/msr-kg/data#salt-BeF2-LiF-34.0-66.0"
+    },
+    {
+      "sentence": "The pump handled a generic saline solution unrelated to the reactor loop chemistry.",
+      "surface": "saline solution",
+      "expected_target_iri": null
+    },
+    {
+      "sentence": "The test reactor vessel was inspected for wear after the extended run.",
+      "surface": "reactor",
+      "expected_target_iri": null
+    },
+    {
+      "sentence": "The specific heat of the salt increased slightly with temperature in this separate study.",
+      "surface": "specific heat",
+      "expected_target_iri": null
+    },
+    {
+      "sentence": "The molten salt breeder concept was studied separately from the primary design effort.",
+      "surface": "molten salt breeder",
+      "expected_target_iri": null
+    },
+    {
+      "sentence": "A hypothetical XeF6-KrF2 (50-50 mol%) mixture was proposed for comparison purposes only.",
+      "surface": "XeF6-KrF2 (50-50 mol%)",
+      "expected_target_iri": null
+    },
+    {
+      "sentence": "The pump impeller showed no visible wear after five hundred hours of operation.",
+      "surface": "pump impeller",
+      "expected_target_iri": null
+    },
+    {
+      "sentence": "The graphite moderator blocks were replaced during the scheduled outage.",
+      "surface": "graphite moderator",
+      "expected_target_iri": null
+    },
+    {
+      "sentence": "The heat exchanger tubes were inspected for fouling during the outage.",
+      "surface": "heat exchanger",
+      "expected_target_iri": null
+    },
+    {
+      "sentence": "Thermal conductivity measurements were deferred to a later separate report.",
+      "surface": "Thermal conductivity",
+      "expected_target_iri": null
+    },
+    {
+      "sentence": "The off-gas system operated within normal parameters throughout the run.",
+      "surface": "off-gas system",
+      "expected_target_iri": null
+    },
+    {
+      "sentence": "The control rod drive mechanism was recalibrated after the outage.",
+      "surface": "control rod",
+      "expected_target_iri": null
+    },
+    {
+      "sentence": "A sampling line blockage delayed the routine chemical analysis.",
+      "surface": "sampling line",
+      "expected_target_iri": null
+    },
+    {
+      "sentence": "A nickel alloy specimen was removed for metallurgical examination.",
+      "surface": "nickel alloy specimen",
+      "expected_target_iri": null
+    },
+    {
+      "sentence": "The freeze valve isolated the drain tank during the shutdown sequence.",
+      "surface": "freeze valve",
+      "expected_target_iri": null
+    },
+    {
+      "sentence": "Fluoride volatility processing was considered as an alternative reprocessing route.",
+      "surface": "Fluoride volatility",
+      "expected_target_iri": null
+    }
+  ]
+}
