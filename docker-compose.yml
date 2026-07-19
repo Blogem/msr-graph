@@ -78,6 +78,17 @@ services:
   server:
     build: .
     user: "10001:10001"
+    # The mounted Docker socket (see volumes below) is owned root:root mode
+    # 0660, so the non-root uid 10001 cannot reach it without the owning
+    # group. Adding gid 0 grants exactly the socket access the sandbox pool
+    # needs (list/create/exec/remove sibling containers) while keeping the
+    # process non-root for everything else. The server already sits at the
+    # "host-root-equivalent" trust ceiling by holding the socket at all
+    # (design D5 / sandbox pool docs), so this grants no new authority.
+    # gid 0 owns the socket under Docker Desktop; a Linux host where the
+    # socket is root:docker would use that group's gid instead.
+    group_add:
+      - "0"
     environment:
       GRAPHDB_URL: http://graphdb:7200
       GRAPHDB_REPO: msr
