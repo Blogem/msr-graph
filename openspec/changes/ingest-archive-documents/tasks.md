@@ -18,10 +18,10 @@
 
 ## 4. Curated-set finalization & evolution-target gate (`corpus-acquisition`)
 
-- [ ] 4.1 Select the 3–4 additional chemistry/corrosion documents from the manifest (INOR-8 / Hastelloy-N cluster) per the DATA_SCOPE selection criteria; add them to the committed curated-set list
+- [x] 4.1 Select the 3–4 additional chemistry/corrosion documents from the manifest (INOR-8 / Hastelloy-N cluster) per the DATA_SCOPE selection criteria; add them to the committed curated-set list
 - [x] 4.2 Implement evolution-target detection: scan the curated OCR for a solubility statement with a numeric value + unit and for graphite-as-moderator prose
-- [ ] 4.3 Verify the targets are present; if absent, swap additions until they are (gate must pass, not hope)
-- [ ] 4.4 Record the finalized ~12-document curated set and the grep-level evidence (quoted source sentences) in `docs/DATA_SCOPE.md`, marking open items 4 and 5 resolved
+- [x] 4.3 Verify the targets are present; if absent, swap additions until they are (gate must pass, not hope)
+- [x] 4.4 Record the finalized ~12-document curated set and the grep-level evidence (quoted source sentences) in `docs/DATA_SCOPE.md`, marking open items 4 and 5 resolved
 
 ## 5. OCR normalization (`corpus-normalization`)
 
@@ -56,4 +56,4 @@
 
 ## 10. Documentation
 
-- [ ] 10.1 Document the ingest step in the README (`make ingest` in the bootstrap order, the two-scope corpus model, and the `data/corpus/` layout: `msr-archive/` checkout vs. `{report#}/` outputs)
+- [x] 10.1 Document the ingest step in the README (`make ingest` in the bootstrap order, the two-scope corpus model, and the `data/corpus/` layout: `msr-archive/` checkout vs. `{report#}/` outputs)
