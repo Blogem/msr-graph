@@ -518,6 +518,51 @@ class TestComposedOCRSaltSupersedesOverlappingConcept:
         assert not any(r.target_kind == "salt" for r in records)
 
 
+class TestDotSeparatorOCRSaltResolvesAtFormulaLayer:
+    """Code-review finding 1: `formula._clean_surface` normalizes the
+    middle-dot/bullet/dot-operator separators (`·`/`•`/`⋅`) to '-' before
+    `_resolve_components` runs, and the linker now always passes
+    `known_compounds` through to `normalize_salt_span` (no more gating on
+    `_has_ocr_subscript_artifact`). So a composed OCR salt mention using a
+    dot separator -- with mid-span comma-subscript artifacts and a `mol %`
+    tail, and no intervening whitespace before the separator -- must resolve
+    to the SAME loaded salt individual as the hyphen-separated form, at
+    layer 3."""
+
+    def test_dot_separator_ternary_ocr_composed_salt_resolves_to_same_iri_as_hyphen_form(
+        self,
+    ) -> None:
+        salt_entity, salt_iri = _salt_entity("LiF-BeF2-ThF4", "72-16-12")
+        known = _compound_known_entities() + [salt_entity]
+
+        dot_records = _link_with(
+            known,
+            "A ternary mixture LiF·BeF,·ThF, (72-16-12 mol %) was evaluated "
+            "for dot-separator OCR robustness.",
+        )
+        hyphen_records = _link_with(
+            known,
+            "A ternary mixture LiF-BeF,-ThF, (72-16-12 mol %) was evaluated "
+            "for fuel-salt service.",
+        )
+
+        dot_salt = next((r for r in dot_records if r.target_iri == salt_iri), None)
+        assert dot_salt is not None, (
+            f"expected a layer-3 dot-separator salt link to {salt_iri}, got {dot_records!r}"
+        )
+        assert dot_salt.status == "linked"
+        assert dot_salt.target_kind == "salt"
+        assert dot_salt.layer == 3
+
+        hyphen_salt = next((r for r in hyphen_records if r.target_iri == salt_iri), None)
+        assert hyphen_salt is not None, (
+            f"expected a layer-3 hyphen salt link to {salt_iri}, got {hyphen_records!r}"
+        )
+
+        # Both surface forms must resolve to the exact same salt IRI.
+        assert dot_salt.target_iri == hyphen_salt.target_iri == salt_iri
+
+
 class TestBoundedFuzzyShortChemistryTokens:
     """entity-linking spec "Bounded fuzzy fallback admits short chemistry
     tokens": eligibility for the bounded rapidfuzz layer is governed by
@@ -559,12 +604,11 @@ class TestBoundedFuzzyShortChemistryTokens:
         matcher = build_matcher(known)
         seg = _segment("ORNL-TM-2316", text)
 
-        # Explicitly pin the dedicated chemistry knob (default 3) rather
-        # than relying on it coincidentally matching the default -- this is
-        # what `link_segment`'s layer-4 call actually reads for
-        # formula-candidate spans (see linker.py); `fuzzy_min_token_length`
-        # is left untouched to show it has no bearing here.
-        low_config = Config(fuzzy_min_token_length_chemistry=3)
+        # Explicitly pin the single fuzzy knob at its default value (3)
+        # rather than relying on it coincidentally matching the default --
+        # this is what `link_segment`'s layer-4 call actually reads for
+        # every candidate span, formula-shaped or not (see linker.py).
+        low_config = Config(fuzzy_min_token_length=3)
         records = link_segment(seg, matcher, known, known_iris, low_config)
         fuzzy = next((r for r in records if r.layer == 4), None)
         assert fuzzy is not None, f"expected a layer-4 fuzzy link, got {records!r}"
@@ -580,14 +624,11 @@ class TestBoundedFuzzyShortChemistryTokens:
         matcher = build_matcher(known)
         seg = _segment("ORNL-TM-2316", text)
 
-        # Layer 4 eligibility for formula-candidate spans is governed by the
-        # dedicated `fuzzy_min_token_length_chemistry` knob (default 3), not
-        # the general `fuzzy_min_token_length` (default 4) -- see
-        # `link_segment`'s layer-4 call in linker.py. Raising the chemistry
-        # knob above the 3-char "BeF" token's length is what disables the
-        # fuzzy fallback here; leaving the general knob untouched confirms
-        # it has no bearing on formula-span eligibility.
-        high_config = Config(fuzzy_min_token_length_chemistry=6)
+        # Layer 4 eligibility is governed by the single
+        # `Config.fuzzy_min_token_length` knob -- see `link_segment`'s
+        # layer-4 call in linker.py. Raising it above the 3-char "BeF"
+        # token's length is what disables the fuzzy fallback here.
+        high_config = Config(fuzzy_min_token_length=6)
         records = link_segment(seg, matcher, known, known_iris, high_config)
 
         assert not any(r.layer == 4 for r in records)

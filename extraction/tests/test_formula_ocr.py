@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import pytest
 
+from msr_extraction import formula
 from msr_extraction.formula import normalize_salt_span
 
 FLIBE_IRI = "msrd:salt-BeF2-LiF-34.0-66.0"
@@ -126,6 +127,47 @@ class TestUnknownComponentLeavesSpanUnresolved:
         # ThF4 is not in known_compounds -- the whole ternary span must be
         # unresolved, not a two-component guess.
         assert result is None
+
+
+class TestCleanComponentPassesThroughRegardlessOfCatalogMembership:
+    """Code-review finding 2 / spec.md "_resolve_components semantics": a
+    CLEAN component (no trailing OCR-artifact ',' or '.') must pass through
+    `_resolve_components` unchanged regardless of `known_compounds` set
+    membership -- only an *artifact* component (ends in ',' or '.') must
+    resolve to exactly one known compound, else the whole span is None.
+    Contrast `test_unknown_component_returns_none` above, where the
+    unresolvable component IS the trailing-comma artifact, not a clean
+    token -- that case still correctly returns None under this semantics."""
+
+    def test_clean_component_not_in_known_compounds_still_resolves(self) -> None:
+        # "LiF" is clean and absent from known_compounds, but must still
+        # pass through unchanged; "BeF," is the artifact component and DOES
+        # resolve (its stripped root "BeF" uniquely maps to the sole known
+        # compound "BeF2").
+        result = normalize_salt_span(
+            "LiF-BeF, (66-34 mol %)", known_compounds=frozenset({"BeF2"})
+        )
+        assert result == FLIBE_IRI
+
+
+class TestInlineCompositionRegexIsBounded:
+    """Code-review finding: ReDoS structural guard. `_INLINE_COMPOSITION_RE`'s
+    internal whitespace quantifiers between "mol" and the trailing "%" must
+    be bounded (``\\s{0,4}``), not an unbounded ``\\s*`` run, so a
+    pathologically long run of whitespace does not match -- while every
+    legitimate mol-tail spelling still does."""
+
+    def test_long_whitespace_run_before_percent_does_not_match(self) -> None:
+        surface = "LiF-BeF2 66-34 mol" + " " * 20 + "%"
+        assert formula._INLINE_COMPOSITION_RE.search(surface) is None
+
+    @pytest.mark.parametrize(
+        "tail",
+        ["mol%", "mol %", "mole %", "mole%", "mol.%", "mol. %"],
+    )
+    def test_legit_mol_tail_variants_still_match(self, tail: str) -> None:
+        surface = f"LiF-BeF2 66-34 {tail}"
+        assert formula._INLINE_COMPOSITION_RE.search(surface) is not None
 
 
 class TestKnownCompoundsBackwardCompatibility:

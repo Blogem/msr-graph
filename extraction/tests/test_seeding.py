@@ -93,6 +93,25 @@ def test_msre_abbreviation_matches_the_reactor_concept() -> None:
     assert match.surface == "MSRE"
 
 
+def test_ocr_variants_never_seeded_for_a_non_catalog_formula() -> None:
+    """specs/entity-ruler-seeding/spec.md "OCR variants derive only from
+    known formulas": `variants.generate_variants` only ever expands from
+    labels the known-entity catalog actually carries (design.md D1/D2), so a
+    formula-shaped compound the catalog never loaded -- here, xenon
+    fluorides ("XeF2") is deliberately absent from `_known_entities()` --
+    never gets an OCR-subscript pattern seeded for it at all. Matching stays
+    catalog-anchored: a garbled "XeF," surface must not match anything,
+    proving there is no free-floating pattern generation over arbitrary
+    chemistry independent of the loaded catalog."""
+    known = _known_entities()  # no XeF2 / xenon-fluorides entity anywhere
+    matcher = build_matcher(known)
+    text = "Trace XeF, was reported as an unidentified OCR artifact in the scan."
+
+    matches = matcher.match(text)
+
+    assert matches == []
+
+
 def test_rebuild_is_deterministic_for_the_same_text() -> None:
     text = (
         "The viscosity of MSRE fuel, described as lif bef2, was measured "
