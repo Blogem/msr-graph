@@ -8,15 +8,15 @@
 
 ## 2. Tools
 
-- [ ] 2.1 Implement the `sparql_query` tool over the chunk-1 `internal/graph.Select` core-dataset client (do not expose `SelectRaw`); grounding walk resolves mention → SKOS pref/altLabel + salt label → `skos:closeMatch` salt → `PropertyMeasurement` (property, unit, equation form, `validTempMin`/`Max`, `dataLocator`, `citedIn`, `prov:wasDerivedFrom`), with no salt/property name hardcoded
-- [ ] 2.2 Implement the `sql_query` tool over an `internal/store` read-only connection with a SELECT-only guard rejecting INSERT/UPDATE/DELETE, DDL, PRAGMA writes, multi-statement, and comment-smuggled writes before reaching SQLite
-- [ ] 2.3 Implement the `run_python` tool over the chunk-3 `sandbox.Run` interface, capturing stdout/stderr/exit code and surfacing non-zero exits as tool results (not crashes); its tool description MUST advertise the runtime contract to the model — read-only DB at `/data/msr.db`, `numpy`/`pandas` available, JSON result on stdout
+- [x] 2.1 Implement the `sparql_query` tool over the chunk-1 `internal/graph.Select` core-dataset client (do not expose `SelectRaw`); grounding walk resolves mention → SKOS pref/altLabel + salt label → `skos:closeMatch` salt → `PropertyMeasurement` (property, unit, equation form, `validTempMin`/`Max`, `dataLocator`, `citedIn`, `prov:wasDerivedFrom`), with no salt/property name hardcoded
+- [x] 2.2 Implement the `sql_query` tool over an `internal/store` read-only connection with a SELECT-only guard rejecting INSERT/UPDATE/DELETE, DDL, PRAGMA writes, multi-statement, and comment-smuggled writes before reaching SQLite
+- [x] 2.3 Implement the `run_python` tool over the chunk-3 `sandbox.Run` interface, capturing stdout/stderr/exit code and surfacing non-zero exits as tool results (not crashes); its tool description MUST advertise the runtime contract to the model — read-only DB at `/data/msr.db`, `numpy`/`pandas` available, JSON result on stdout
 - [x] 2.4 Enforce the no-model-arithmetic invariant and out-of-range temperature handling in the loop/prompt: numeric answers come from `run_python`; a requested temperature outside `[validTempMin, validTempMax]` is flagged/refused, not extrapolated
 
 ## 3. KG-schema prompt builder
 
-- [ ] 3.1 Implement the Go prompt builder: canonical, IRI-sorted, deterministically formatted serialization of TBox + SKOS vocab + salt catalog (schema only — no measurements/mentions/evidence)
-- [ ] 3.2 Implement per-request `owl:versionInfo` detection (one `Select`) with cache reuse when unchanged and rebuild on bump; expose the detected version for the `provenance` event
+- [x] 3.1 Implement the Go prompt builder: canonical, IRI-sorted, deterministically formatted serialization of TBox + SKOS vocab + salt catalog (schema only — no measurements/mentions/evidence)
+- [x] 3.2 Implement per-request `owl:versionInfo` detection (one `Select`) with cache reuse when unchanged and rebuild on bump; expose the detected version for the `provenance` event
 
 ## 4. Chat API (`cmd/server`)
 
@@ -34,9 +34,9 @@
 - [ ] 6.2 End-to-end grounded density test (stubbed LLM + fake pool): "density of FLiBe (LiF-BeF₂ 66-34 mol%) at 900 K" → ≈ 1.974 g·cm⁻³ from `c0=2.413`, `c1=-4.88e-4` (locator `nist-srd27/density#BeF2-LiF|34.0-66.0`) via a script; trace shows grounding → coefficient fetch → `script_run`
 - [ ] 6.3 Out-of-range temperature test: a temperature outside the valid range is flagged/refused, not reported as a valid number
 - [ ] 6.4 Comparative-query test (stubbed LLM + fake pool): a "lowest-viscosity" question is resolved by a single aggregating script whose output is the reported winner
-- [ ] 6.5 SELECT-only-guard table tests: clean SELECTs pass; INSERT/UPDATE/DELETE, DDL, PRAGMA writes, multi-statement, and comment-smuggled writes are rejected
+- [x] 6.5 SELECT-only-guard table tests: clean SELECTs pass; INSERT/UPDATE/DELETE, DDL, PRAGMA writes, multi-statement, and comment-smuggled writes are rejected
 - [ ] 6.6 SSE handler tests: stateless request shape accepted, malformed body rejected, every event type emitted and well-formed, `script_run` carries source+stdout+stderr+exit+sandbox id, `provenance` names locator/citedIn/DOI/version, and no trace is persisted
-- [ ] 6.7 Prompt-builder tests: byte-identical output for a fixed graph state (order-independent of query result order); rebuild triggered when `owl:versionInfo` changes; instance data absent from the prompt
+- [x] 6.7 Prompt-builder tests: byte-identical output for a fixed graph state (order-independent of query result order); rebuild triggered when `owl:versionInfo` changes; instance data absent from the prompt
 - [ ] 6.8 Schema-generic test: a newly present measurement/coefficient row becomes answerable with no agent code change
 
 ## 7. Manual verification tooling (playground until the frontend lands)
