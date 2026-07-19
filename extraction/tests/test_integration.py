@@ -214,3 +214,47 @@ def test_document_write_is_idempotent_on_rerun() -> None:
     # unchanged relative to before this test's own first write (the write
     # is a no-op if `make ingest` already wrote these same records).
     assert before <= after_first
+
+
+def test_seed_document_metadata_is_manifest_sourced_single_label() -> None:
+    """The pre-seeded Document ends with exactly one, manifest-sourced label.
+
+    Pins specs/document-graph/spec.md's "Re-asserting a seed Document is a
+    no-op" scenario by name (not just by aggregate count): the seed A-Box
+    types `msrd:ORNL-TM-2316 a msr:Document` but deliberately carries no
+    hand-authored label/identifier/date, so after ingest the node has exactly
+    one `rdfs:label` — the manifest's — rather than a seed label coexisting
+    with a divergent manifest label. This is the check that the count-based
+    idempotency test structurally cannot make.
+    """
+    config = Config.from_env()
+    subject = f"{MSRD}ORNL-TM-2316"
+
+    assert _sparql_ask(
+        config, f"ASK {{ GRAPH <urn:msr:data> {{ <{subject}> a <{MSR}Document> }} }}"
+    ), "seed Document msrd:ORNL-TM-2316 is not typed a msr:Document after ingest"
+
+    # rdfs:label object is a variable here, so COUNT/enumeration is reliable
+    # (unlike a fully-ground `a` pattern — see _sparql_ask docstring).
+    label_bindings = _sparql_select(
+        config,
+        f"""
+        SELECT ?l WHERE {{ GRAPH <urn:msr:data> {{
+            <{subject}> <http://www.w3.org/2000/01/rdf-schema#label> ?l
+        }} }}
+        """,
+    )
+    labels = [b["l"]["value"] for b in label_bindings]
+    assert len(labels) == 1, (
+        f"expected exactly one rdfs:label on the seed Document, found {labels!r} "
+        "(a divergent seed label coexisting with the manifest's would give 2)"
+    )
+
+    all_records = manifest.parse_manifest(
+        config.readme_path.read_text(encoding="utf-8")
+    )
+    record = next(r for r in all_records if r.report_number == "ORNL-TM-2316")
+    assert labels[0] == record.title, (
+        f"seed Document label {labels[0]!r} is not the manifest title "
+        f"{record.title!r} — manifest must be the single metadata source"
+    )
