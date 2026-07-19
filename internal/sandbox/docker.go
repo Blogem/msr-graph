@@ -5,7 +5,6 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/api/types/mount"
@@ -102,7 +101,7 @@ func (r *dockerRuntime) Create(ctx context.Context, spec ContainerSpec) (string,
 		return "", fmt.Errorf("sandbox: create container: %w", err)
 	}
 
-	if err := r.cli.ContainerStart(ctx, created.ID, types.ContainerStartOptions{}); err != nil {
+	if err := r.cli.ContainerStart(ctx, created.ID, container.StartOptions{}); err != nil {
 		return "", fmt.Errorf("sandbox: start container %s: %w", created.ID, err)
 	}
 
@@ -116,7 +115,7 @@ func (r *dockerRuntime) Create(ctx context.Context, spec ContainerSpec) (string,
 // than hand-parsed, since re-implementing that framing is exactly the kind
 // of subtle parsing bug to avoid in a security-sensitive path (design D3).
 func (r *dockerRuntime) Exec(ctx context.Context, id string, script []byte) (ExecResult, error) {
-	execCfg := types.ExecConfig{
+	execCfg := container.ExecOptions{
 		Cmd:          []string{"python", "-"},
 		AttachStdin:  true,
 		AttachStdout: true,
@@ -129,7 +128,7 @@ func (r *dockerRuntime) Exec(ctx context.Context, id string, script []byte) (Exe
 		return ExecResult{}, fmt.Errorf("sandbox: exec create in container %s: %w", id, err)
 	}
 
-	attachResp, err := r.cli.ContainerExecAttach(ctx, execCreated.ID, types.ExecStartCheck{Tty: false})
+	attachResp, err := r.cli.ContainerExecAttach(ctx, execCreated.ID, container.ExecAttachOptions{Tty: false})
 	if err != nil {
 		return ExecResult{}, fmt.Errorf("sandbox: exec attach in container %s: %w", id, err)
 	}
@@ -177,7 +176,7 @@ func (r *dockerRuntime) Exec(ctx context.Context, id string, script []byte) (Exe
 // Remove force-removes the container identified by id, killing any live
 // process inside it. It is the sole teardown path (design D1, D7).
 func (r *dockerRuntime) Remove(ctx context.Context, id string) error {
-	if err := r.cli.ContainerRemove(ctx, id, types.ContainerRemoveOptions{Force: true}); err != nil {
+	if err := r.cli.ContainerRemove(ctx, id, container.RemoveOptions{Force: true}); err != nil {
 		return fmt.Errorf("sandbox: remove container %s: %w", id, err)
 	}
 	return nil
@@ -190,7 +189,7 @@ func (r *dockerRuntime) Remove(ctx context.Context, id string) error {
 // accumulated across containers rather than stopping at the first failure.
 func (r *dockerRuntime) Reap(ctx context.Context) error {
 	listFilters := filters.NewArgs(filters.Arg("label", SandboxLabel))
-	containers, err := r.cli.ContainerList(ctx, types.ContainerListOptions{
+	containers, err := r.cli.ContainerList(ctx, container.ListOptions{
 		All:     true,
 		Filters: listFilters,
 	})
@@ -200,7 +199,7 @@ func (r *dockerRuntime) Reap(ctx context.Context) error {
 
 	var errs []error
 	for _, c := range containers {
-		if rmErr := r.cli.ContainerRemove(ctx, c.ID, types.ContainerRemoveOptions{Force: true}); rmErr != nil {
+		if rmErr := r.cli.ContainerRemove(ctx, c.ID, container.RemoveOptions{Force: true}); rmErr != nil {
 			errs = append(errs, fmt.Errorf("sandbox: reap container %s: %w", c.ID, rmErr))
 		}
 	}
