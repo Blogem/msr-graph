@@ -5,7 +5,7 @@ The system SHALL write one `msr:Document` node per curated document into `urn:ms
 
 #### Scenario: Curated documents present in the graph
 - **WHEN** the ingest completes against a seeded stack
-- **THEN** the graph contains 12 `msr:Document` nodes (one per curated document) with report number, title, and date metadata, queryable via the core-dataset client
+- **THEN** the graph contains one `msr:Document` node per curated document (11 in the finalized curated set) with report number, title, and date metadata, queryable via the core-dataset client
 
 #### Scenario: Existing data-graph triples preserved
 - **WHEN** the Document nodes are written to `urn:msr:data`
