@@ -46,6 +46,7 @@ from pathlib import Path
 import pytest
 
 from msr_extraction.config import Config
+from msr_extraction.formula import canonicalize
 from msr_extraction.graph_reader import KnownEntity
 from msr_extraction.seeding import build_matcher
 
@@ -134,7 +135,68 @@ _KNOWN_ENTITIES: list[KnownEntity] = [
         labels=("BeF2-LiF (34.0-66.0 mol%)",),
         kind="salt",
     ),
+    # --- ocr-robust-salt-linking (task 5.5) additions --------------------
+    #
+    # Single-token, formula-shaped compound concepts (real-vocab-shaped
+    # altLabels) -- the catalog the linker's `known_compounds`
+    # reconstruction set derives from (design.md D1), so a comma/period
+    # OCR-subscript component (`BeF,`, `ThF,`, `UF,`, `ZrF,`) resolves
+    # against a *known* compound rather than being left unresolved.
+    KnownEntity(
+        target_iri=f"{VOC}lithium-fluorides",
+        labels=("lithium fluorides", "LiF"),
+        kind="concept",
+    ),
+    KnownEntity(
+        target_iri=f"{VOC}beryllium-fluorides",
+        labels=("beryllium fluorides", "BeF2"),
+        kind="concept",
+    ),
+    KnownEntity(
+        target_iri=f"{VOC}thorium-fluorides",
+        labels=("thorium fluorides", "ThF4"),
+        kind="concept",
+    ),
+    KnownEntity(
+        target_iri=f"{VOC}uranium-fluorides",
+        labels=("uranium fluorides", "UF4"),
+        kind="concept",
+    ),
+    KnownEntity(
+        target_iri=f"{VOC}zirconium-fluorides",
+        labels=("zirconium fluorides", "ZrF4"),
+        kind="concept",
+    ),
+    KnownEntity(
+        target_iri=f"{VOC}sodium-fluorides",
+        labels=("sodium fluorides", "NaF"),
+        kind="concept",
+    ),
 ]
+
+
+def _salt_known_entity(salt_token: str, composition: str) -> KnownEntity:
+    """Build a `KnownEntity` (kind="salt") for the composed real-OCR gold
+    cases below, computing the IRI/label via `canonicalize` rather than
+    hand-writing them (task contract: "Compute expected IRIs
+    programmatically"). The `rdfs:label` mirrors the real loader's
+    `"{formula} ({composition} mol%)"` convention, e.g.
+    `"BeF2-LiF (34.0-66.0 mol%)"`."""
+    salt = canonicalize(salt_token, composition, "P1")
+    iri = MSRD + salt.iri[len("msrd:") :]
+    label = salt.canonical.replace(" | ", " (") + " mol%)"
+    return KnownEntity(target_iri=iri, labels=(label,), kind="salt")
+
+
+# Real-OCR composed-salt cases (task 5.5), drawn from multiple curated docs'
+# `mol %`/`mole %` + comma-subscript forms (design.md Context): the loader-
+# minted individuals these must resolve to, over and above the existing
+# MSRE-coolant FLiBe entry above.
+_TERNARY_SALT = _salt_known_entity("LiF-BeF2-ThF4", "72-16-12")
+_LIF_UF4_SALT = _salt_known_entity("LiF-UF4", "73-27")
+_NAF_ZRF4_SALT = _salt_known_entity("NaF-ZrF4", "53-47")
+
+_KNOWN_ENTITIES.extend([_TERNARY_SALT, _LIF_UF4_SALT, _NAF_ZRF4_SALT])
 
 
 def _load_gold() -> tuple[str, list[dict]]:
