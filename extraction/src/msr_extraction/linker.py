@@ -115,10 +115,10 @@ LAYER_FLASH = 5
 #   matches mid-string (no trailing `$` anchor) as part of a larger span.
 _DIGITS = "0-9₀-₉"
 _ELEMENT_UNIT = rf"[A-Z][a-z]?[{_DIGITS}]*"
-_FORMULA_TOKEN = rf"\d*(?:{_ELEMENT_UNIT}){{1,4}}[,.]?"
+_FORMULA_TOKEN = rf"\d{{0,3}}(?:{_ELEMENT_UNIT}){{1,4}}[,.]?"
 _FORMULA_SEP = r"\s*[-·•⋅]\s*"
 _COMPOSITION_TAIL = (
-    r"\(?\s*\d+(?:\.\d+)?(?:\s*-\s*\d+(?:\.\d+)?)+\s*mol\.?\s*e?\.?\s*%\s*\)?"
+    r"\(?\s*\d+(?:\.\d+)?(?:\s*-\s*\d+(?:\.\d+)?)+\s*mol\.?\s{0,4}e?\.?\s{0,4}%\s*\)?"
 )
 # `formula` is a named group covering just the token(s), separate from the
 # optional `tail` (composition group) -- this lets `_has_ocr_subscript_artifact`
