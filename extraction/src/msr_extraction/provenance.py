@@ -32,8 +32,10 @@ EXTRACTION_VERSION = "0.3.0"
 #: Full IRI identifying the extraction pipeline as a ``prov:Agent``,
 #: written in ``<...>`` bracket form (a bare "agent:" scheme, not a
 #: prefixed CURIE) because the ``@version`` segment would otherwise
-#: require Turtle/SPARQL CURIE escaping of ``@``.
-AGENT_IRI = "<agent:extraction@0.3.0>"
+#: require Turtle/SPARQL CURIE escaping of ``@``. Derived from
+#: :data:`EXTRACTION_VERSION` so the version is single-sourced and cannot
+#: drift between the two constants on a future bump.
+AGENT_IRI = f"<agent:extraction@{EXTRACTION_VERSION}>"
 
 _PREFIXES = """\
 PREFIX msr: <https://w3id.org/msr-kg/ontology#>

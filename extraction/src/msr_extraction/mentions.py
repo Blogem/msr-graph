@@ -68,15 +68,19 @@ def mention_triples(m: Mention) -> str:
             msr:surfaceForm "{surface}"^^xsd:string ;
             msr:startOffset "{start}"^^xsd:integer ;
             msr:endOffset "{end}"^^xsd:integer ;
-            prov:wasGeneratedBy msrd:activity-extraction .
+            prov:wasGeneratedBy msrd:activity-extraction ;
+            prov:wasDerivedFrom <{document_iri}> .
 
     The subject IRI is deterministic (:func:`mention_iri`); no blank nodes
     are used. ``linksTo``/``inDocument`` objects are full IRIs written in
     ``<...>`` form (not CURIEs) to avoid ambiguity across the
     vocab/ontology/data namespaces. ``prov:wasGeneratedBy`` references the
-    deterministic extraction-run Activity IRI (design.md D2/D6); the
-    mention's ``msr:inDocument`` remains its derivation source, so no
-    separate ``prov:wasDerivedFrom`` is asserted here.
+    deterministic extraction-run Activity IRI (design.md D2/D6). A literal
+    ``prov:wasDerivedFrom`` pointing at the same ``document_iri`` as
+    ``msr:inDocument`` is also asserted, so a PROV-only consumer (e.g. the
+    chunk-13 SHACL shapes) can traverse the mention's derivation edge
+    without knowing about ``msr:inDocument``; ``document_iri`` is
+    deterministic, so this block remains idempotent.
     """
     subject = mention_iri(m.report, m.start, m.end)
     surface = _escape_literal(m.surface_form)
@@ -87,7 +91,8 @@ def mention_triples(m: Mention) -> str:
         f'    msr:surfaceForm "{surface}"^^xsd:string ;\n'
         f'    msr:startOffset "{m.start}"^^xsd:integer ;\n'
         f'    msr:endOffset "{m.end}"^^xsd:integer ;\n'
-        f"    prov:wasGeneratedBy {ACTIVITY_IRI} ."
+        f"    prov:wasGeneratedBy {ACTIVITY_IRI} ;\n"
+        f"    prov:wasDerivedFrom <{m.document_iri}> ."
     )
 
 
