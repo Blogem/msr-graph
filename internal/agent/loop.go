@@ -152,7 +152,7 @@ func (a *Agent) Run(ctx context.Context, req RunRequest, emit Emitter) error {
 		if e.Type == EventScriptRun && e.ScriptRun != nil {
 			matched := map[string]bool{}
 			for locator := range surfacedLocators {
-				if strings.Contains(e.ScriptRun.Source, locator) {
+				if scriptReferencesLocator(e.ScriptRun.Source, locator) {
 					matched[locator] = true
 					locatorSet[locator] = true
 				}
@@ -265,4 +265,34 @@ func (a *Agent) Run(ctx context.Context, req RunRequest, emit Emitter) error {
 	wrappedEmit(Event{Type: EventError, Error: errMaxIterations.Error()})
 	wrappedEmit(Event{Type: EventDone})
 	return errMaxIterations
+}
+
+// scriptReferencesLocator reports whether source references locator as a
+// whole locator, not merely as a substring. NIST locators are disambiguated
+// by appending "@<tmin>" to break salt+property collisions (see
+// disambiguateLocators in internal/nist/process.go), which makes a base
+// locator like "nist-srd27/density#LiF-BeF2|66-34" a literal string prefix
+// of its disambiguated sibling "nist-srd27/density#LiF-BeF2|66-34@800". A
+// plain strings.Contains scan would match the base locator inside the
+// disambiguated one even when the script never referenced the base, over-
+// attributing provenance and undercutting design D5's "cannot be gamed"
+// intent. This checks every occurrence of locator in source and rejects
+// any that is immediately followed by '@': that means the real token
+// present is the longer disambiguated locator, not this one.
+func scriptReferencesLocator(source, locator string) bool {
+	if locator == "" {
+		return false
+	}
+	for start := 0; ; {
+		idx := strings.Index(source[start:], locator)
+		if idx < 0 {
+			return false
+		}
+		pos := start + idx
+		end := pos + len(locator)
+		if end >= len(source) || source[end] != '@' {
+			return true
+		}
+		start = pos + 1
+	}
 }
