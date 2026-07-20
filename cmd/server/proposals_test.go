@@ -210,11 +210,13 @@ func detailNeighborhoodCanned() *graph.Results {
 // newDetailReader builds a fakeProposalReader that dispatches SelectRaw by
 // query text: a query naming the unknown id returns zero bindings (the
 // 404 path); a query scoped to the proposal graph (urn:msr:proposal/{id})
-// returns the proposal's triples; any other query mentioning the known id
-// (the evidence lookup, keyed off the msrd:proposal-{id} resource) returns
-// the evidence rows. Select -- reserved for core-only reads per the
-// "staging-inclusive path only" requirement -- always answers the one-hop
-// ontology neighborhood lookup.
+// returns the proposal's triples; the one-hop ontology-neighborhood lookup
+// -- issued via SelectRaw too (an explicit multi-graph FILTER(?g IN (...))
+// over the core graphs, rather than the restricted Select) -- is matched
+// on the stable "FILTER(?g IN" substring so it is robust to whitespace/
+// formatting differences in the real query; any other query mentioning the
+// known id (the evidence lookup, keyed off the msrd:proposal-{id}
+// resource) returns the evidence rows.
 func newDetailReader() *fakeProposalReader {
 	return &fakeProposalReader{
 		selectRawFn: func(query string) (*graph.Results, error) {
@@ -223,14 +225,13 @@ func newDetailReader() *fakeProposalReader {
 				return &graph.Results{}, nil
 			case strings.Contains(query, "urn:msr:proposal/"+detailKnownID):
 				return detailTriplesCanned(), nil
+			case strings.Contains(query, "FILTER(?g IN"):
+				return detailNeighborhoodCanned(), nil
 			case strings.Contains(query, detailKnownID):
 				return detailEvidenceCanned(), nil
 			default:
 				return nil, fmt.Errorf("fakeProposalReader: unexpected SelectRaw query: %s", query)
 			}
-		},
-		selectFn: func(_ string) (*graph.Results, error) {
-			return detailNeighborhoodCanned(), nil
 		},
 	}
 }
