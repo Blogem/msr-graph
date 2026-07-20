@@ -35,6 +35,11 @@ QUOTED_RECORD = ManifestRecord(
     ocr_path="ocr/ORNL-TM-0728.txt",
 )
 
+# openspec/changes/provenance-run-lineage: the run timestamp threaded into
+# write_documents' per-run generation edges (task 5.7).
+RUN_TS = "2024-01-02T03:04:05+00:00"
+OTHER_RUN_TS = "2024-06-07T08:09:10+00:00"
+
 
 class _FakeSparqlClient:
     """Captures ``.update(...)`` calls; never touches the network."""
@@ -81,17 +86,9 @@ def test_insert_data_update_wraps_graph_and_prefixes() -> None:
     assert "msrd:ORNL-TM-2316" in update
 
 
-def test_write_documents_sends_exactly_one_update_for_nonempty_records() -> None:
-    client = _FakeSparqlClient()
-    write_documents([RECORD], client)
-    assert len(client.calls) == 1
-    assert "INSERT DATA" in client.calls[0]
-    assert "msrd:ORNL-TM-2316" in client.calls[0]
-
-
 def test_write_documents_sends_zero_updates_for_empty_records() -> None:
     client = _FakeSparqlClient()
-    write_documents([], client)
+    write_documents([], client, RUN_TS)
     assert len(client.calls) == 0
 
 
@@ -100,9 +97,6 @@ def test_write_documents_sends_zero_updates_for_empty_records() -> None:
 # spec "document-graph" ADDED requirement "Document nodes carry generation
 # provenance": each written msr:Document SHALL carry prov:wasGeneratedBy
 # the deterministic msrd:activity-extraction Activity IRI (design D6).
-# These tests are written against that requirement and are expected to
-# fail on this isolated pass-1 branch until the coder's task-3.3 change to
-# documents.py lands (document_triples does not yet emit this edge).
 
 
 def test_document_triples_carries_generation_provenance() -> None:
@@ -125,3 +119,80 @@ def test_document_triples_generation_edge_is_deterministic_across_calls() -> Non
     second = document_triples(RECORD)
     assert first == second
     assert "prov:wasGeneratedBy msrd:activity-extraction" in first
+
+
+# --- openspec/changes/provenance-run-lineage additions (task 5.7) ----------
+#
+# write_documents gains a run_ts parameter (task 3.3/3.4) and now sends TWO
+# updates via the client for a non-empty record list: (1) the existing
+# urn:msr:data INSERT DATA -- unchanged, still carrying each document's
+# stable prov:wasGeneratedBy msrd:activity-extraction edge -- and (2) a new
+# urn:msr:provenance INSERT DATA carrying one
+# <document> prov:wasGeneratedBy <urn:msr:run:extraction/<run_ts>> per-run
+# generation edge per written document. No read-before-write: every record
+# in the input list gets a generation edge (design D3 "touched" semantics).
+#
+# ASSUMPTION (pass-1, flagged for reconciliation at merge): this pins
+# write_documents(records, client, run_ts) sending exactly two client.update
+# calls in the order [urn:msr:data, urn:msr:provenance] for a non-empty
+# record list -- mirroring the write_mentions contract in
+# tests/test_mentions.py. If the coder's task-3.3 change lands with a
+# different call shape, this needs reconciling at merge, not the acceptance
+# intent it encodes.
+
+
+def test_write_documents_sends_two_updates_for_nonempty_records() -> None:
+    client = _FakeSparqlClient()
+    write_documents([RECORD], client, RUN_TS)
+    assert len(client.calls) == 2
+
+
+def test_write_documents_first_update_is_the_unchanged_data_graph_write() -> None:
+    """The urn:msr:data update -- and the document's stable
+    prov:wasGeneratedBy msrd:activity-extraction edge inside it -- is
+    unchanged by the run_ts addition."""
+    client = _FakeSparqlClient()
+    write_documents([RECORD], client, RUN_TS)
+    data_update = _collapse_ws(client.calls[0])
+    assert "GRAPH <urn:msr:data>" in data_update
+    assert "msrd:ORNL-TM-2316" in data_update
+    assert "prov:wasGeneratedBy msrd:activity-extraction" in data_update
+
+
+def test_write_documents_second_update_carries_per_run_generation_edge() -> None:
+    """Covers 5.7: the written document IRI gets a
+    prov:wasGeneratedBy <urn:msr:run:extraction/<run_ts>> edge in a
+    urn:msr:provenance update."""
+    client = _FakeSparqlClient()
+    write_documents([RECORD], client, RUN_TS)
+    prov_update = _collapse_ws(client.calls[1])
+    assert "GRAPH <urn:msr:provenance>" in prov_update
+    assert (
+        f"msrd:ORNL-TM-2316 prov:wasGeneratedBy <urn:msr:run:extraction/{RUN_TS}>"
+        in prov_update
+    )
+
+
+def test_write_documents_distinct_run_ts_yields_distinct_generation_edges() -> None:
+    """Two invocations at distinct run_ts values append disjoint per-run
+    generation edges -- urn:msr:provenance is append-only (design D2/D4)."""
+    client_a = _FakeSparqlClient()
+    write_documents([RECORD], client_a, RUN_TS)
+    client_b = _FakeSparqlClient()
+    write_documents([RECORD], client_b, OTHER_RUN_TS)
+
+    assert f"urn:msr:run:extraction/{RUN_TS}" in client_a.calls[1]
+    assert f"urn:msr:run:extraction/{OTHER_RUN_TS}" not in client_a.calls[1]
+    assert f"urn:msr:run:extraction/{OTHER_RUN_TS}" in client_b.calls[1]
+    assert f"urn:msr:run:extraction/{RUN_TS}" not in client_b.calls[1]
+
+
+def test_write_documents_data_graph_update_is_idempotent_across_run_ts() -> None:
+    """The urn:msr:data update does not depend on run_ts at all, so two
+    runs at distinct run_ts values still produce a byte-identical
+    urn:msr:data write (only urn:msr:provenance grows)."""
+    client_a = _FakeSparqlClient()
+    write_documents([RECORD], client_a, RUN_TS)
+    client_b = _FakeSparqlClient()
+    write_documents([RECORD], client_b, OTHER_RUN_TS)
+    assert client_a.calls[0] == client_b.calls[0]
