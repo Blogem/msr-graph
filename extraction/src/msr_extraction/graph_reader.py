@@ -67,6 +67,14 @@ SELECT ?c ?label WHERE {
 }
 """
 
+_SALT_ROLES_QUERY = """\
+PREFIX msr: <https://w3id.org/msr-kg/ontology#>
+PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+SELECT ?c ?label WHERE {
+    ?c a msr:SaltRole ; rdfs:label ?label .
+}
+"""
+
 _VERSION_QUERY = """\
 PREFIX owl: <http://www.w3.org/2002/07/owl#>
 SELECT ?version WHERE {
@@ -187,3 +195,33 @@ class GraphReader:
     def known_iris(self) -> set[str]:
         """The set of all known target IRIs (union across all entity kinds)."""
         return {entity.target_iri for entity in self.read_known_entities()}
+
+    def read_salt_roles(self) -> set[str]:
+        """Read the closed set of ``msr:SaltRole`` individual IRIs.
+
+        Covers the fixed role vocabulary (``msr:FuelSalt``,
+        ``msr:CoolantSalt``, ``msr:FlushSalt``) used to validate extracted
+        salt-role relations against a known, closed set.
+        """
+        bindings = self._select(_SALT_ROLES_QUERY)
+        return {binding["c"]["value"] for binding in bindings}
+
+    def read_physical_properties(self) -> set[str]:
+        """Read the closed set of ``msr:PhysicalProperty`` individual IRIs.
+
+        Distinct from :meth:`read_known_entities`, which lumps physical
+        properties in with all other ``owl:Class`` subjects under kind
+        ``"class"``; this accessor isolates property IRIs so extracted
+        property relations can be validated against a closed set.
+        """
+        bindings = self._select(_PHYSICAL_PROPERTIES_QUERY)
+        return {binding["c"]["value"] for binding in bindings}
+
+    def read_molten_salts(self) -> set[str]:
+        """Read the closed set of loaded ``msr:MoltenSalt`` individual IRIs.
+
+        Used to validate the salt referent of an extracted relation against
+        the closed set of salts actually loaded into the core dataset.
+        """
+        bindings = self._select(_MOLTEN_SALTS_QUERY)
+        return {binding["c"]["value"] for binding in bindings}
