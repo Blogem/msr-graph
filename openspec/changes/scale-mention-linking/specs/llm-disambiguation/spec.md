@@ -23,3 +23,14 @@ that produced by a sequential run.
 #### Scenario: More than one call runs at a time
 - **WHEN** multiple distinct unresolved surfaces are pending resolution
 - **THEN** the worker pool issues more than one model call concurrently rather than one at a time
+
+### Requirement: Transient model errors are retried, not silently dropped
+Disambiguation SHALL retry transient model failures — HTTP 429 rate-limit, 5xx, request timeouts, and connection errors — with backoff before giving up, so that raising the concurrency does not cause a rate-limit blip to be silently recorded as `novel` (an unlinked span). Only a non-transient failure or an exhausted retry budget SHALL fall through to the existing novel/unresolved handling. The disambiguation client SHALL reuse a single pooled connection across concurrent calls rather than opening a fresh client per call.
+
+#### Scenario: A rate-limited call is retried before being resolved
+- **WHEN** a disambiguation call is rejected with a transient 429/5xx/timeout error and a retry then succeeds
+- **THEN** the span is resolved by the retried call, not recorded as novel
+
+#### Scenario: Concurrent calls share one pooled client
+- **WHEN** many disambiguation calls run concurrently in a run
+- **THEN** they are issued through a single shared, connection-pooled client rather than a new client constructed per call

@@ -39,6 +39,19 @@
       yields a `linked` mention record (pre-warm result flows through); a
       fake tracking in-flight concurrency confirms >1 call runs at once.
 
+## 3b. Tunable, pooled, retrying concurrency
+
+- [x] 3b.1 Forward `MSR_DISAMBIG_CONCURRENCY` and
+      `MSR_MENTION_WRITE_BATCH_SIZE` through the Compose `extraction` service
+      env so `make link` honors them; raise the concurrency default to 24.
+- [x] 3b.2 Reuse one pooled `openai` client in `FlashClient` (built once,
+      thread-safe) instead of constructing a client per call.
+- [x] 3b.3 Configure the client with a retry budget (`max_retries`) so
+      transient 429/5xx/timeout errors are retried with backoff instead of
+      being swallowed to `novel`.
+- [x] 3b.4 Tests: `from_config` sets a retry budget; `complete` reuses one
+      pooled client across calls.
+
 ## 5. Validation
 
 - [x] 5.1 `cd extraction && uv run --extra test python -m pytest` green.

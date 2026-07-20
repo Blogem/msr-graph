@@ -72,6 +72,32 @@ scan) but modifies the carefully-layered linker and its direct-call test
 surface; given the scan is ~2s, the two-pass CLI-only approach is far lower
 risk for negligible extra cost.
 
+## D5 — Tunable, pooled, retrying concurrency
+
+Three refinements make the concurrency both reachable and safe to raise:
+
+- **Plumbing.** `MSR_DISAMBIG_CONCURRENCY` and `MSR_MENTION_WRITE_BATCH_SIZE`
+  are forwarded through the Compose `extraction` service env (they were not
+  before, so `make link` was pinned to the code default). Default concurrency
+  is raised to 24.
+- **Pooled client.** `FlashClient` builds its `openai` client once (lazily,
+  under a lock) and reuses it across all concurrent calls. `openai.OpenAI` is
+  thread-safe and pools HTTP connections, so N concurrent disambiguations
+  share one bounded connection pool instead of each doing a fresh client
+  construction + TLS handshake — which is what makes raising concurrency
+  actually pay off rather than cause a connection storm.
+- **Retry over silent-novel.** `disambiguate` swallows any exception to
+  `("novel", None)`. Under higher concurrency a transient 429/5xx/timeout
+  would therefore silently drop a real link. Setting the openai client's
+  `max_retries` (default 5) makes the SDK retry those transient classes with
+  exponential backoff, honoring `Retry-After`; only an exhausted budget falls
+  through to novel. This trades a little latency under load for recall, not
+  the other way around.
+
+A reasonable ceiling on this workload is ~16–32; 24 is the default. Going
+much higher yields diminishing returns (a bounded number of distinct surfaces
+per run) and leans harder on the retry path.
+
 ## D3 — Configuration
 
 Two new `Config` fields, both read in `from_env` with the documented
