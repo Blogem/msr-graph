@@ -214,15 +214,19 @@ Custom OWL ontology (RDF, loadable into GraphDB) with three layers:
   coefficient row in SQLite (the numbers stay external); provenance via
   `prov:wasDerivedFrom` / `citedIn`. Units via QUDT (`GM-PER-CentiM3`, `S-PER-CentiM`,
   `mN-PER-M`, `MilliPA-SEC`) — see `ONTOLOGY.md` for the materialized T-Box.
-- **Reactor:** `MoltenSaltReactor` (reuse DIAMOND), `MSRE` individual; components
-  `ReactorCore`, `Coolant`, `HeatExchanger`, `Pump`; salt roles `FuelSalt`,
-  `CoolantSalt`, `FlushSalt`.
+- **Reactor (deferred to chunk-7):** `MoltenSaltReactor` (reuse DIAMOND), an `MSRE`
+  individual, salt roles `FuelSalt`/`CoolantSalt`/`FlushSalt`, and reactor components
+  (`ReactorCore`, `Coolant`, `HeatExchanger`, `Pump`) are real, extractable facts —
+  `ORNL-TM-2316` states the 66-34 melt "has been used in the MSRE as the coolant" — but
+  nothing writes them into the graph until chunk-7 relation extraction derives them from
+  real text. The POC ontology does not carry a hand-curated reactor/role layer in the
+  meantime; the vocabulary still seeds NER with the corresponding SKOS concepts.
 - **Provenance (PROV-style):** `Document` nodes per ORNL report; entities/measurements
   link via `citedIn` / `wasDerivedFrom`.
 
-DIAMOND alignment is by `rdfs:seeAlso` / `skos:closeMatch` to the DIAMOND IRIs
-(namespace `https://github.com/idaholab/DIAMOND/`, opaque `nuclear:NNNNNN` classes) —
-we do **not** import `diamond.owl` (615 mostly-LWR classes, no unit layer).
+DIAMOND alignment is by `rdfs:seeAlso` to the DIAMOND IRIs (namespace
+`https://github.com/idaholab/DIAMOND/`, opaque `nuclear:NNNNNN` classes) — we do **not**
+import `diamond.owl` (615 mostly-LWR classes, no unit layer).
 
 ### Controlled vocabulary (SKOS)
 
@@ -235,8 +239,11 @@ Thesaurus RDF/SKOS derivative is a fallback.) **Deferred — build during the vo
 phase.** Seed concepts: `MOLTEN SALT REACTORS`
 (→ `molten salt cooled reactors` → `MSRE REACTOR`; → `molten salt fueled reactors`),
 `MOLTEN SALTS` (→ `flibe`), `molten salt fuels`, `metal transfer process`,
-`reductive extraction`, `coolants`, `fluorides`, + the four property terms. NER
-entities link to these via `skos:closeMatch`.
+`reductive extraction`, `coolants`, `fluorides`, + the four property terms. Concepts
+carry the friendly names (`skos:prefLabel`/`skos:altLabel`, e.g. "FLiBe") that seed the
+NER matcher; a recognized mention links to its resolved target (a concept, or — for a
+composed salt formula — the `msr:MoltenSalt` individual itself) via `msr:linksTo` on the
+`msr:Mention`, not via `skos:closeMatch`.
 
 ## 4. Stretch — IAEA safety (PUB2027)
 

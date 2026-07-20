@@ -213,8 +213,7 @@ neither contains **solubility**. NER is running over the MSR chemistry reports.
    +     rdfs:label "solubility" ;
    +     msr:quantityKind qk:AmountOfSubstanceFraction ;   # reviewer's choice: mol fraction
    +     msr:canonicalUnit unit:MOL-PER-MOL ;
-   +     rdfs:comment "Added by evolution loop; 280/637 docs; unit set by reviewer." ;
-   +     skos:closeMatch voc:solubility .
+   +     rdfs:comment "Added by evolution loop; 280/637 docs; unit set by reviewer." .
    + voc:solubility a skos:Concept ; skos:inScheme voc:msr-scheme ;
    +     skos:prefLabel "solubility"@en ; skos:altLabel "miscibility"@en .
    ```
@@ -282,15 +281,17 @@ consistent about component order and the corpus writes the same salt a dozen way
 loader canonicalizes on ingest: **components alphabetized, composition values reordered in
 lockstep, mole-% formatted with one decimal** (`LiF-BeF2,34.0-66.0` → `BeF2-LiF |
 66.0-34.0`). The canonical form is used *everywhere* — IRI, locator, SQLite `salt` column,
-`rdfs:label`. Human-friendly names ("FLiBe") come from the vocab via `skos:closeMatch`,
-not from raw strings; chunk 6's formula normalizer maps mention variants to the same
-canonical form, so text mentions and NIST rows meet at one IRI.
+`rdfs:label`. Human-friendly names ("FLiBe") come from the vocab's own SKOS labels
+(`skos:prefLabel`/`skos:altLabel`), not from an alignment edge to the salt and not from raw
+strings; chunk 6's formula normalizer maps mention variants to the same canonical form, so
+text mentions and NIST rows meet at one IRI, and the linker's `msr:linksTo` edge (not
+`skos:closeMatch`) is what connects a document mention to that salt individual — see
+*Grounding via `msr:linksTo`*, below.
 
 **Idempotent writes via deterministic IRIs.** RDF graphs are sets, so re-asserting the same
 triples is a no-op — provided nothing is a blank node. Pipeline-written data therefore
-mints IRIs deterministically and uses **no blank nodes**; the hand-authored seed A-Box
-(`example-flibe.ttl`) already follows this contract, so the loader re-asserting its salts
-is a no-op:
+mints IRIs deterministically and uses **no blank nodes**, so the loader re-asserting its
+catalog (salts, constituents, measurements) on every run is a no-op:
 
 | Thing | IRI pattern |
 |-------|-------------|
@@ -301,9 +302,23 @@ is a no-op:
 | proposal | `urn:msr:proposal/{kind}-{term-slug}` |
 
 Every stage can be re-run safely; SQLite writes are `INSERT OR REPLACE` on the locator key.
-Seed files (`msr.ttl`, `vocab.ttl`, `example-flibe.ttl`) are loaded with **graph-replace
-semantics** (SPARQL Graph Store `PUT`), so editing a seed file and re-running
-`make load-seed` never leaves renamed IRIs behind.
+Seed files (`msr.ttl`, `vocab.ttl`) are loaded with **graph-replace semantics** (SPARQL
+Graph Store `PUT`) into `urn:msr:ontology`/`urn:msr:vocab` only — there is no seed A-Box, so
+`urn:msr:data` is never touched by `make load-seed` and is populated exclusively by the
+loader and the extraction pipeline. Editing a seed file and re-running `make load-seed`
+never leaves renamed IRIs behind.
+
+**Grounding via `msr:linksTo` (no `skos:closeMatch`).** The agent resolves a salt reference
+by matching a real `msr:Mention`'s `msr:surfaceForm` and following `msr:linksTo` to the
+`msr:MoltenSalt` individual, then reading its measurement; the matched Mention (with
+`msr:inDocument`) is the traceable grounding evidence. A property reference resolves by
+matching the query term against a `msr:PhysicalProperty`'s own `rdfs:label` — no concept
+hop. `skos:closeMatch` is not used anywhere in grounding: its domain/range is
+`skos:Concept`, and neither a salt individual nor a `msr:PhysicalProperty` is one, so a
+`salt skos:closeMatch concept` edge would be a SKOS-range abuse. DIAMOND alignment is
+unaffected by this — it uses `rdfs:seeAlso`, not `skos:closeMatch`, and stays (see
+ONTOLOGY.md). Because there is no seed A-Box, this grounding data exists only after the
+real pipeline has run (`make load-nist && make ingest && make link`); see README.md.
 
 **Write paths.**
 
@@ -487,7 +502,8 @@ Decided:
   ontology / vocab / data by what they are (no single-graph `ADD`). ✓
 - **Salt naming** → canonicalized at the loader boundary (alphabetized components,
   lockstep-reordered compositions, one-decimal mole %); canonical form used in IRIs,
-  locators, SQLite, and labels; friendly names via vocab `closeMatch`. ✓
+  locators, SQLite, and labels; friendly names via vocab `prefLabel`/`altLabel`, and salt
+  grounding via the real `msr:Mention`/`msr:linksTo` edge, not `skos:closeMatch`. ✓
 - **SQLite runtime** → journal mode `DELETE`, `busy_timeout` everywhere, directory (not
   file) mounted read-only into sandboxes, backup-API checkpoints; batch jobs are the only
   writers. ✓
