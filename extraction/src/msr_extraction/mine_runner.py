@@ -40,6 +40,7 @@ from msr_extraction.mining_types import (
     KIND_CLASS,
     KIND_INSTANCE,
     KIND_PROPERTY,
+    KIND_REJECT,
     KIND_RELATION,
     Candidate,
     TriagedCandidate,
@@ -63,6 +64,8 @@ _ZERO_SUMMARY = {
     "proposals_by_kind": {},
     "auto_accepted": 0,
     "rejected": 0,
+    "triage_rejected": 0,
+    "dropped_malformed": 0,
     "dropped": 0,
 }
 
@@ -181,13 +184,17 @@ def run_mine(
        `_cmd_link` closes).
     4. Load the QUDT allowlist.
     5. Enumerate novelty candidates.
-    6. Triage each; route `property`/`relation`/`class` through the
-       QUDT-guarded proposal bundler (`class` additionally builds and
-       rides its proposal's companion individual, per design.md D7/D8 and
-       the `graphite` demo), and `instance` through the
-       auto-accept/rides-with split (`instance` candidates that resolve
-       against neither core schema nor a proposal bundle are out of scope
-       and dropped, logged).
+    6. Triage each. A malformed/unrecognized triage result (`None`) is
+       counted `dropped_malformed`; an explicit reject verdict
+       (`KIND_REJECT`, design.md D4) is counted `triage_rejected` and
+       produces no proposal -- both are logged and distinct from each
+       other and from the QUDT-allowlist `rejected` count below. Otherwise
+       route `property`/`relation`/`class` through the QUDT-guarded
+       proposal bundler (`class` additionally builds and rides its
+       proposal's companion individual, per design.md D7/D8 and the
+       `graphite` demo), and `instance` through the auto-accept/rides-with
+       split (`instance` candidates that resolve against neither core
+       schema nor a proposal bundle are out of scope and dropped, logged).
     7. Write auto-accepted individuals (and their own generation edges).
     8. Attribute every proposal resource and rides-with individual to the
        run node via one batch of generation edges into
@@ -218,6 +225,8 @@ def run_mine(
     auto_accepted: list[auto_accept.Individual] = []
     fact_iris: list[str] = []
     rejected = 0
+    triage_rejected = 0
+    dropped_malformed = 0
     dropped = 0
 
     # Phase 1 (parallel, network-bound): triage every candidate concurrently
@@ -235,8 +244,13 @@ def run_mine(
     # the existing writes/counts, strictly in original candidate order.
     for candidate, triaged in triaged_candidates:
         if triaged is None:
-            dropped += 1
-            logger.info("mine: candidate=%r dropped by triage", candidate.term)
+            dropped_malformed += 1
+            logger.info("mine: candidate=%r dropped by triage (malformed)", candidate.term)
+            continue
+
+        if triaged.kind == KIND_REJECT:
+            triage_rejected += 1
+            logger.info("mine: candidate=%r rejected by triage", candidate.term)
             continue
 
         kind = triaged.kind
@@ -338,7 +352,8 @@ def run_mine(
             proposals_by_kind[kind] = proposals_by_kind.get(kind, 0) + 1
             continue
 
-        # Unreachable: `triage.classify` only ever returns a kind in
+        # Unreachable: the `KIND_REJECT` verdict is handled above, and
+        # `triage.classify` otherwise only ever returns a kind in
         # `mining_types.VALID_KINDS`, which is exactly the four kinds
         # handled above.
         dropped += 1
@@ -356,5 +371,7 @@ def run_mine(
         "proposals_by_kind": proposals_by_kind,
         "auto_accepted": len(auto_accepted),
         "rejected": rejected,
+        "triage_rejected": triage_rejected,
+        "dropped_malformed": dropped_malformed,
         "dropped": dropped,
     }
