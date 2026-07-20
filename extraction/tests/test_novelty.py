@@ -653,6 +653,35 @@ def test_build_exclusion_set_normalizes_camelcase_class_label(tmp_path) -> None:
     assert "molten salt" in excluded or ("molten", "salt") in excluded
 
 
+def test_build_exclusion_set_excludes_salt_catalog_formula_label(tmp_path) -> None:
+    """Regression (CRITICAL code-review finding): a `kind="salt"` catalog
+    label is a formula string with a concentration suffix (e.g. "LiF-BeF2
+    (34.0-66.0 mol%)"), not a camelCase-authored identifier. Running it
+    through the camelCase-splitting normalizer used for concept/class
+    labels fragments it into a ~9-token sequence
+    ("li","f","be","f2","34","0","66","0","mol") that no real candidate
+    term could ever contain, so salt labels never actually excluded
+    anything. build_exclusion_set must instead normalize `kind="salt"`
+    labels via the formula-aware path (strip the parenthetical suffix, no
+    camelCase split), so the exact formula term IS excluded, while a term
+    sharing only a single formula token is NOT excluded (containment
+    requires the full ("lif", "bef2") sequence, in order, back-to-back)."""
+    config = Config(corpus_dir=tmp_path)
+    _write_curated_report(config, REPORT, ["placeholder sentence for the fixture."])
+    _write_mentions(config, REPORT, [])
+    entity = KnownEntity(
+        target_iri=f"{VOC}lif-bef2",
+        labels=("LiF-BeF2 (34.0-66.0 mol%)",),
+        kind="salt",
+    )
+    reader = FakeKnownEntitiesReader([entity])
+
+    excluded = build_exclusion_set(reader, [REPORT], config)
+
+    assert "lif-bef2" in excluded
+    assert "bef2 coolant loop" not in excluded
+
+
 def test_mine_candidates_excludes_chunk7_reactor_label(tmp_path) -> None:
     """Scenario: hardened exclusion also covers chunk-7's role/reactor
     layer labels (design.md D2/D4.1) -- a reactor-name candidate ("MSRE")
