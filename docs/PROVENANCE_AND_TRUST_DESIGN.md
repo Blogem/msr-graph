@@ -150,6 +150,18 @@ Foundation** = **provenance (12) + SHACL (13)**, which **gates P4**: both operat
 data we already hold, so the pipelines that mass-produce facts (chunks 7–8) are born
 provenance-complete and SHACL-valid rather than retrofitted.
 
+**Trust sequence:** `ground-demo-in-real-docs` → **12 `provenance-model`** → **13
+`shacl-validation`** — *make the data real → make it provenanced → enforce it*.
+`ground-demo-in-real-docs` lands first as a prerequisite: it removes the hand-curated seed
+A-Box (`ontology/example-flibe.ttl`) and re-grounds the agent on real `msr:Mention →
+msr:linksTo → salt` links, so `provenance-model` operates on an all-real, seed-free graph and
+only has to layer the provenance invariant on top — no seed-coexistence hedging (see
+`openspec/changes/provenance-model/design.md` D9). Within `provenance-model`, the `Activity`
+IRI a fact references via `wasGeneratedBy` is deterministic per pipeline/source, keeping that
+edge byte-stable across re-runs for fact-store idempotency; the wall-clock-timestamped
+`Activity` record (agent, timestamps, ontology version) is asserted separately in the per-run
+named graph `urn:msr:run:<pipeline>/<ts>` (design D8).
+
 - **12 `provenance-model`** — PROV-O slice in the ontology; complete + required provenance on
   all fact-bearing individuals; per-source/run named graphs + Activity records; retrofit the
   NIST loader (`citedIn` + self-contained dataset/DOI) and seed; **answer-time** enforcement

@@ -263,12 +263,19 @@ Inserted between P3 and P4; **gates P4**. Full model and rationale in
 `docs/PROVENANCE_AND_TRUST_DESIGN.md`. Sequenced **12 → 13**. Both run on real data already
 held.
 
+**Trust sequence:** `ground-demo-in-real-docs` (prerequisite, removes the hand-curated seed
+A-Box) → **12 `provenance-model`** (this phase's first chunk — layers provenance onto the
+now-all-real graph) → **13 `shacl-validation`** (enforces it). `ground-demo-in-real-docs` is
+not itself a numbered chunk above (it landed as an unplanned prerequisite once the seed was
+found to be load-bearing for grounding); it must land before chunk 12 so provenance and the
+write-time gate apply to real data only, never fabricated seed facts.
+
 ## 12 — `provenance-model`  *(trust)*
 - **Goal:** Make provenance a first-class, **required** property of every fact and every answer — the cross-cutting invariant that is currently only convention.
 - **Scope:** a PROV-O slice in the ontology (`prov:Entity`/`Activity`/`Agent`); **complete + required** provenance on all fact-bearing individuals (`prov:wasDerivedFrom` a `Dataset`/`Document`, `prov:wasGeneratedBy` an `Activity` with agent + `owl:versionInfo` + timestamp); per-source/run named graphs (`urn:msr:src:*`, `urn:msr:run:*`) each with an `Activity` record (coarse audit dimension). **Retrofit** the NIST loader to emit `citedIn` and a self-contained dataset node with DOI (not load-order-dependent) and the seed likewise. **Answer-time enforcement** in the agent: stamp every answer grounded-vs-ungrounded and return the provenance chain of the facts used — gated in `loop.go`, surfaced as a first-class SSE event, so a bare number can't reach the user unmarked. **Compute-time:** `run_python` provenance references the `dataLocator`(s) the script read.
 - **Interfaces:** extends `internal/graph` writes, `cmd/loader`, `internal/agent` (loop, events, tools) and the extraction writers; **defines the provenance vocabulary** chunks 13, 14, 7 and 8 conform to.
-- **Depends on:** 2 (loader), 4 (agent).
-- **Acceptance:** every `PropertyMeasurement`/`Mention` has `wasDerivedFrom` + a source; NIST rows carry `citedIn` + DOI regardless of load order; the agent flags an ungrounded answer as such and will not present a numeric result without a provenance chain; a `run_python` result references its source locator(s).
+- **Depends on:** 2 (loader), 4 (agent); and, per the trust sequence above, the prerequisite `ground-demo-in-real-docs` (seed already removed — design D9).
+- **Acceptance:** every `PropertyMeasurement`/`Mention` has `wasDerivedFrom` + a source; NIST rows carry `citedIn` + DOI regardless of load order; the agent flags an ungrounded answer as such and will not present a numeric result without a provenance chain; a `run_python` result references its source locator(s). The `Activity` IRI a fact references via `wasGeneratedBy` is deterministic per pipeline/source (byte-stable across re-runs); the wall-clock-timestamped `Activity` record itself lives in the per-run named graph `urn:msr:run:<pipeline>/<ts>` (design D8).
 - **Test seed:** Go tests that loader output includes `citedIn`/DOI for every row; an agent-loop test that an answer with no provenance event is stamped ungrounded; event-schema test for the grounded/ungrounded + provenance-chain events; extraction pytest that written mentions carry `Activity` provenance.
 
 ## 13 — `shacl-validation`  *(trust)*
