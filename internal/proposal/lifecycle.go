@@ -30,8 +30,11 @@ var (
 // ApproveRequest carries the request-supplied decision metadata an
 // approval's provenance record needs (design D3).
 type ApproveRequest struct {
-	// Reviewer identifies the reviewer agent (an IRI) for
-	// prov:wasAssociatedWith.
+	// Reviewer identifies the reviewer agent for prov:wasAssociatedWith.
+	// It accepts either an absolute IRI (used verbatim) or a bare
+	// identifier such as a username or email address, which is minted
+	// into a deterministic urn:msr:agent/{slug} IRI -- see
+	// normalizeReviewerIRI.
 	Reviewer string
 	// Timestamp is the request-supplied prov:startedAtTime, in the
 	// xsd:dateTime lexical form.
@@ -67,7 +70,8 @@ func (e *Engine) Approve(ctx context.Context, id string, req ApproveRequest) err
 		return fmt.Errorf("%w: proposal %q has status %q, not pending", ErrInvalidTransition, id, status)
 	}
 
-	if err := validateIRIRef(req.Reviewer); err != nil {
+	reviewerIRI, err := normalizeReviewerIRI(req.Reviewer)
+	if err != nil {
 		return fmt.Errorf("proposal: approve %q: %w", id, err)
 	}
 
@@ -85,7 +89,7 @@ func (e *Engine) Approve(ctx context.Context, id string, req ApproveRequest) err
 	ops = append(ops,
 		versionBumpUpdate(newVersion),
 		statusFlipUpdate(id, "approved"),
-		approvalProvenanceUpdate(id, req),
+		approvalProvenanceUpdate(id, reviewerIRI, req.Timestamp),
 	)
 	combined := strings.Join(ops, " ;\n")
 
@@ -210,13 +214,15 @@ WHERE { GRAPH <%s> { %s msr:reviewStatus ?old } }`,
 // approvalProvenanceUpdate returns the INSERT DATA that appends the
 // decision-provenance activity for id's approval into urn:msr:staging
 // (design D3, never urn:msr:provenance): a prov:Activity at
-// urn:msr:run:approve/{id}, prov:wasAssociatedWith the reviewer
-// prov:Agent, prov:startedAtTime the request-supplied timestamp, and a
-// prov:wasGeneratedBy edge from the approved msr:ChangeProposal to that
-// activity -- reusing the same PROV-O predicate chunk 8 already uses to
-// attribute a proposal to its mine run, just recorded in staging against
-// a different (governance, not pipeline-generation) activity.
-func approvalProvenanceUpdate(id string, req ApproveRequest) string {
+// urn:msr:run:approve/{id}, prov:wasAssociatedWith reviewerIRI (already
+// normalized to an absolute IRI by normalizeReviewerIRI -- GraphDB
+// rejects the whole UPDATE if this is a relative IRI), prov:startedAtTime
+// the request-supplied timestamp, and a prov:wasGeneratedBy edge from
+// the approved msr:ChangeProposal to that activity -- reusing the same
+// PROV-O predicate chunk 8 already uses to attribute a proposal to its
+// mine run, just recorded in staging against a different (governance,
+// not pipeline-generation) activity.
+func approvalProvenanceUpdate(id, reviewerIRI, timestamp string) string {
 	activity := "urn:msr:run:approve/" + id
 	subject := proposalResourceIRI(id)
 	return sparqlPrefixes + fmt.Sprintf(`INSERT DATA { GRAPH <%s> {
@@ -224,5 +230,5 @@ func approvalProvenanceUpdate(id string, req ApproveRequest) string {
         prov:wasAssociatedWith <%s> ;
         prov:startedAtTime "%s"^^xsd:dateTime .
     %s prov:wasGeneratedBy <%s> .
-} }`, graph.Staging, activity, req.Reviewer, escapeLiteral(req.Timestamp), subject, activity)
+} }`, graph.Staging, activity, reviewerIRI, escapeLiteral(timestamp), subject, activity)
 }

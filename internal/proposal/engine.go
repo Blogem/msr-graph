@@ -13,6 +13,7 @@ package proposal
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/blogem/msr-graph/internal/graph"
@@ -99,4 +100,70 @@ func validateIRIRef(s string) error {
 		}
 	}
 	return nil
+}
+
+// absoluteIRISchemePattern matches a leading RFC 3986 scheme
+// ("scheme:", e.g. "http:", "https:", "urn:") at the start of a string --
+// the signal that a caller-supplied reviewer value is already an
+// absolute IRI rather than a bare identifier.
+var absoluteIRISchemePattern = regexp.MustCompile(`^[a-zA-Z][a-zA-Z0-9+.-]*:`)
+
+// agentSlugSafe reports whether r may appear unescaped in the minted
+// urn:msr:agent/{slug} path segment: ASCII letters/digits plus a small,
+// conservative punctuation set. Everything else -- including whitespace
+// and the IRIREF-breaking characters validateIRIRef rejects -- is
+// percent-escaped by mintAgentSlug instead of passed through.
+func agentSlugSafe(r rune) bool {
+	switch {
+	case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+		return true
+	case r == '-', r == '_', r == '.', r == '~':
+		return true
+	}
+	return false
+}
+
+// mintAgentSlug percent-escapes reviewer into a deterministic, IRI-path-
+// safe slug: every byte of a rune not in agentSlugSafe's charset is
+// replaced by its %XX percent-encoding, so no whitespace or IRIREF-
+// breaking character (space, <>"{}|^`\) ever reaches the minted IRI
+// unescaped, and the same input always mints the same slug.
+func mintAgentSlug(reviewer string) string {
+	var b strings.Builder
+	for _, r := range reviewer {
+		if agentSlugSafe(r) {
+			b.WriteRune(r)
+			continue
+		}
+		for _, raw := range []byte(string(r)) {
+			fmt.Fprintf(&b, "%%%02X", raw)
+		}
+	}
+	return b.String()
+}
+
+// normalizeReviewerIRI turns ApproveRequest.Reviewer into an absolute
+// IRI suitable for prov:wasAssociatedWith: a value that already carries
+// a URI scheme (http://, https://, urn:, ...) is used verbatim; anything
+// else -- the bare human/agent identifier the chunk-10 HTTP layer
+// actually sends (e.g. "tester@example.com", "roundtrip-tester") -- is
+// minted into a deterministic urn:msr:agent/{slug} IRI (mintAgentSlug).
+// GraphDB rejects a SPARQL UPDATE embedding a relative IRI ("Not a valid
+// (absolute) IRI"), so Approve must never pass a bare identifier through
+// to the query unnormalized. The result is re-validated as a safe
+// IRIREF before being returned.
+func normalizeReviewerIRI(reviewer string) (string, error) {
+	if reviewer == "" {
+		return "", fmt.Errorf("proposal: reviewer must not be empty")
+	}
+
+	iri := reviewer
+	if !absoluteIRISchemePattern.MatchString(reviewer) {
+		iri = "urn:msr:agent/" + mintAgentSlug(reviewer)
+	}
+
+	if err := validateIRIRef(iri); err != nil {
+		return "", fmt.Errorf("proposal: normalize reviewer %q: %w", reviewer, err)
+	}
+	return iri, nil
 }
