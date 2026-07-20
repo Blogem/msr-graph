@@ -591,3 +591,92 @@ func TestRun_ComputeTimeLocatorLinkage_ScriptEmbedsNoGroundedLocator(t *testing.
 		t.Errorf("ScriptRun.DataLocators = %v, want empty/nil: the script source never mentions %q", scriptRun.DataLocators, locator)
 	}
 }
+
+// TestRun_ComputeTimeLocatorLinkage_AtBoundaryRejectsBaseLocatorPrefix covers
+// the scriptReferencesLocator @-boundary fix directly: NIST locators are
+// disambiguated by appending "@<tmin>" (see disambiguateLocators in
+// internal/nist/process.go), which makes a base locator a literal string
+// prefix of its disambiguated sibling. Both the base locator and its
+// disambiguated sibling are grounded this turn (two distinct, independently
+// surfaced provenance locators -- e.g. two different result rows), but the
+// run_python script source embeds only the longer, disambiguated string. A
+// naive strings.Contains scan would incorrectly credit the script with also
+// referencing the base locator, since it appears as a substring of the
+// disambiguated one; scriptReferencesLocator must reject that match because
+// the base's only occurrence in source is immediately followed by '@'.
+//
+// The turn's aggregated answer chain still legitimately contains the base
+// locator: it reflects every locator grounded this turn (design D4/D6),
+// independent of which script referenced what. Only ScriptRunEvent's own
+// DataLocators -- the compute-time linkage this fix scopes -- must exclude
+// the base.
+func TestRun_ComputeTimeLocatorLinkage_AtBoundaryRejectsBaseLocatorPrefix(t *testing.T) {
+	const base = "nist-srd27/density#LiF-BeF2|66-34"
+	const disambiguated = base + "@800"
+	script := "row = \"" + disambiguated + "\"\nprint('{\"density\": 1.974}')"
+
+	llm := &stubLLM{completions: []agent.Completion{
+		{ToolCalls: []agent.ToolCall{{ID: "1", Name: "sparql_query", Arguments: `{}`}}},
+		{ToolCalls: []agent.ToolCall{{ID: "2", Name: "run_python", Arguments: runPythonArgsJSON(t, script)}}},
+		{Content: `{"density": 1.974}`},
+	}}
+
+	sparql := &fakeTool{name: "sparql_query", call: func(_ context.Context, _ string, emit agent.Emitter) (string, error) {
+		// Both locators are surfaced via provenance events this turn, as
+		// if two distinct, independently grounded result rows were
+		// returned: the base locator (unrelated to any disambiguation
+		// need of its own) and the disambiguated sibling that the script
+		// goes on to embed.
+		emit(agent.Event{
+			Type:       agent.EventProvenance,
+			Provenance: &agent.ProvenanceEvent{DataLocators: []string{base, disambiguated}},
+		})
+		return "grounded", nil
+	}}
+	runPython := agent.NewPythonTool(&fakeLocatorSandbox{stdout: []byte(`{"density": 1.974}`)})
+
+	var events []agent.Event
+	a := agent.New(llm, []agent.Tool{sparql, runPython}, agent.DefaultConfig())
+	err := a.Run(context.Background(), agent.RunRequest{SystemPrompt: "sys"}, func(e agent.Event) {
+		events = append(events, e)
+	})
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+
+	var scriptRun *agent.ScriptRunEvent
+	var answer *agent.AnswerEvent
+	for _, e := range events {
+		if e.Type == agent.EventScriptRun {
+			scriptRun = e.ScriptRun
+		}
+		if e.Type == agent.EventAnswer {
+			answer = e.Answer
+		}
+	}
+	if scriptRun == nil {
+		t.Fatalf("no script_run event in trace: %v", eventTypes(events))
+	}
+
+	if len(scriptRun.DataLocators) != 1 || scriptRun.DataLocators[0] != disambiguated {
+		t.Errorf("ScriptRun.DataLocators = %v, want [%q] only: the base locator is a literal prefix of the disambiguated one and must not match via the @-boundary check", scriptRun.DataLocators, disambiguated)
+	}
+	for _, l := range scriptRun.DataLocators {
+		if l == base {
+			t.Errorf("ScriptRun.DataLocators = %v contains bare base locator %q, want it excluded (script never wrote the base form, only the disambiguated one)", scriptRun.DataLocators, base)
+		}
+	}
+
+	if answer == nil {
+		t.Fatalf("no answer event in trace: %v", eventTypes(events))
+	}
+	foundDisambiguated := false
+	for _, l := range answer.Provenance.DataLocators {
+		if l == disambiguated {
+			foundDisambiguated = true
+		}
+	}
+	if !foundDisambiguated {
+		t.Errorf("Answer.Provenance.DataLocators = %v, want it to contain %q (the compute-time-linked disambiguated locator)", answer.Provenance.DataLocators, disambiguated)
+	}
+}
