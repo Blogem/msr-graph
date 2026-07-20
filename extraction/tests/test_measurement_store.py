@@ -18,14 +18,34 @@ from msr_extraction.measurement_store import MeasurementRow, connect, upsert_row
 
 LOCATOR = "doc/ORNL-TM-2316/viscosity#BeF2-LiF|34.0-66.0"
 
+# The exact measurement_value DDL the Go loader creates at `load-seed`
+# (internal/store). The Python extraction writer deliberately does NOT
+# create the schema (design D7 / measurement-store non-goal: the loader
+# owns the schema; the Python helper enforces only the *runtime contract* —
+# journal_mode=DELETE, busy_timeout, upsert-by-locator). Production runs
+# `extract` after `load-nist` (which runs `load-seed`), so the table always
+# exists; these hermetic tests create it in the fixture to mirror that.
+_SCHEMA = """
+CREATE TABLE measurement_value (
+  locator TEXT PRIMARY KEY, salt TEXT, property TEXT,
+  c0 REAL, c1 REAL, c2 REAL, c3 REAL, c4 REAL,
+  t_min REAL, t_max REAL, equation_form TEXT, uncertainty TEXT,
+  source TEXT NOT NULL CHECK (source IN ('nist','document')), doc_id TEXT
+);
+"""
+
 
 @pytest.fixture
 def db_path(tmp_path: Path) -> Path:
-    # A fresh, not-yet-existing DB file -- connect() is responsible for
-    # creating the measurement_value schema on first connection (it is the
-    # only schema-creation entry point in the pinned API: connect,
-    # upsert_rows, MeasurementRow -- no separate init/migrate function).
-    return tmp_path / "msr.db"
+    # Create the measurement_value table up front (as `load-seed` does in
+    # production), then hand the path to the tests. connect() opens it and
+    # pins the runtime contract; it does not create the schema.
+    path = tmp_path / "msr.db"
+    conn = sqlite3.connect(str(path))
+    conn.executescript(_SCHEMA)
+    conn.commit()
+    conn.close()
+    return path
 
 
 def _row(**overrides: object) -> MeasurementRow:
