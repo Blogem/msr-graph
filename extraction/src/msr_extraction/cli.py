@@ -27,6 +27,7 @@ from msr_extraction import (
     measurement_store,
     measurements,
     mentions,
+    mine_runner,
     provenance,
     relations,
     segmenter,
@@ -341,6 +342,31 @@ def _cmd_link(config: Config, reports: list[str] = curated.CURATED_REPORTS) -> i
     return 0
 
 
+def _cmd_mine(config: Config) -> int:
+    """Run the full ontology-mining pipeline and print a one-line run summary.
+
+    Thin wrapper (design.md, OpenSpec task 1.1-CLI): all orchestration --
+    enumerate/exclude/score candidates, triage each, build proposal
+    bundles + rides-with individuals, write proposals and auto-accepted
+    instances, and wire the per-run provenance activity nodes -- lives in
+    :func:`msr_extraction.mine_runner.run_mine`, mirroring how ``_cmd_link``
+    delegates its per-report work to ``linker.link_report``.
+    """
+    summary = mine_runner.run_mine(config)
+    by_kind = summary["proposals_by_kind"]
+    kind_summary = " ".join(f"{kind}={count}" for kind, count in sorted(by_kind.items()))
+    line = (
+        f"mine: candidates={summary['candidates']} "
+        f"proposals=[{kind_summary}] "
+        f"auto_accepted={summary['auto_accepted']} "
+        f"rejected={summary['rejected']} "
+        f"dropped={summary['dropped']}"
+    )
+    logger.info(line)
+    print(line)
+    return 0
+
+
 def _cmd_extract(config: Config, reports: list[str] = curated.CURATED_REPORTS) -> int:
     """Extract salt<->property<->value measurements and salt<->role/reactor
     edges from linked sentences, write both measurement stores + role/reactor
@@ -470,6 +496,7 @@ _HANDLERS = {
     "documents": _cmd_documents,
     "ingest": _cmd_ingest,
     "link": _cmd_link,
+    "mine": _cmd_mine,
     "extract": _cmd_extract,
 }
 
@@ -509,6 +536,13 @@ def _build_parser() -> argparse.ArgumentParser:
         type=int,
         metavar="N",
         help="Process only the first N of the (possibly --report-filtered) selection.",
+    )
+    subparsers.add_parser(
+        "mine",
+        help=(
+            "Mine novel ontology candidates from curated text + chunk-6 misses; "
+            "write proposals to staging + auto-accepted instances to data."
+        ),
     )
     extract_parser = subparsers.add_parser(
         "extract",

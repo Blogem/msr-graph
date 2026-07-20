@@ -152,3 +152,18 @@ msr:hasRole a owl:ObjectProperty ; rdfs:domain msr:MoltenSalt ; rdfs:range msr:S
 
 msr:MoltenSaltReactor a owl:Class .
 msr:usedIn a owl:ObjectProperty ; rdfs:domain msr:MoltenSalt ; rdfs:range msr:MoltenSaltReactor .
+
+### Change-proposal governance layer (chunk 8 — mine-ontology-candidates, design.md D4)
+# Evidence provenance reuses msr:citedIn, msr:startOffset, msr:endOffset (Mention layer,
+# chunk 6) and the prov: terms already declared in the Provenance layer above; no new
+# provenance vocabulary is introduced here.
+msr:ChangeProposal   a owl:Class ; rdfs:comment "A reviewable proposed ontology change (detection half of the evolution loop)." .
+msr:kind             a owl:DatatypeProperty ; rdfs:domain msr:ChangeProposal ; rdfs:range xsd:string .   # property|class|instance|relation
+msr:reviewStatus     a owl:DatatypeProperty ; rdfs:domain msr:ChangeProposal ; rdfs:range xsd:string .   # pending|approved|rejected
+msr:term             a owl:DatatypeProperty ; rdfs:domain msr:ChangeProposal ; rdfs:range xsd:string .
+msr:docFrequency     a owl:DatatypeProperty ; rdfs:domain msr:ChangeProposal ; rdfs:range xsd:integer .
+msr:hasProposalGraph a owl:DatatypeProperty ; rdfs:domain msr:ChangeProposal ; rdfs:range xsd:anyURI .   # -> urn:msr:proposal/{id}
+msr:hasEvidence      a owl:ObjectProperty ;  rdfs:domain msr:ChangeProposal ; rdfs:range msr:Evidence .
+msr:Evidence         a owl:Class ; rdfs:comment "One grounding sentence for a ChangeProposal candidate." .
+msr:evidenceText     a owl:DatatypeProperty ; rdfs:domain msr:Evidence ; rdfs:range xsd:string .
+msr:autoAccepted     a owl:DatatypeProperty ; rdfs:range xsd:boolean .   # flags directly-written instances in urn:msr:data

@@ -1,0 +1,9 @@
+{
+  "description": "Reduced QUDT allowlist fixture for hermetic proposal-staging tests (mine-ontology-candidates, task 8.4). Mirrors the shape of the vendored ontology/qudt-units.json (allowedUnits/allowedQuantityKinds) but only carries the two IRIs the fixture tests need in-allowlist.",
+  "allowedUnits": [
+    "http://qudt.org/vocab/unit/GM-PER-CentiM3"
+  ],
+  "allowedQuantityKinds": [
+    "http://qudt.org/vocab/quantitykind/Density"
+  ]
+}
