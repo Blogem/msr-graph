@@ -15,7 +15,7 @@ The system SHALL normalize every salt at the ingest boundary to a canonical form
 
 #### Scenario: Real NIST FLiBe row canonicalizes unchanged
 - **WHEN** the real NIST FLiBe row, raw salt `BeF2-LiF` with composition `34.0-66.0` (already byte-sorted), is canonicalized
-- **THEN** the canonical string is `BeF2-LiF | 34.0-66.0`, unchanged from the raw order, and the salt IRI is `msrd:salt-BeF2-LiF-34.0-66.0`, matching the seed A-Box
+- **THEN** the canonical string is `BeF2-LiF | 34.0-66.0`, unchanged from the raw order, and the salt IRI is `msrd:salt-BeF2-LiF-34.0-66.0`
 
 #### Scenario: Ternary formula canonicalizes deterministically
 - **WHEN** the raw salt `LiF-NaF-KF` is canonicalized
@@ -26,11 +26,11 @@ The system SHALL normalize every salt at the ingest boundary to a canonical form
 - **THEN** the canonical string is `LiF | 100.0` with a single constituent at mole fraction 1.0
 
 ### Requirement: Deterministic IRI minting without blank nodes
-The loader SHALL mint salt, constituent, and measurement IRIs deterministically from the canonical form, using no blank nodes, and matching the seed A-Box minting scheme: salt `msrd:salt-{formula}-{composition}`, constituent `{salt-iri}-c-{compound}`, measurement `msrd:m-{locator-slug}` (locator with `/ # |` replaced by `-`).
+The loader SHALL mint salt, constituent, and measurement IRIs deterministically from the canonical form, using no blank nodes, per the deterministic minting scheme: salt `msrd:salt-{formula}-{composition}`, constituent `{salt-iri}-c-{compound}`, measurement `msrd:m-{locator-slug}` (locator with `/ # |` replaced by `-`).
 
-#### Scenario: Salt IRI matches the seed
+#### Scenario: Salt IRI is deterministic from the canonical form
 - **WHEN** the loader mints the IRI for the FLiBe coolant salt (canonical `BeF2-LiF | 34.0-66.0`)
-- **THEN** the IRI is `msrd:salt-BeF2-LiF-34.0-66.0`, identical to the seed A-Box individual
+- **THEN** the IRI is `msrd:salt-BeF2-LiF-34.0-66.0`
 
 #### Scenario: Measurement IRI is a slugged locator
 - **WHEN** the loader mints the IRI for the FLiBe density measurement with locator `nist-srd27/density#BeF2-LiF|34.0-66.0`
