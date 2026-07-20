@@ -2,7 +2,7 @@
 
 ## 1. Extraction project setup
 
-- [ ] 1.1 Add relation-extraction modules under `extraction/src/msr_extraction/`: Flash relation extractor + validator, unit→QUDT mapper, equation-form/coefficient parser, Python `measurement_value` writer, text-measurement triple writer, salt role/reactor edge writer (incl. a grounded `msr:MoltenSaltReactor` minter), and an `extract` CLI subcommand; reuse the existing `provenance.py` helper for generation provenance (do not add a second provenance path)
+- [x] 1.1 Add relation-extraction modules under `extraction/src/msr_extraction/`: Flash relation extractor + validator, unit→QUDT mapper, equation-form/coefficient parser, Python `measurement_value` writer, text-measurement triple writer, salt role/reactor edge writer (incl. a grounded `msr:MoltenSaltReactor` minter), and an `extract` CLI subcommand; reuse the existing `provenance.py` helper for generation provenance (do not add a second provenance path)
 - [x] 1.2 Extend `config.py` additively: add the SQLite DB path and a confidence threshold (following the existing `MSR_*` env-var convention, e.g. `MSR_EXTRACT_CONFIDENCE_THRESHOLD`), and a `relations_path(report)` helper alongside the existing `mentions_path`/`segments_path`; reuse the existing `deepseek_base_url` / `deepseek_api_key` / `llm_model_extract` and `sparql_query_endpoint` / `sparql_update_endpoint`; keep all clients/paths injectable for tests
 - [x] 1.3 Confirm the `extraction/` image still builds (no new heavy dependency beyond the chunk-6 DeepSeek client; stdlib `sqlite3` and `ontology/qudt-units.json` are already present)
 
