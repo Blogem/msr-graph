@@ -46,6 +46,21 @@ class Config:
     # design.md D5) doesn't broaden precision risk the way lowering a
     # general-prose fuzzy floor would.
     fuzzy_min_token_length: int = 3
+    # Chunk 7 (extract-property-relations) — the SQLite measurement_value
+    # store's path (D-mirrors the Go loader/server `defaultDBPath =
+    # "data/msr.db"` and `MSR_DB_PATH` env), so text-derived measurements can
+    # be written to the same store as the NIST loader's rows.
+    db_path: Path = Path("data/msr.db")
+    # Precision knob for accepting an LLM-proposed relation as a written
+    # msr:PropertyMeasurement (chunk 7). 0.5 is a deliberately precision-biased
+    # default: a proposed relation must clear at least even odds before it is
+    # written to the graph, favoring fewer false positives over recall at POC
+    # scale.
+    confidence_threshold: float = 0.5
+    # Mirrors the loader's `MSR_ONTOLOGY_DIR=/app/ontology` (chunk 7) — the
+    # directory containing the QUDT unit allowlist used to validate
+    # LLM-proposed units before they are written.
+    ontology_dir: Path = Path("ontology")
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> Config:
@@ -71,6 +86,13 @@ class Config:
             fuzzy_min_token_length=int(
                 env.get("MSR_FUZZY_MIN_TOKEN_LENGTH", cls.fuzzy_min_token_length)
             ),
+            db_path=Path(env.get("MSR_DB_PATH", str(cls.db_path))),
+            confidence_threshold=float(
+                env.get(
+                    "MSR_EXTRACT_CONFIDENCE_THRESHOLD", cls.confidence_threshold
+                )
+            ),
+            ontology_dir=Path(env.get("MSR_ONTOLOGY_DIR", str(cls.ontology_dir))),
         )
 
     @property
@@ -114,3 +136,12 @@ class Config:
     def normalized_path(self, report: str) -> Path:
         """Path to the chunk-5 OCR-normalized text for a given report."""
         return self.report_dir(report) / "normalized.txt"
+
+    def relations_path(self, report: str) -> Path:
+        """Path to the chunk-7 relation-extraction artifact for a given report."""
+        return self.report_dir(report) / "relations.jsonl"
+
+    @property
+    def qudt_units_path(self) -> Path:
+        """Path to the QUDT unit allowlist consulted by relation extraction."""
+        return self.ontology_dir / "qudt-units.json"

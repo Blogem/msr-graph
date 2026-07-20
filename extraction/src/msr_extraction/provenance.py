@@ -39,7 +39,7 @@ ACTIVITY_IRI = "msrd:activity-extraction"
 
 #: Extraction pipeline version. Recorded as the run Activity's
 #: ``owl:versionInfo`` (design.md D1/D6).
-EXTRACTION_VERSION = "0.3.0"
+EXTRACTION_VERSION = "0.4.0"
 
 #: Full IRI identifying the extraction pipeline as a ``prov:Agent``,
 #: written in ``<...>`` bracket form (a bare "agent:" scheme, not a

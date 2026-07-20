@@ -23,6 +23,10 @@
 #   make link       # one-shot extraction run: link recognized spans to known
 #                   # entities; writes msr:Mention triples + data/corpus/{report#}/
 #                   # mentions.jsonl (see openspec/changes/ner-entity-linking/design.md).
+#   make extract    # one-shot extraction run: LLM-assisted property-relation
+#                   # extraction; writes msr:PropertyMeasurement/measurement_value
+#                   # rows + data/corpus/{report#}/relations.jsonl (see
+#                   # openspec/changes/extract-property-relations/design.md).
 #   make test       # go test ./... with the GraphDB and sandbox Docker
 #                   # acceptance gates enabled.
 #   make down       # stop the stack and remove its volumes.
@@ -32,7 +36,7 @@
 #   make demo-density # one-shot chatcli run of the canonical FLiBe density
 #                     # question, for a quick smoke test of the same endpoint.
 
-.PHONY: up down load-seed load-nist ingest link test chat demo-density
+.PHONY: up down load-seed load-nist ingest link extract test chat demo-density
 
 # GraphDB's published host port (see docker-compose.yml, service "graphdb").
 GRAPHDB_URL ?= http://localhost:7200
@@ -98,6 +102,10 @@ ingest:
 link:
 	@echo "==> running extraction link (seed matcher -> link segments -> disambiguate -> write mentions + mentions.jsonl)"
 	docker compose run --rm extraction link
+
+extract:
+	@echo "==> running extraction extract (LLM-assisted property-relation extraction -> write measurements + relations.jsonl)"
+	docker compose run --rm extraction extract
 
 test:
 	@echo "==> running go test with the GraphDB and sandbox Docker acceptance gates enabled (GRAPHDB_REQUIRED=1, SANDBOX_DOCKER_REQUIRED=1)"
