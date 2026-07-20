@@ -8,13 +8,24 @@ package graph_test
 // design.md D2 notes the real bootstrap load is a `curl` PUT inside
 // scripts/ensure-repo.sh (Graph Store Protocol PUT, replace semantics)
 // targeting the RDF4J reserved shapes graph
-// (http://rdf4j.org/schema/rdf4j#SHACLShapeGraph) -- "this bootstrap load
-// is curl in ensure-repo.sh, so it is not subject to the Go
-// Client.PutGraph known-graph guard." This test therefore does not use
-// graph.Client.PutGraph (which refuses unknown graph IRIs by design) and
-// instead performs the same PUT directly via net/http, mirroring
-// ensure-repo.sh's own approach, then reads the graph back via
-// client.SelectRaw (which has no dataset restriction).
+// (http://rdf4j.org/schema/rdf4j#SHACLShapeGraph), followed by a POST of
+// the generated unit-allowlist fragment (append semantics) -- mirrored
+// here via putShapesGraph/postShapesGraph.
+//
+// PASS-2 CORRECTION (verified live against GraphDB 11.4.2, sail-type
+// rdf4j:ShaclSail): the ShaclSail wrapper INTERNALIZES shapes written to
+// the reserved shapes graph into its own private shapes cache -- they are
+// NOT retained as queryable triples in that named graph. A
+// `SELECT (COUNT(*)) WHERE { GRAPH <reserved> {?s ?p ?o} }` against a
+// SHACL-enabled repo reliably returns 0 triples even immediately after a
+// successful PUT, because ShaclSail consumes/internalizes the graph's
+// contents rather than storing them as ordinary retrievable data. A
+// triple-count assertion on that graph is therefore not a valid way to
+// observe "did the load install the shapes" on this GraphDB version --
+// DO NOT reintroduce a count-based assertion here. The functional
+// alternative used below (does an invalid write get rejected / a valid
+// write get accepted) is the only reliable observable for "are the shapes
+// active."
 //
 // The shape catalogue's exact file layout is not fully pinned as of this
 // test's authoring (design D3 allows the unit-allowlist fragment to be
@@ -34,7 +45,6 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strconv"
 	"testing"
 	"time"
 
@@ -72,62 +82,87 @@ func loadShapesCatalogueTTL(t *testing.T, root string) []byte {
 	return buf.Bytes()
 }
 
-// putShapesGraph PUTs ttl into the reserved shapes graph via the Graph
-// Store Protocol, exactly the mechanism design D2 specifies for
-// ensure-repo.sh's own load step (replace semantics -- a second PUT with
-// the same content is idempotent).
-func putShapesGraph(t *testing.T, ctx context.Context, baseURL string, ttl []byte) {
+// graphStoreProtocolRequest issues a Graph Store Protocol request (PUT or
+// POST) against the reserved shapes graph, exactly the mechanism design D2
+// specifies for ensure-repo.sh's own load step (PUT replace semantics for
+// the hand-authored shapes, POST append semantics for the generated unit
+// fragment -- mirrored here to stay aligned with the real script).
+func graphStoreProtocolRequest(t *testing.T, ctx context.Context, method, baseURL string, ttl []byte) {
 	t.Helper()
 	params := url.Values{}
 	params.Set("graph", shaclShapesGraphIRI)
 	endpoint := fmt.Sprintf("%s/repositories/msr/rdf-graphs/service?%s", baseURL, params.Encode())
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPut, endpoint, bytes.NewReader(ttl))
+	req, err := http.NewRequestWithContext(ctx, method, endpoint, bytes.NewReader(ttl))
 	if err != nil {
-		t.Fatalf("building PUT request for the reserved shapes graph: %v", err)
+		t.Fatalf("building %s request for the reserved shapes graph: %v", method, err)
 	}
 	req.Header.Set("Content-Type", "text/turtle")
 
 	resp, err := (&http.Client{Timeout: 30 * time.Second}).Do(req)
 	if err != nil {
-		t.Fatalf("PUT to the reserved shapes graph: %v", err)
+		t.Fatalf("%s to the reserved shapes graph: %v", method, err)
 	}
 	defer resp.Body.Close()
 
 	body, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		t.Fatalf("PUT to the reserved shapes graph failed: %s: %s", resp.Status, bytes.TrimSpace(body))
+		t.Fatalf("%s to the reserved shapes graph failed: %s: %s", method, resp.Status, bytes.TrimSpace(body))
 	}
 }
 
-// countShapesGraphTriples mirrors seed_integration_test.go's
-// countGraphTriples but for the reserved shapes graph IRI, which is not a
-// graph.GraphIRI constant (it is RDF4J-internal, not one of this
-// deployment's named graphs), so it queries via client.SelectRaw with an
-// explicit GRAPH clause rather than reusing countGraphTriples directly.
-func countShapesGraphTriples(t *testing.T, client *graph.Client, ctx context.Context) int {
+// putShapesGraph PUTs ttl into the reserved shapes graph (replace
+// semantics), mirroring ensure-repo.sh's load of the hand-authored shapes
+// file(s).
+func putShapesGraph(t *testing.T, ctx context.Context, baseURL string, ttl []byte) {
 	t.Helper()
-	query := fmt.Sprintf(`SELECT (COUNT(*) AS ?count) WHERE { GRAPH <%s> { ?s ?p ?o } }`, shaclShapesGraphIRI)
-	results, err := client.SelectRaw(ctx, query)
-	if err != nil {
-		t.Fatalf("counting triples in the reserved shapes graph: %v", err)
-	}
-	if len(results.Results.Bindings) != 1 {
-		t.Fatalf("expected exactly one COUNT(*) binding for the shapes graph, got %d", len(results.Results.Bindings))
-	}
-	n, err := strconv.Atoi(results.Results.Bindings[0]["count"].Value)
-	if err != nil {
-		t.Fatalf("parsing shapes-graph triple count: %v", err)
-	}
-	return n
+	graphStoreProtocolRequest(t, ctx, http.MethodPut, baseURL, ttl)
+}
+
+// postShapesGraph POSTs ttl into the reserved shapes graph (append
+// semantics), mirroring ensure-repo.sh's load of the generated
+// unit-allowlist fragment immediately after the PUT.
+func postShapesGraph(t *testing.T, ctx context.Context, baseURL string, ttl []byte) {
+	t.Helper()
+	graphStoreProtocolRequest(t, ctx, http.MethodPost, baseURL, ttl)
+}
+
+// assertShapesActive proves the shape catalogue is actually enforcing
+// constraints (the only reliable observable on a ShaclSail repo, per the
+// file-level note above): a msr:PropertyMeasurement missing a required
+// property is rejected, and a complete one is accepted. Reuses the same
+// measurement fixtures shacl_measurement_integration_test.go (task 7.1)
+// exercises against the measurement-completeness shape specifically.
+func assertShapesActive(t *testing.T, client *graph.Client, label string) {
+	t.Helper()
+
+	incompleteID := uniqueLocal(label + "-incomplete")
+	incomplete := completeMeasurementFields(incompleteID)
+	incomplete.hasUnit = "" // drop one required property
+	err := insertData(t, client, incomplete.triples(incompleteID))
+	assertRejected(t, err, label+": incomplete PropertyMeasurement (missing msr:hasUnit)")
+
+	completeID := uniqueLocal(label + "-complete")
+	complete := completeMeasurementFields(completeID)
+	completeTriples := complete.triples(completeID)
+	err = insertData(t, client, completeTriples)
+	assertAccepted(t, err, label+": complete PropertyMeasurement")
+	t.Cleanup(func() { deleteData(t, client, completeTriples) })
 }
 
 // TestShapesGraphLoad_InstallsAndIsIdempotent pins spec.md's "Bootstrap
 // installs the shapes" and "Shapes are a versioned artifact" scenarios
-// (task 7.6): PUT-ing the shape catalogue into the reserved shapes graph
-// installs it (non-zero triple count), and re-running the same PUT
-// (replace semantics) leaves the graph's triple count unchanged --
-// idempotent re-load, not an accumulation.
+// (task 7.6): loading the shape catalogue into the reserved shapes graph
+// (PUT the hand-authored shapes, then POST the generated unit fragment,
+// mirroring ensure-repo.sh) makes the shapes ACTIVE (a known-invalid write
+// is rejected, a valid one is accepted), and re-running the same
+// PUT-then-POST sequence (replace-then-append semantics) leaves that same
+// reject/accept behavior intact -- idempotent re-load, not a
+// disappearance or duplicate-to-breakage of the installed shapes.
+//
+// This does NOT count triples in the reserved shapes graph (see the
+// file-level PASS-2 CORRECTION note above for why that is unreliable on
+// ShaclSail).
 func TestShapesGraphLoad_InstallsAndIsIdempotent(t *testing.T) {
 	client := requireGraphDB(t)
 	ctx := context.Background()
@@ -135,17 +170,21 @@ func TestShapesGraphLoad_InstallsAndIsIdempotent(t *testing.T) {
 	root := repoRoot(t)
 
 	shapesTTL := loadShapesCatalogueTTL(t, root)
-
-	putShapesGraph(t, ctx, baseURL, shapesTTL)
-	firstCount := countShapesGraphTriples(t, client, ctx)
-	if firstCount == 0 {
-		t.Fatalf("reserved shapes graph is empty after loading the shape catalogue -- expected its triples to be installed")
+	unitsTTL, err := os.ReadFile(filepath.Join(root, "deploy", "graphdb", "msr-shapes-units.ttl"))
+	if err != nil {
+		t.Fatalf("reading generated unit-allowlist fragment: %v", err)
 	}
 
 	putShapesGraph(t, ctx, baseURL, shapesTTL)
-	secondCount := countShapesGraphTriples(t, client, ctx)
+	postShapesGraph(t, ctx, baseURL, unitsTTL)
+	assertShapesActive(t, client, "first-load")
 
-	if secondCount != firstCount {
-		t.Errorf("reserved shapes graph triple count changed across a repeat PUT load: %d -> %d, want an idempotent replace (identical count)", firstCount, secondCount)
-	}
+	// Re-run the same PUT-then-POST sequence: replace semantics on the PUT
+	// means the hand-authored shapes are wholesale replaced (not
+	// duplicated), and the POST re-appends the same unit fragment. The
+	// shapes must still be active afterward, proving the reload neither
+	// dropped the catalogue nor broke it via duplication.
+	putShapesGraph(t, ctx, baseURL, shapesTTL)
+	postShapesGraph(t, ctx, baseURL, unitsTTL)
+	assertShapesActive(t, client, "second-load")
 }
