@@ -35,6 +35,98 @@ VALID_KINDS = frozenset({KIND_PROPERTY, KIND_CLASS, KIND_INSTANCE, KIND_RELATION
 
 _SLUG_NON_ALNUM_RE = re.compile(r"[^a-z0-9]+")
 
+#: CURIE prefixes a placement value is allowed to already carry (design.md
+#: D6/D7's `msr:`/`voc:` core+vocab namespaces, plus `msrd:` for the rare
+#: case a placement points at a data-graph individual). Any other prefix
+#: (including no prefix at all combined with punctuation) is unsafe.
+_SAFE_CURIE_PREFIXES = frozenset({"msr", "msrd", "voc"})
+
+#: A CURIE local name: starts with a letter, then letters/digits/`_`/`-`.
+_CURIE_LOCAL_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_-]*$")
+
+#: A bare local name (no prefix, no punctuation): starts with a letter,
+#: then letters/digits/`_` only -- deliberately narrower than the CURIE
+#: local-name pattern (no `-`) since a bare value is auto-prefixed
+#: `msr:{value}` and Turtle prefixed names never use `-` internally in this
+#: ontology's own naming convention.
+_BARE_LOCAL_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]*$")
+
+#: Characters that are never allowed inside a full-IRI placement value, even
+#: though the IRI-position hostname/path syntax is otherwise permissive.
+#: Mirrors the RFC 3987 `<>"{}|\^\`` production plus backtick.
+_FULL_IRI_UNSAFE_CHARS = frozenset('<>"{}|\\^`')
+
+
+def safe_type_ref(value: str | None) -> str | None:
+    """Normalize an LLM-asserted placement value into a SPARQL-safe term, or ``None``.
+
+    Every ``Placement.broader_class``/``.domain``/``.range_`` value is an
+    unverified string lifted straight from the DeepSeek triage JSON reply
+    (``triage._build_placement`` only checks "non-empty str") and is spliced
+    directly into CURIE/IRI *term* position in a SPARQL ``INSERT DATA``
+    (``a msr:{broader}``, ``rdfs:domain msr:{domain}``, ...) -- a position
+    ``proposals._escape_literal`` does not protect, since that helper only
+    escapes *literal* position. This is the single validation choke point
+    every such value must pass through before it reaches that position:
+
+    - a full IRI (contains ``"://"``): returned bracketed (``"<IRI>"``) only
+      if it contains no whitespace, no ASCII control character, and none of
+      the characters in :data:`_FULL_IRI_UNSAFE_CHARS`; otherwise ``None``.
+    - a CURIE ``"prefix:local"`` whose prefix is one of ``msr``/``msrd``/
+      ``voc`` and whose local part matches ``^[A-Za-z][A-Za-z0-9_-]*$``:
+      returned unchanged.
+    - a bare local name matching ``^[A-Za-z][A-Za-z0-9_]*$``: returned as
+      ``"msr:{value}"``.
+    - anything else (punctuation, spaces, ``;``/``}``/``.``, newlines,
+      empty/``None``, any other prefix, a malformed CURIE): ``None`` -- the
+      caller must reject (proposal builders) or skip (the mine-runner
+      individual path) rather than write it.
+    """
+    if not value:
+        return None
+
+    if "://" in value:
+        if any(ch.isspace() for ch in value):
+            return None
+        if any(ord(ch) < 0x20 for ch in value):
+            return None
+        if any(ch in _FULL_IRI_UNSAFE_CHARS for ch in value):
+            return None
+        return f"<{value}>"
+
+    if ":" in value:
+        prefix, _, local = value.partition(":")
+        if prefix in _SAFE_CURIE_PREFIXES and _CURIE_LOCAL_RE.match(local):
+            return value
+        return None
+
+    if _BARE_LOCAL_RE.match(value):
+        return f"msr:{value}"
+
+    return None
+
+
+def local_name(type_ref: str) -> str:
+    """Return the local/trailing name of a :func:`safe_type_ref` output.
+
+    Used to derive a reviewer-facing label or a companion relation name
+    from an already-sanitized term without re-touching the raw LLM string:
+    a bracketed full IRI (``"<...#Foo>"``/``"<.../Foo>"``) yields the part
+    after the last ``#``/``/``; a CURIE (``"msr:Foo"``) yields the part
+    after the ``:``; anything else (already a bare local name) is returned
+    unchanged.
+    """
+    value = type_ref
+    if value.startswith("<") and value.endswith(">"):
+        inner = value[1:-1]
+        for sep in ("#", "/"):
+            if sep in inner:
+                return inner.rsplit(sep, 1)[-1]
+        return inner
+    if ":" in value:
+        return value.split(":", 1)[1]
+    return value
+
 
 def term_slug(term: str) -> str:
     """Return the deterministic slug for ``term`` used across proposal/auto-accept IRIs.

@@ -23,6 +23,7 @@ from msr_extraction.mining_types import (
     Evidence,
     KIND_CLASS,
     KIND_PROPERTY,
+    KIND_RELATION,
     Placement,
     TriagedCandidate,
     term_slug,
@@ -68,9 +69,24 @@ def _evidence() -> tuple[Evidence, ...]:
     )
 
 
-def _triaged(term: str, kind: str, *, canonical_unit=None, quantity_kind=None) -> TriagedCandidate:
+def _triaged(
+    term: str,
+    kind: str,
+    *,
+    canonical_unit=None,
+    quantity_kind=None,
+    broader_class=None,
+    domain=None,
+    range_=None,
+) -> TriagedCandidate:
     candidate = Candidate(term=term, source="lexical", evidence=_evidence(), doc_frequency=280)
-    placement = Placement(canonical_unit=canonical_unit, quantity_kind=quantity_kind)
+    placement = Placement(
+        canonical_unit=canonical_unit,
+        quantity_kind=quantity_kind,
+        broader_class=broader_class,
+        domain=domain,
+        range_=range_,
+    )
     return TriagedCandidate(candidate=candidate, kind=kind, placement=placement)
 
 
@@ -240,6 +256,125 @@ def test_write_proposal_appends_extra_proposal_triples() -> None:
     staging_update = next(u for u in client.updates if "GRAPH <urn:msr:staging>" in u)
     assert extra in proposal_update
     assert extra not in staging_update
+
+
+# --- SPARQL-injection / invalid-Turtle regression guard ------------------
+#
+# `Placement.broader_class`/`.domain`/`.range_` are raw, unvalidated strings
+# lifted straight from the DeepSeek triage JSON reply (`triage._build_placement`
+# only checks "non-empty str") and are spliced directly into CURIE/IRI *term*
+# position by `_class_block`/`_relation_block` -- a position `_escape_literal`
+# does not protect (it only escapes literal position). Every value below must
+# be rejected -- the whole bundle dropped (`build_proposal_bundle` -> `None`)
+# -- exactly like the existing QUDT-allowlist guard, before it ever reaches a
+# generated `INSERT DATA` string.
+
+SPARQL_BREAKOUT_PAYLOAD = "Moderator> } } ; DROP GRAPH <urn:msr:ontology>"
+FULL_IRI_PAYLOAD = "https://w3id.org/msr-kg/ontology#Moderator"
+PUNCTUATION_PAYLOAD = "Reactor's Moderator"
+
+UNSAFE_PLACEMENT_VALUES = [
+    pytest.param(SPARQL_BREAKOUT_PAYLOAD, id="sparql-breakout-payload"),
+    pytest.param(FULL_IRI_PAYLOAD, id="full-iri"),
+    pytest.param(PUNCTUATION_PAYLOAD, id="punctuation-and-space"),
+]
+
+
+@pytest.mark.parametrize("unsafe_value", UNSAFE_PLACEMENT_VALUES)
+def test_build_proposal_bundle_rejects_unsafe_broader_class(unsafe_value: str) -> None:
+    """A `class`-kind candidate whose `broaderClass` is an adversarial
+    SPARQL-breakout payload, a full IRI, or a punctuation/space-bearing
+    value must be rejected outright -- nothing is written."""
+    triaged = _triaged("graphite", KIND_CLASS, broader_class=unsafe_value)
+
+    bundle = build_proposal_bundle(triaged, _allowlist(), RUN_TS)
+
+    assert bundle is None
+
+
+@pytest.mark.parametrize("unsafe_value", UNSAFE_PLACEMENT_VALUES)
+def test_build_proposal_bundle_rejects_unsafe_domain(unsafe_value: str) -> None:
+    """A `relation`-kind candidate whose `domain` is unsafe must be rejected."""
+    triaged = _triaged("moderatedBy", KIND_RELATION, domain=unsafe_value)
+
+    bundle = build_proposal_bundle(triaged, _allowlist(), RUN_TS)
+
+    assert bundle is None
+
+
+@pytest.mark.parametrize("unsafe_value", UNSAFE_PLACEMENT_VALUES)
+def test_build_proposal_bundle_rejects_unsafe_range(unsafe_value: str) -> None:
+    """A `relation`-kind candidate whose `range_` is unsafe must be rejected."""
+    triaged = _triaged("moderatedBy", KIND_RELATION, range_=unsafe_value)
+
+    bundle = build_proposal_bundle(triaged, _allowlist(), RUN_TS)
+
+    assert bundle is None
+
+
+def test_build_proposal_bundle_keeps_legitimate_bare_broader_class() -> None:
+    """The legitimate bare-label case (`"Moderator"`, design.md D7's demo)
+    must still yield a bundle whose proposal-graph triples contain exactly
+    `msr:Moderator a owl:Class` -- no `msr:https://...`, no stray `;`/`}`
+    from an injection attempt, and no companion-relation corruption."""
+    triaged = _triaged("graphite", KIND_CLASS, broader_class="Moderator")
+
+    bundle = build_proposal_bundle(triaged, _allowlist(), RUN_TS)
+
+    assert bundle is not None
+    assert "msr:Moderator a owl:Class" in bundle.proposal_graph_triples
+    assert "msr:https://" not in bundle.proposal_graph_triples
+    assert "DROP GRAPH" not in bundle.proposal_graph_triples
+    assert "}" not in bundle.proposal_graph_triples
+    # the companion relation is derived from the sanitized label, not the
+    # raw string, and must still resolve to the expected demo name
+    assert "msr:moderatedBy a owl:ObjectProperty" in bundle.proposal_graph_triples
+    assert "rdfs:range msr:Moderator" in bundle.proposal_graph_triples
+
+
+def test_build_proposal_bundle_keeps_legitimate_curie_broader_class() -> None:
+    """A placement that already asserts a `msr:`-prefixed CURIE (e.g. a
+    `class`-kind candidate reasserting a core class name) must not be
+    double-prefixed (`msr:msr:MoltenSalt`) and must still build."""
+    triaged = _triaged("graphite", KIND_CLASS, broader_class="msr:MoltenSalt")
+
+    bundle = build_proposal_bundle(triaged, _allowlist(), RUN_TS)
+
+    assert bundle is not None
+    assert "msr:MoltenSalt a owl:Class" in bundle.proposal_graph_triples
+    assert "msr:msr:" not in bundle.proposal_graph_triples
+
+
+def test_build_proposal_bundle_keeps_legitimate_relation_domain_and_range() -> None:
+    """A `relation`-kind candidate with legitimate bare-label domain/range
+    values must still build the expected `rdfs:domain`/`rdfs:range` axioms."""
+    triaged = _triaged(
+        "solubility", KIND_RELATION, domain="MoltenSalt", range_="Constituent"
+    )
+
+    bundle = build_proposal_bundle(triaged, _allowlist(), RUN_TS)
+
+    assert bundle is not None
+    assert "rdfs:domain msr:MoltenSalt" in bundle.proposal_graph_triples
+    assert "rdfs:range msr:Constituent" in bundle.proposal_graph_triples
+
+
+def test_write_proposal_never_writes_unsafe_broader_class_bytes() -> None:
+    """Structural pin at the write boundary: even if a caller somehow built
+    a bundle from an unsafe placement (defense in depth -- this should
+    already be impossible via `build_proposal_bundle`), the injected
+    payload's literal text must never appear in the SPARQL sent to the
+    fake client for the legitimate companion case."""
+    triaged = _triaged("graphite", KIND_CLASS, broader_class="Moderator")
+    bundle = build_proposal_bundle(triaged, _allowlist(), RUN_TS)
+    assert bundle is not None
+
+    client = FakeSparqlClient()
+    write_proposal(bundle, client)
+
+    for update in client.updates:
+        assert "DROP GRAPH" not in update
+        assert SPARQL_BREAKOUT_PAYLOAD not in update
 
 
 # --- 8.7: proposals are structurally kept out of the core dataset -------

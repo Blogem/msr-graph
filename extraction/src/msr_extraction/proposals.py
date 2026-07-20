@@ -10,12 +10,22 @@ graph. IRIs are deterministic (``msrd:proposal-{kind}-{slug}`` via
 ``msrd:mention-{report}-{start}-{end}`` scheme) and no blank nodes are
 used, so a re-run over the same corpus is a set-semantics no-op.
 
-The QUDT-allowlist guard (design.md D6) is the single hard check: any
+The QUDT-allowlist guard (design.md D6) is one of two hard checks: any
 concrete ``unit:``/``qk:`` IRI a proposal would assert must be present in
 the vendored ``ontology/qudt-units.json`` allowlist, else the whole
 proposal is rejected (dropped, nothing written) by :func:`build_proposal_bundle`
 returning ``None``. A placement that leaves its unit/quantity-kind unset
 (the ``solubility`` demo case) never trips the guard.
+
+The second hard check is the ``mining_types.safe_type_ref`` guard: every
+``Placement.broader_class``/``.domain``/``.range_`` value is an unverified
+LLM string spliced directly into CURIE/IRI *term* position (not literal
+position, so ``_escape_literal`` cannot protect it) -- ``_class_block``/
+``_relation_block`` run each such value through ``safe_type_ref`` and, if
+it is present but unsafe (punctuation, a raw SPARQL-breakout payload, a
+full IRI that would double-prefix into an invalid CURIE, ...), the whole
+proposal is rejected the same way the QUDT guard rejects one, via
+:func:`build_proposal_bundle` returning ``None``.
 
 All builders in this module are pure string assembly (no I/O), so they are
 unit-testable against a fake client; :func:`write_proposal` is the only
@@ -42,6 +52,8 @@ from msr_extraction.mining_types import (
     Evidence,
     Placement,
     TriagedCandidate,
+    local_name,
+    safe_type_ref,
     term_slug,
 )
 from msr_extraction.sparql import SparqlClient
@@ -212,8 +224,28 @@ def _property_block(term: str, slug: str, placement: Placement) -> str:
     return f"{property_block}\n\n{concept_block}"
 
 
-def _companion_relation_name(broader_class: str) -> str:
-    """Derive a companion ``...edBy`` object-property local name from a class name.
+def _reject_external_iri(term: str | None) -> bool:
+    """Return whether a :func:`~msr_extraction.mining_types.safe_type_ref` result
+    must be rejected as out of scope for a *proposed* schema placement.
+
+    ``safe_type_ref`` is a general-purpose safety primitive (also reused by
+    ``mine_runner.py`` for the ``instance``-kind rides-with/auto-accept
+    path, where a full IRI already present in the live known-entity set is
+    a legitimate type reference). A ``class``/``relation``-kind proposal is
+    different: it mints a *new* schema term (or references an existing one)
+    that design.md D6/D7 always names within this project's own
+    ``msr:``/``msrd:``/``voc:`` namespace -- never an arbitrary external
+    IRI. So here, even a syntactically clean bracketed full IRI
+    (``safe_type_ref``'s ``"<...>"`` output) is rejected: it is not unsafe
+    to write, but it is out of scope for what a proposal is allowed to
+    assert, and treating it the same as any other unsafe value (reject the
+    whole proposal) is the simplest, fail-closed rule.
+    """
+    return term is not None and term.startswith("<")
+
+
+def _companion_relation_name(broader_class_local: str) -> str:
+    """Derive a companion ``...edBy`` object-property local name from a class's local name.
 
     POC naming convention (design.md D7's ``graphite``/``Moderator``
     example): an agent-noun class ending in ``-or``/``-er`` (e.g.
@@ -222,61 +254,91 @@ def _companion_relation_name(broader_class: str) -> str:
     the agent suffix and appending ``edBy`` (``Moderator`` ->
     ``moderatedBy``). This is deliberately narrow -- it is not a general
     English morphology solver, only the single demo naming pair this
-    change is scoped to.
+    change is scoped to. ``broader_class_local`` must already be a
+    sanitized local name (``mining_types.local_name`` of a
+    :func:`~msr_extraction.mining_types.safe_type_ref` result), never the
+    raw LLM string, so this derivation can never itself become an
+    injection vector.
     """
-    if not broader_class:
-        return broader_class
-    lowered = broader_class[0].lower() + broader_class[1:]
+    if not broader_class_local:
+        return broader_class_local
+    lowered = broader_class_local[0].lower() + broader_class_local[1:]
     stem = lowered[:-2] if lowered.endswith(("or", "er")) else lowered
     return f"{stem}edBy"
 
 
-def _class_block(placement: Placement) -> str:
+def _class_block(placement: Placement) -> str | None:
     """Return the broader-class + companion object-property blocks.
 
-    Emits ``msr:{broader_class} a owl:Class`` plus a companion
+    Emits ``{class_term} a owl:Class`` plus a companion
     ``owl:ObjectProperty`` (:func:`_companion_relation_name`) with
     ``rdfs:range`` the same class -- domain is deliberately left open (no
     ``rdfs:domain``), per design.md D7, since the concrete
     reactor/domain-typed instance edge is chunk-7 relation-extraction
     work, not hand-asserted here. Returns ``""`` if the placement carries
-    no ``broader_class`` claim.
+    no ``broader_class`` claim, or ``None`` if it carries one that
+    ``mining_types.safe_type_ref`` rejects as SPARQL-unsafe, or that
+    resolves to an external full IRI (:func:`_reject_external_iri`) -- a
+    proposed class must be a term in this project's own ``msr:``/``msrd:``/
+    ``voc:`` namespace. Either way the caller, :func:`build_proposal_bundle`,
+    must then reject the whole proposal -- this LLM-asserted value is
+    spliced directly into CURIE/IRI term position, not literal position, so
+    ``_escape_literal`` cannot protect it here.
     """
     broader = placement.broader_class
     if not broader:
         return ""
+    class_term = safe_type_ref(broader)
+    if class_term is None or _reject_external_iri(class_term):
+        return None
+    label = local_name(class_term)
     class_block = (
-        f"msr:{broader} a owl:Class ;\n"
-        f'    rdfs:label "{_escape_literal(broader)}"^^xsd:string .'
+        f"{class_term} a owl:Class ;\n"
+        f'    rdfs:label "{_escape_literal(label)}"^^xsd:string .'
     )
-    relation_name = _companion_relation_name(broader)
-    relation_block = f"msr:{relation_name} a owl:ObjectProperty ;\n    rdfs:range msr:{broader} ."
+    relation_name = _companion_relation_name(label)
+    relation_block = f"msr:{relation_name} a owl:ObjectProperty ;\n    rdfs:range {class_term} ."
     return f"{class_block}\n\n{relation_block}"
 
 
-def _relation_block(slug: str, placement: Placement) -> str:
+def _relation_block(slug: str, placement: Placement) -> str | None:
     """Return the ``owl:ObjectProperty`` block for a ``relation``-kind candidate.
 
     ``rdfs:domain``/``rdfs:range`` are asserted only when the placement
-    carries that claim.
+    carries that claim, and only after passing ``mining_types.safe_type_ref``
+    plus the same external-IRI rejection (see :func:`_class_block`'s
+    docstring for why both guards are needed here, in term rather than
+    literal position). Returns ``None`` if a present ``domain``/``range_``
+    value is SPARQL-unsafe or an external full IRI -- the caller must then
+    reject the whole proposal.
     """
     predicates = ["a owl:ObjectProperty"]
     if placement.domain:
-        predicates.append(f"rdfs:domain msr:{placement.domain}")
+        domain_term = safe_type_ref(placement.domain)
+        if domain_term is None or _reject_external_iri(domain_term):
+            return None
+        predicates.append(f"rdfs:domain {domain_term}")
     if placement.range_:
-        predicates.append(f"rdfs:range msr:{placement.range_}")
+        range_term = safe_type_ref(placement.range_)
+        if range_term is None or _reject_external_iri(range_term):
+            return None
+        predicates.append(f"rdfs:range {range_term}")
     joined = " ;\n    ".join(predicates)
     return f"msr:{slug} {joined} ."
 
 
-def _proposal_graph_triples(triaged: TriagedCandidate, slug: str) -> str:
+def _proposal_graph_triples(triaged: TriagedCandidate, slug: str) -> str | None:
     """Dispatch to the per-``kind`` proposal-graph triple builder.
 
     ``property``/``class``/``relation`` build proposed TBox (+, for
     ``class``, a rides-along companion relation) axioms; any other kind
     (notably a bare ``instance``, normally handled directly by
     ``auto_accept.py`` rather than routed through this builder) yields no
-    TBox axioms -- the staging resource is the whole bundle.
+    TBox axioms -- the staging resource is the whole bundle. Returns
+    ``None`` if the ``class``/``relation`` builder rejected an unsafe
+    placement value (see :func:`_class_block`/:func:`_relation_block`) --
+    the caller, :func:`build_proposal_bundle`, must then reject the whole
+    proposal.
     """
     kind = triaged.kind
     placement = triaged.placement
@@ -298,12 +360,19 @@ def build_proposal_bundle(
     ``triaged.placement.canonical_unit`` or ``.quantity_kind`` is a
     non-empty concrete IRI absent from ``allowlist``, the whole proposal
     is rejected -- returns ``None``, nothing built. An unset value never
-    trips the guard. On success, mints the deterministic
+    trips the guard.
+
+    Then runs the ``mining_types.safe_type_ref`` guard: builds the
+    per-kind proposal-graph TBox block (:func:`_proposal_graph_triples`)
+    and, if that returns ``None`` -- a present ``broader_class``/``domain``/
+    ``range_`` value that ``safe_type_ref`` rejected as SPARQL-unsafe --
+    the whole proposal is rejected the same way, before anything else is
+    built. On success, mints the deterministic
     ``msrd:proposal-{kind}-{slug}`` resource IRI and
     ``urn:msr:proposal/{kind}-{slug}`` graph name
     (``slug = mining_types.term_slug(triaged.candidate.term)``), then
-    assembles the ``urn:msr:staging`` resource+evidence block and the
-    per-kind proposal-graph TBox/instance block. No blank nodes anywhere.
+    assembles the ``urn:msr:staging`` resource+evidence block. No blank
+    nodes anywhere.
 
     ``run_ts`` is accepted but **reserved/unused** by the staging block
     (kept in the signature for call-site/API stability and in case a
@@ -322,6 +391,11 @@ def build_proposal_bundle(
 
     kind = triaged.kind
     slug = term_slug(triaged.candidate.term)
+
+    proposal_graph_triples = _proposal_graph_triples(triaged, slug)
+    if proposal_graph_triples is None:
+        return None
+
     proposal_iri = _proposal_iri(kind, slug)
     proposal_graph = _proposal_graph(kind, slug)
 
@@ -332,7 +406,6 @@ def build_proposal_bundle(
     staging_triples = _staging_resource_block(
         triaged, proposal_iri, proposal_graph, evidence
     )
-    proposal_graph_triples = _proposal_graph_triples(triaged, slug)
 
     return ProposalBundle(
         proposal_iri=proposal_iri,
