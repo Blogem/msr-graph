@@ -13,8 +13,10 @@ package agent_test
 //     run_python script's stdout, with a script_run event preceding the
 //     final text (D6's "final == script output" invariant);
 //   - the max-iterations guard ends a runaway loop with an error (D1);
-//   - grounding -> coefficient fetch -> script -> answer for the seed
-//     FLiBe density scenario (spec "End-to-end grounded density answer");
+//   - grounding (via a real msr:Mention's surfaceForm -> msr:linksTo,
+//     ground-demo-in-real-docs D2/D3) -> coefficient fetch -> script ->
+//     answer for the real FLiBe density scenario (spec "End-to-end
+//     grounded density answer");
 //   - an out-of-range temperature is flagged/refused, not extrapolated
 //     (design D7, spec "Grounded temperature-range enforcement");
 //   - a comparative question is resolved by exactly one aggregating
@@ -339,20 +341,26 @@ func TestAcceptance_MaxIterationsEndsRunawayLoopWithError(t *testing.T) {
 // --- 6.2: grounded density e2e ---
 
 // flibeGroundingResults builds the fake SPARQL grounding result for the
-// seed FLiBe salt (msrd:salt-BeF2-LiF-34.0-66.0): its density
-// PropertyMeasurement's dataLocator, equation form, and valid range.
+// real FLiBe salt (msrd:salt-BeF2-LiF-34.0-66.0), reshaped to the
+// linksTo-based recipe (design D2/D3, spec analysis-agent): a real
+// msr:Mention binds the matched surfaceForm ("LiF-BeF, (66-34 mole %)",
+// the OCR span from ORNL-TM-2316) and its msr:linksTo target (the salt),
+// with msr:inDocument as the document-traceability evidence -- alongside
+// the salt's density PropertyMeasurement dataLocator, equation form, and
+// valid range. No skos:closeMatch binding is present anywhere (D2/D6).
 func flibeGroundingResults() *graph.Results {
 	results := &graph.Results{}
-	results.Head.Vars = []string{"salt", "dataLocator", "equationForm", "validTempMin", "validTempMax", "citedIn", "doi"}
+	results.Head.Vars = []string{"salt", "mention", "surfaceForm", "inDocument", "dataLocator", "equationForm", "validTempMin", "validTempMax"}
 	results.Results.Bindings = []map[string]graph.Binding{
 		{
 			"salt":         {Type: "uri", Value: "https://w3id.org/msr-kg/data#salt-BeF2-LiF-34.0-66.0"},
+			"mention":      {Type: "uri", Value: "https://w3id.org/msr-kg/data#mention-ORNL-TM-2316-225-260"},
+			"surfaceForm":  acceptanceBinding("LiF-BeF, (66-34 mole %)"),
+			"inDocument":   {Type: "uri", Value: "https://w3id.org/msr-kg/data#ORNL-TM-2316"},
 			"dataLocator":  acceptanceBinding("nist-srd27/density#BeF2-LiF|34.0-66.0"),
 			"equationForm": {Type: "uri", Value: "https://w3id.org/msr-kg/ontology#linear"},
 			"validTempMin": acceptanceBinding("800"),
 			"validTempMax": acceptanceBinding("1080"),
-			"citedIn":      {Type: "uri", Value: "https://w3id.org/msr-kg/data#doc-nist-srd27"},
-			"doi":          acceptanceBinding("10.1000/example-nist-srd27"),
 		},
 	}
 	return results
@@ -371,8 +379,9 @@ func TestAcceptance_GroundedDensityEndToEnd(t *testing.T) {
 	}}
 
 	llm := &scriptedLLM{completions: []agent.Completion{
-		// (a) ground via sparql_query
-		{ToolCalls: []agent.ToolCall{{ID: "1", Name: "sparql_query", Arguments: `{"query":"SELECT ?salt ?dataLocator ?equationForm ?validTempMin ?validTempMax ?citedIn ?doi WHERE { ?salt <https://w3id.org/msr-kg/ontology#hasMeasurement> ?m }"}`}}},
+		// (a) ground via sparql_query: a real msr:Mention's surfaceForm ->
+		// msr:linksTo -> the salt, with msr:inDocument as evidence.
+		{ToolCalls: []agent.ToolCall{{ID: "1", Name: "sparql_query", Arguments: `{"query":"SELECT ?salt ?mention ?surfaceForm ?inDocument ?dataLocator ?equationForm ?validTempMin ?validTempMax WHERE { ?mention a <https://w3id.org/msr-kg/ontology#Mention> ; <https://w3id.org/msr-kg/ontology#linksTo> ?salt ; <https://w3id.org/msr-kg/ontology#inDocument> ?inDocument ; <https://w3id.org/msr-kg/ontology#surfaceForm> ?surfaceForm . ?salt <https://w3id.org/msr-kg/ontology#hasMeasurement> ?m }"}`}}},
 		// (b) fetch coefficients via sql_query, keyed by the dataLocator from (a)
 		{ToolCalls: []agent.ToolCall{{ID: "2", Name: "sql_query", Arguments: `{"query":"SELECT c0, c1, t_min, t_max FROM measurement_value WHERE locator = '` + locator + `'"}`}}},
 		// (c) evaluate c0 + c1*T at T=900 in a sandbox script
@@ -423,6 +432,31 @@ func TestAcceptance_GroundedDensityEndToEnd(t *testing.T) {
 	}
 	if textIdx == -1 {
 		t.Fatalf("no final text in trace: %v", eventTypesOf(events))
+	}
+
+	// Spec "Grounding traces to a real document": the sparql_query
+	// tool_result must surface the matched msr:Mention's msr:inDocument
+	// (ORNL-TM-2316) and its surfaceForm, so the grounding itself -- not
+	// just the measurement -- is document-traceable.
+	sparqlResultIdx := -1
+	for i := sparqlCallIdx; i < len(events); i++ {
+		if events[i].Type == agent.EventToolResult && events[i].ToolResult.Name == "sparql_query" {
+			sparqlResultIdx = i
+			break
+		}
+	}
+	if sparqlResultIdx == -1 {
+		t.Fatalf("no sparql_query tool_result in trace: %v", eventTypesOf(events))
+	}
+	sparqlContent := events[sparqlResultIdx].ToolResult.Content
+	if !strings.Contains(sparqlContent, "ORNL-TM-2316") {
+		t.Errorf("sparql_query tool_result = %q, want it to surface the grounded mention's inDocument (ORNL-TM-2316)", sparqlContent)
+	}
+	if !strings.Contains(sparqlContent, "LiF-BeF, (66-34 mole %)") {
+		t.Errorf("sparql_query tool_result = %q, want it to surface the matched mention's surfaceForm", sparqlContent)
+	}
+	if strings.Contains(strings.ToLower(sparqlContent), "closematch") {
+		t.Errorf("sparql_query tool_result = %q, must not carry a skos:closeMatch binding", sparqlContent)
 	}
 
 	if !(sparqlCallIdx < sqlCallIdx && sqlCallIdx < scriptRunIdx && scriptRunIdx < textIdx) {
