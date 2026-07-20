@@ -41,6 +41,7 @@ from msr_extraction.mining_types import (
     KIND_PROPERTY,
     KIND_RELATION,
     TriagedCandidate,
+    safe_type_ref,
     term_slug,
 )
 from msr_extraction.sparql import SparqlClient
@@ -70,17 +71,18 @@ def _as_type_ref(value: str | None) -> str | None:
     A bare local name (no `:`/`://`, e.g. `"Moderator"` from a `class`-kind
     placement, or a core class name asserted without its prefix) becomes
     `msr:{value}`; a value that already looks like a CURIE (`msr:MoltenSalt`)
-    or a full IRI (`https://...`) is returned unchanged. `None`/empty stays
-    `None`/empty. This is the single normalization point shared by both the
-    `instance`-kind auto-accept/rides-with individual and the `class`-kind
-    rides-with individual, so the two paths can never diverge into
-    different CURIE forms for the same kind of value.
+    or a full IRI (`https://...`) is returned unchanged (bracketed, if a
+    full IRI). `None`/empty stays `None`. Delegates entirely to
+    `mining_types.safe_type_ref`, so an unsafe value -- a SPARQL-breakout
+    payload, stray punctuation, or anything else that would corrupt the
+    generated `INSERT DATA` -- is rejected (`None`) here too, exactly the
+    same as the `proposals.py` guard on the same placement field. This is
+    the single normalization point shared by both the `instance`-kind
+    auto-accept/rides-with individual and the `class`-kind rides-with
+    individual, so the two paths can never diverge into different CURIE
+    forms (or different safety guarantees) for the same kind of value.
     """
-    if not value:
-        return value
-    if value.startswith("<") or "://" in value or ":" in value:
-        return value
-    return f"msr:{value}"
+    return safe_type_ref(value)
 
 
 def _first_evidence_document_iri(triaged: TriagedCandidate) -> str | None:
@@ -187,10 +189,22 @@ def run_mine(
             type_iri = _as_type_ref(triaged.placement.broader_class)
             if not type_iri:
                 dropped += 1
-                logger.info(
-                    "mine: instance candidate=%r has no asserted type; dropped",
-                    candidate.term,
-                )
+                if triaged.placement.broader_class:
+                    # A type *was* asserted but `safe_type_ref` rejected it as
+                    # SPARQL-unsafe (breakout payload, stray punctuation, an
+                    # unbracketable full IRI, ...) -- warn, since this is a
+                    # rejected-as-unsafe LLM output, not merely an unset field.
+                    logger.warning(
+                        "mine: instance candidate=%r has an unsafe asserted "
+                        "type (%r); dropped",
+                        candidate.term,
+                        triaged.placement.broader_class,
+                    )
+                else:
+                    logger.info(
+                        "mine: instance candidate=%r has no asserted type; dropped",
+                        candidate.term,
+                    )
                 continue
             individual = auto_accept.Individual(
                 iri=f"msrd:{slug}", type_iri=type_iri, document_iri=document_iri
