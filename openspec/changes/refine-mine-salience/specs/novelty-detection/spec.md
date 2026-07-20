@@ -2,18 +2,44 @@
 
 ## MODIFIED Requirements
 
+### Requirement: Candidate terms are enumerated from the curated text and the chunk-6 misses
+The miner SHALL enumerate candidate terms from two sources: (a) a **spaCy noun-chunk pass** over
+the curated documents' normalized text — loading a statistical spaCy model (e.g.
+`en_core_web_sm`) and taking `doc.noun_chunks`, keeping only content tokens (alphabetic,
+non-stopword, length ≥ 3) that are NOT part of a named entity of a non-concept type
+(`PERSON`/`ORG`/`GPE`/`LOC`/`FAC`/`NORP`/`DATE`/`TIME`/`CARDINAL`/`ORDINAL`/`MONEY`/`PERCENT`/
+`QUANTITY`), lemmatizing, and forming a candidate from 1–3 surviving tokens — so candidates are
+concept-shaped and proper nouns are dropped at the source; and (b) the `status:"novel"` records
+of the chunk-6 `data/corpus/{report#}/mentions.jsonl` artifacts, which contribute the unresolved
+salt-formula spans as instance-kind candidates. The miner SHALL NOT re-run the chunk-6 linker.
+Each candidate MUST retain its surface form and the source document + span offsets. If the spaCy
+model cannot be loaded, the miner SHALL log an error and fall back to the prior n-gram
+term-candidate pass rather than failing.
+
+#### Scenario: A novel domain term is enumerated as a noun chunk
+- **WHEN** the curated text contains a salient noun-phrase concept (e.g. "solubility" or "graphite") that chunk 6 did not link
+- **THEN** the miner enumerates it as a candidate from its spaCy noun-chunk pass, even though it is absent from the chunk-6 `mentions.jsonl`
+
+#### Scenario: A proper noun is not enumerated as a candidate
+- **WHEN** a noun chunk is (or contains) a `PERSON`/`ORG`/`GPE` entity such as an author name or a laboratory/organization name
+- **THEN** those entity tokens are dropped and the proper noun is not emitted as a candidate
+
+#### Scenario: An unresolved salt-formula miss becomes a candidate
+- **WHEN** a chunk-6 `mentions.jsonl` record has `status:"novel"` (an unresolved salt-formula span)
+- **THEN** the miner includes it as an instance-kind candidate for triage
+
 ### Requirement: Already-known and already-linked terms are excluded
-Before scoring, the miner SHALL drop any candidate whose normalized form already resolves to a
+Before triage, the miner SHALL drop any candidate whose normalized form already resolves to a
 known term in the **core dataset** — matched against **all** labels the core exposes: SKOS
 `prefLabel`/`altLabel`, ontology class labels, physical-property labels, salt labels, and the
 role/reactor layer labels — read through the three core `FROM` graphs (`urn:msr:ontology`,
 `urn:msr:data`, `urn:msr:vocab`) via the chunk-6 `GraphReader`; or that chunk 6 already linked (a
 `status:"linked"` record or `msr:Mention` triple). Matching MUST be normalization-aware —
-collapsing case, surrounding whitespace, and internal separators so that spelling variants of the
-same term are treated as equal (e.g. `molten salt` is excluded by `MoltenSalt`) — and MUST compare
-on normalized **token sequences** so a known label's full token sequence appearing in a candidate
-excludes it, while a candidate that merely shares a single token with a known label is NOT excluded.
-Staging and proposal graphs MUST NOT be consulted for this exclusion, so a term approved in a prior
+casefolding, splitting camelCase, and collapsing whitespace/separators so spelling variants of the
+same term are equal (e.g. `molten salt` is excluded by `MoltenSalt`) — and MUST compare on
+normalized **token sequences** so a known label's full token sequence appearing in a candidate
+excludes it, while a candidate that merely shares a single token with a known label is NOT
+excluded. Staging and proposal graphs MUST NOT be consulted, so a term approved in a prior
 evolution round (now in core) is excluded but a still-pending proposal does not suppress
 re-detection.
 
@@ -22,7 +48,7 @@ re-detection.
 - **THEN** the candidate is excluded from the pool
 
 #### Scenario: A spelling variant of a known label is excluded
-- **WHEN** a candidate term is a normalization/spacing variant of a known label (e.g. `molten salt` vs the class label `MoltenSalt`)
+- **WHEN** a candidate term is a normalization/spacing/camelCase variant of a known label (e.g. `molten salt` vs the class label `MoltenSalt`)
 - **THEN** the candidate is excluded, even though the raw strings differ
 
 #### Scenario: A novel term sharing one token with a known label is not excluded
@@ -33,29 +59,26 @@ re-detection.
 - **WHEN** a candidate's term matches only a resource in `urn:msr:staging` (a pending proposal)
 - **THEN** the candidate is NOT excluded on that basis
 
-### Requirement: Salience ranks domain novelty and the queue is bounded
-The miner SHALL rank each surviving candidate by a **keyness (relative-frequency) score** that
-contrasts the candidate's salience in the corpus against how common its constituent tokens are in a
-**vendored general-English word-frequency baseline** — so a term built from tokens that are rare in
-general English but recurring in the corpus (e.g. `solubility`, `graphite`) ranks above a term of
-common English tokens (e.g. `high temperature`, `heat transfer`), regardless of raw corpus
-frequency. Document frequency over the full 637 OCR sidecars (via the inverted n-gram-set scan)
-MAY be retained as an input/floor to the score and as evidence, but MUST NOT be the sole ranking
-key. The general-English baseline MUST be a vendored asset (not a runtime download / external
-dependency); if it is missing or unreadable, the miner SHALL log a warning and fall back to
-document-frequency ranking rather than failing. After ranking and exclusion, the miner SHALL keep
-only the **top-N** candidates by score, where N is a configuration value (not a hardcoded literal),
-with a deterministic tie-break, and SHALL log the counts scored / excluded / cut so the truncation
-is never silent.
+### Requirement: Document frequency bounds cost; it is not a novelty rank
+The miner SHALL use document frequency over the full 637 OCR sidecars (via the fast inverted
+n-gram-set scan) only as a **coarse cost bound**, never as a novelty ranking (document frequency
+does not distinguish novel concepts from common/known terms on this corpus). The miner SHALL drop
+candidates below a configurable low document-frequency floor (to remove rare OCR one-offs) and
+SHALL enforce a configurable **maximum-candidate ceiling**: if more candidates survive shaping,
+exclusion, and the floor than the ceiling, the miner keeps the top-`max` by document frequency
+with a deterministic tie-break — purely as a runaway guard — and MUST log the number cut so the
+truncation is never silent. Both the floor and the ceiling MUST be configuration values, not
+hardcoded literals. The miner SHALL NOT compute or rank by a keyness / weirdness / relative-
+frequency novelty score.
 
-#### Scenario: A domain-novel term outranks a more frequent common term
-- **WHEN** a domain term (rare in general English) and a common-English term both appear in many corpus documents, and the common term has the higher raw document frequency
-- **THEN** the domain term receives the higher keyness score and is ranked above the common term
+#### Scenario: A rare OCR one-off is dropped by the floor
+- **WHEN** a candidate appears in fewer corpus documents than the configured document-frequency floor
+- **THEN** the candidate is dropped before triage
 
-#### Scenario: The reviewable queue is bounded to top-N
-- **WHEN** more than N candidates survive exclusion
-- **THEN** only the top-N by keyness score are retained for triage, and the number cut is logged
+#### Scenario: The candidate set is bounded by the ceiling
+- **WHEN** more candidates survive shaping/exclusion/floor than the configured maximum-candidate ceiling
+- **THEN** the miner keeps at most that many (top by document frequency, deterministic tie-break) and logs the number cut
 
-#### Scenario: Missing baseline degrades gracefully
-- **WHEN** the vendored general-English frequency baseline is missing or unreadable
-- **THEN** the miner logs a warning and ranks by document frequency instead of failing
+#### Scenario: Ordering is not treated as a novelty ranking
+- **WHEN** candidates are passed to triage
+- **THEN** they are not ranked or prioritized by a novelty score; precision is deferred to the triage reject verdict and human review

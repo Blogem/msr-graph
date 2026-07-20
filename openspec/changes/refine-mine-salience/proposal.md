@@ -2,37 +2,55 @@
 
 ## Why
 
-The first real end-to-end `make mine` over the 637-document corpus exposed that mine's
-`novelty-detection` salience — raw document frequency — is not a novelty signal. It enumerates
-~252k n-gram candidates and admits **~8,861** above the default `df ≥ 50` threshold (thousands
-of Flash triage calls and thousands of proposals — not a reviewable queue), and it cannot
-isolate the genuinely novel targets: measured document frequencies put common/already-modeled
-phrases **above** the targets — `molten salt` 423, `graphite` 379, `high temperature` 324,
-`heat transfer` 318, `fuel salt` 308, `solubility` **271**. So no threshold keeps `solubility`
-without also admitting the noise. mine cannot be demo-run or reviewed until candidate selection
-ranks domain-novel, not-yet-modeled terms above frequent generic ones and bounds the queue.
+The first real `make mine` over the 637-document corpus showed mine's `novelty-detection`
+selection is broken: a lexical unigram/bigram/trigram pass emits ~252k candidates, ~8,861 clear
+the `df ≥ 50` threshold (thousands of Flash calls + thousands of proposals), and document
+frequency cannot rank novelty at all — generic/known phrases outrank the real targets
+(`molten salt` 423 > `graphite` 379 > `heat transfer` 318 > `solubility` 271).
+
+A hands-on POC then tested whether a statistical novelty score could fix this. The finding is
+decisive: **it can't on this OCR.** Even with spaCy noun-chunk shaping + hardened exclusion + a
+keyness (weirdness-ratio) score, the top of the ranking is dominated by OCR noise — acronyms
+(`ornl`, `usaec`, `aec`), OCR word-fragments (`tion`, `ments`, `ture`, `dwg`), and author
+surnames NER missed on line-fragmented text (`trauger`, `bettis`, `swartout`, `grimes`) — while
+the real targets land at ranks 33–271. "Rare-in-English + frequent-in-corpus" describes OCR
+garbage as well as it describes novel concepts; no threshold or formula separates them. Deciding
+"`graphite` is a novel moderator" vs "`Trauger` is an author" is a **semantic** judgment that
+frequency statistics fundamentally cannot make.
+
+Two things the POC *did* validate: (1) spaCy noun-chunk extraction + NER filtering cuts candidates
+252k → 23k, shapes them into concepts, and removes much proper-noun noise while keeping the
+targets; (2) hardened exclusion correctly drops already-modeled terms (`density`, `viscosity`,
+`corrosion`). The missing capability — semantic novelty judgment — already exists in the pipeline:
+the Flash triage step. So this change makes candidate selection do only what statistics *can* do
+(shape + exclude + coarse-bound) and lets the **LLM triage + human review (chunk 9)** be the
+precision mechanism.
 
 ## What Changes
 
-- **Replace pure document-frequency salience with a keyness (relative-frequency) score.** A
-  candidate's score contrasts its corpus salience against how common its tokens are in general
-  English (a "weirdness ratio"): domain terms (`solubility`, `graphite`, `fluoride`) rank high;
-  ordinary English/report boilerplate (`temperature`, `high`, `transfer`, `figure`, `table`)
-  ranks low. Document frequency remains an input (evidence/floor), not the ranking key.
-- **Vendor a compact general-English word-frequency baseline** as a committed data file
-  (mirroring the `ontology/qudt-units.json` vendoring pattern) — **no new third-party package**.
-  Absence of the baseline degrades gracefully (falls back to the current df behavior with a
-  logged warning) so the miner never hard-fails on a missing asset.
-- **Harden the exclusion set** to normalization/substring-aware matching against **all** known
-  labels — SKOS `prefLabel`/`altLabel`, ontology classes, salts, physical properties, and
-  chunk-7's role/reactor layer — so an already-modeled term in any spelling is dropped
-  (e.g. `molten salt` now excludes via `msr:MoltenSalt`, closing the space-variant gap).
-- **Bound the reviewable queue to a top-N cut.** After scoring and exclusion, keep only the
-  top-N candidates by keyness (a config knob, deterministic tie-break), so triage fires a
-  bounded number of Flash calls and the reviewer receives a prioritized, finite set.
-- **Keep the already-landed fast inverted document-frequency scan** (the n-gram-set
-  intersection). N-gram-size restriction stays available as a secondary lever but is not the
-  primary fix.
+- **Replace the n-gram lexical pass with spaCy noun-chunk candidate extraction.** Load a
+  statistical spaCy model (`en_core_web_sm`) and enumerate candidates from `doc.noun_chunks` over
+  the curated documents: content-noun tokens only, lemmatized, with tokens belonging to
+  `PERSON`/`ORG`/`GPE`/`DATE`/… entities dropped. Keep the chunk-6 salt-formula misses as
+  instance candidates. (POC: 252k → 23k, concept-shaped, targets retained.) This lifts chunk 6's
+  "stays lexical / no statistical model" constraint deliberately — that constraint was for
+  rules-only *linking*, and does not serve candidate *mining*.
+- **Harden exclusion.** Match candidates (normalization/token-sequence aware, incl. camelCase
+  splitting so `molten salt` ≡ `MoltenSalt`) against **all** core labels — SKOS
+  `prefLabel`/`altLabel`, ontology classes, physical properties, salts, and chunk-7's
+  role/reactor layer — read only through the three core `FROM` graphs.
+- **Keep document frequency only as a coarse cost floor, not a novelty rank.** Retain the
+  already-landed fast inverted DF scan to drop rare OCR one-offs (configurable threshold) and add
+  a configurable hard **max-candidates ceiling** (runaway guard, DF-sorted, logged) so the triage
+  fan-out is bounded. **No keyness / weirdness scoring** — the POC disproved it; do not build it.
+- **Make triage the semantic filter: add an explicit "reject / not-a-concept" verdict.** Extend
+  the `candidate-triage` classifier so Flash can reject a candidate that is not a genuine novel
+  ontology concept (OCR fragment, acronym, proper noun that slipped NER, generic boilerplate);
+  rejected candidates emit no proposal. This is what actually removes the noise that survived the
+  statistical stage.
+- **Set honest expectations.** mine surfaces a bounded, concept-shaped, known-excluded candidate
+  set; the LLM triage and chunk-9 human review provide precision. mine is candidate *generation*
+  feeding governance, not an unsupervised oracle that ranks the demo targets to the top.
 
 ## Capabilities
 
@@ -42,29 +60,30 @@ None.
 
 ### Modified Capabilities
 
-- `novelty-detection`: the salience requirement changes from "score by document frequency over
-  the full corpus, keep candidates at/above a threshold" to "rank by a keyness score
-  (corpus salience contrasted against a vendored general-English baseline), drop already-modeled
-  terms via hardened exclusion, and keep only the top-N by score." The candidate-enumeration and
-  curated-evidence requirements are unchanged.
+- `novelty-detection`: candidate enumeration changes from an n-gram lexical pass to spaCy
+  noun-chunk extraction (POS/NER-filtered, lemmatized); exclusion becomes normalization/
+  token-sequence-aware over all core labels; salience changes from "keep at/above a DF threshold"
+  to "DF as a coarse floor + a hard max-candidates ceiling" with **no** novelty ranking.
+- `candidate-triage`: the classifier gains an explicit reject/not-a-concept verdict so the LLM
+  filters non-concept candidates; a rejected candidate produces no proposal.
 
 ## Impact
 
-- **Code**: `extraction/src/msr_extraction/novelty.py` — the scorer and exclusion set; the
-  `mine_candidates` umbrella gains the keyness step + top-N cut. No change to
-  `triage.py` / `proposals.py` / `auto_accept.py` / `mine_runner.py` provenance/write paths
-  (they consume the same `Candidate` list, now bounded and better-ranked).
-- **Data**: a new vendored general-English frequency file (small, committed; e.g. under
-  `ontology/` or `extraction/`), consistent with `qudt-units.json`.
-- **Config**: new knobs for the top-N cap and any keyness parameters (injectable, env-overridable,
-  test-pinned), alongside the existing `salience_threshold`.
-- **Dependencies**: none added — pure-Python scoring over a vendored list; reuses the merged
-  DF-scan and the chunk-6 `GraphReader`.
-- **Depends on**: the merged `mine-ontology-candidates` (novelty/triage/proposals/auto-accept +
-  the inverted DF scan) and chunk-7's role/reactor labels (now part of the exclusion surface).
-- **Downstream unchanged**: chunk-9 governance still consumes the same `msr:ChangeProposal`
-  staging contract — this change only improves *which* candidates reach it, not the shape.
-- **Acceptance**: on the real 637-doc corpus, `solubility` and `graphite` land in the top-N while
-  `molten salt` / `heat transfer` / `high temperature` do not; total triaged candidates ≤ N; the
-  demo still yields the solubility (property) and graphite (class) proposals. Gated by hermetic
-  unit tests, a guarded integration test, and a real end-to-end run.
+- **Code**: `extraction/src/msr_extraction/novelty.py` (spaCy enumeration, hardened exclusion, DF
+  floor + max-candidates cap) and `triage.py` (reject verdict + prompt/validation update).
+  `proposals.py`/`auto_accept.py`/`mine_runner.py` provenance/write paths unchanged; `mine_runner`
+  drops rejected candidates.
+- **Dependency**: adds the `en_core_web_sm` spaCy model as a pinned wheel in
+  `extraction/pyproject.toml` (spaCy itself is already present; the model is a build-time
+  download, deterministic at inference). No other new package.
+- **Config**: DF floor (existing `salience_threshold`, repurposed as a coarse floor),
+  `mine_max_candidates` ceiling, spaCy model name — injectable, env-overridable, test-pinned.
+- **Performance**: one-shot spaCy pass over the ~12 curated docs ≈ 90s (acceptable); triage
+  fan-out bounded by the ceiling and already parallelized. More Flash calls than before (the LLM
+  is now the filter), bounded by the ceiling.
+- **Depends on**: merged `mine-ontology-candidates` + the DF-scan perf fix; chunk-7 role/reactor
+  labels (now part of the exclusion surface). Downstream chunk-9 staging contract unchanged.
+- **Acceptance**: on the real corpus, mine emits a bounded, reviewable proposal set in which
+  `solubility` (property) and `graphite` (class) appear with correct evidence, while OCR
+  fragments / acronyms / author names / already-modeled terms do not; validated by hermetic unit
+  tests (stubbed Flash), a guarded integration test, and a real end-to-end run.

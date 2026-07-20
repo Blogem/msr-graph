@@ -2,161 +2,163 @@
 
 ## Context
 
-`mine-ontology-candidates` (chunk 8) is merged. Its `novelty-detection` capability enumerates
-candidate terms from a lexical n-gram pass over the curated documents plus the chunk-6
-salt-formula misses, excludes already-known terms, scores each by **document frequency** over the
-full 637-document OCR corpus, and keeps everything at/above a fixed threshold
-(`config.salience_threshold`, default 50). A recent perf fix replaced the O(terms × docs)
-substring scan with an inverted n-gram-set intersection (≈3.7 h → 7 s), so scanning is no longer
-the bottleneck.
+`mine-ontology-candidates` (chunk 8) is merged, including a perf fix that made the
+document-frequency scan fast (inverted n-gram-set intersection, ≈3.7 h → 7 s). The first real
+`make mine` then exposed that mine's *selection* is broken, and a POC established exactly how far
+statistics can and cannot go. All numbers below are measured on the real 637-document OCR corpus.
 
-The first real run then exposed a **selection** problem the fixture-scale tests could not:
+**Baseline (current mine):** the lexical unigram/bigram/trigram pass emits **252,085** candidates;
+**8,861** clear `df ≥ 50`. Document frequency does not rank novelty — measured df:
+`molten salt` 423 · `graphite` 379 · `high temperature` 324 · `heat transfer` 318 ·
+`fuel salt` 308 · `solubility` **271** — so the genuine targets are *less* frequent than
+common/known phrases.
 
-- The lexical pass emits **252,085** candidate n-grams; **8,861** clear `df ≥ 50`.
-- Document frequency does not rank novelty. Measured df on the real corpus:
-  `molten salt` 423 · `graphite` 379 · `high temperature` 324 · `heat transfer` 318 ·
-  `fuel salt` 308 · `solubility` **271**. The genuine novel targets are *less* frequent than
-  common/already-modeled phrases, so raising the threshold drops `solubility` before the noise.
-- The exclusion set (315 entries) matches only exact normalized ontology labels: it catches
-  `moltensalt` and `fuel salt` but misses the `molten salt` space variant and every generic
-  non-ontology term (`heat transfer`, `temperature`, `reactor`).
+**POC — spaCy shaping (validated win):** `en_core_web_sm` `doc.noun_chunks`, content-noun tokens,
+NER-filtered, over the curated docs → **23,306** candidates (10×), concept-shaped; NER removed
+much real OCR noise (`Union Carbide Corporation`, `Oak Ridge`, author names); targets retained
+(`solubility`, `graphite`, `moderator`, `eutectic`); ~96 s one-shot.
 
-Net effect: a full `make mine` would triage ~8,861 candidates (thousands of Flash calls) and emit
-thousands of proposals — unreviewable, and not surfacing the demo targets as anything special.
-This change fixes candidate *selection* only; triage, proposal emission, instance auto-accept, and
-provenance are unchanged and keep consuming the same `Candidate` list — now bounded and ranked.
+**POC — statistical novelty ranking (disproven):** spaCy-shaped + hardened-exclude + keyness
+(weirdness ratio vs a general-English baseline) still ranks **OCR noise at the top** — acronyms
+(`ornl`, `usaec`, `aec`), OCR fragments (`tion`, `ments`, `ture`, `dwg`), and NER-missed surnames
+(`trauger`, `bettis`, `swartout`, `grimes`); the real targets land at ranks **33 (graphite), 152
+(solubility), 164 (eutectic), 271 (moderator)**. An in-vocabulary band-pass did not fix it
+(surnames/fragments have moderate web-frequency). Conclusion: on OCR of this quality, "rare +
+frequent" cannot separate novel concepts from garbage; the discriminator is semantic.
+
+**Hardened exclusion (validated):** matching candidates against all core labels correctly drops
+already-modeled terms (`density`, `viscosity`, `corrosion`).
+
+The pipeline already contains the semantic discriminator: the Flash **triage** step. So this
+design confines candidate selection to what statistics *can* do — **shape** (spaCy) + **exclude**
+(hardened) + **coarse-bound** (DF floor + hard ceiling) — and makes the **LLM triage + chunk-9
+human review** the precision mechanism, by giving triage the ability to *reject* non-concepts.
 
 ## Goals / Non-Goals
 
 **Goals:**
 
-- Rank candidates by a **keyness** score that surfaces domain-novel terms above frequent
-  generic/known ones, keeping `solubility` and `graphite` while demoting `molten salt` /
-  `heat transfer` / `high temperature`.
-- Bound the triaged set to a configurable **top-N** so triage fires a finite number of Flash
-  calls and the reviewer gets a prioritized, finite queue.
-- Harden exclusion so already-modeled terms (any spelling, incl. space variants) never reach
-  scoring.
-- Preserve determinism, idempotence, hermetic testability, and zero new third-party packages.
+- Enumerate concept-shaped candidates via spaCy noun-chunks, dropping proper nouns/entities and
+  the n-gram explosion, while keeping the chunk-6 salt-formula misses.
+- Harden exclusion so already-modeled terms (any spelling, incl. camelCase/space variants) never
+  reach triage.
+- Bound the triage fan-out with a DF floor + a hard max-candidates ceiling — a **cost** bound, not
+  a novelty rank.
+- Let Flash triage reject non-concepts (OCR fragments, acronyms, missed proper nouns, generic
+  boilerplate) so the LLM is the precision filter; chunk-9 review is final.
+- Preserve determinism (spaCy/Flash are deterministic in eval; runaway cap is DF-sorted +
+  logged), the `msr:ChangeProposal` staging contract, and the provenance/write paths.
 
 **Non-Goals:**
 
-- No change to triage, proposal emission, instance auto-accept, provenance, or the
-  `msr:ChangeProposal` staging contract (chunk-9's input shape is untouched).
-- No statistical NLP / POS tagging / re-introduction of a spaCy model (chunk 6 dropped it) — the
-  pass stays lexical.
-- No learned/embedding-based novelty model — a transparent, deterministic keyness score is the
-  POC scope; the design keeps the metric explainable to a reviewer.
-- No dereferencing external vocabularies — the frequency baseline is vendored, like
-  `qudt-units.json`.
+- **No statistical novelty score (keyness/weirdness/TF-IDF).** The POC disproved it on this OCR;
+  building it would be effort spent on a dead end.
+- No embedding/BERT novelty model in this change (documented as a future experiment; the POC
+  suggests semantic scoring on OCR is hard and the LLM already does the job).
+- No change to proposal emission, instance auto-accept, provenance, or the chunk-9 contract.
+- No re-OCR / corpus cleanup (out of scope; the miner tolerates OCR noise by letting triage
+  reject it).
 
 ## Decisions
 
-### D1 — Keyness (weirdness ratio) replaces document frequency as the ranking key
+### D1 — spaCy noun-chunk enumeration replaces the n-gram pass
 
-Score each candidate by how much more prominent it is in the MSR corpus than in general English,
-rather than by raw corpus frequency. Concretely, for a candidate term the score combines its
-corpus document frequency with the **rarity of its constituent tokens in a vendored
-general-English frequency baseline** — a term whose tokens are rare in general English but recur
-across the corpus scores high (`solubility`, `graphite`, `fluoride`), while a term of common
-English tokens scores low regardless of corpus frequency (`high temperature`, `heat transfer`).
-Document frequency stays as a **floor/evidence input** (a candidate must still appear in enough
-corpus docs to be worth proposing) but is no longer the sort key.
+Load `en_core_web_sm` and enumerate candidates from `doc.noun_chunks` over each curated document:
+keep content tokens (alphabetic, non-stopword, length ≥ 3) that are **not** part of a dropped
+entity (`PERSON`, `ORG`, `GPE`, `LOC`, `FAC`, `NORP`, `DATE`, `TIME`, `CARDINAL`, `ORDINAL`,
+`MONEY`, `PERCENT`, `QUANTITY`), lemmatize, and form the candidate from 1–3 surviving tokens. The
+chunk-6 `status:"novel"` salt-formula misses remain instance-kind candidates as before.
 
-- _Alternative — within-corpus TF-IDF/IDF only:_ rejected. IDF downweights ubiquitous terms but
-  `solubility` (43% of docs) still sits mid-pack against many domain phrases; without an external
-  baseline it cannot tell "domain-rare-but-real" from "common English."
-- _Alternative — curated-vs-corpus enrichment:_ rejected as the primary signal (it overfits to
-  the hand-picked curated set), though it remains a reasonable future secondary factor.
-- The exact combining formula (e.g. `df × log(1 / background_freq)`, with a smoothing floor for
-  out-of-baseline tokens and an averaging rule for multi-token n-grams) is settled against the
-  real-corpus targets at implementation and pinned by tests; it is a transparent arithmetic
-  function, not a tuned model.
+- This deliberately lifts chunk 6's "rules-only, no statistical model" stance — that was for NER
+  *linking*, where rules sufficed; for candidate *mining*, POS + noun-chunks + NER are exactly the
+  useful signals, and the model is deterministic at inference.
+- _Alternative — keep n-grams + filter:_ rejected; the POC shows n-grams explode to 252k and
+  carry the noise noun-chunking avoids.
+- Cost: ~96 s to process the ~12 curated docs one-shot (use `nlp.pipe`, disable unused components
+  where safe). Acceptable for a one-shot stage.
 
-### D2 — Vendor a compact general-English frequency baseline; degrade gracefully
+### D2 — Hardened, normalization/token-sequence-aware exclusion
 
-Commit a small general-English word-frequency list (a top-N unigram frequency table, a few KB to
-low-MB, plain JSON/text) as a repo asset, mirroring `ontology/qudt-units.json`: referenced as
-data, never dereferenced, cross-run stable. The scorer looks up each token's background frequency;
-an out-of-list token is treated as maximally rare (a configurable floor), which is the desired
-behavior for genuine domain jargon.
+Build the exclusion set from **all** core labels the `GraphReader` exposes — SKOS
+`prefLabel`/`altLabel`, ontology class labels, physical-property labels, salt labels, and
+chunk-7's role/reactor labels — read only through the three core `FROM` graphs (staging/proposal
+never consulted). Normalize both sides by casefolding, splitting camelCase, and collapsing
+whitespace/separators, then exclude a candidate when a known label's full normalized token
+sequence is present in the candidate's (so `molten salt` ≡ `MoltenSalt` excludes, while a novel
+term merely sharing one token with a known label is kept). Retains the chunk-8 rule that a
+still-pending proposal does not suppress re-detection.
 
-- **Graceful degradation:** if the baseline file is missing/unreadable, log a warning and fall
-  back to the current document-frequency ranking, so the miner never hard-fails on a missing
-  asset (same spirit as the empty-corpus fallback already in the scorer).
-- _Alternative — pull a frequency package (wordfreq etc.):_ rejected; adds a third-party
-  dependency and non-vendored data, against the project's vendoring convention.
+### D3 — Document frequency is a coarse cost floor + hard ceiling, never a rank
 
-### D3 — Hardened, normalization/substring-aware exclusion
+Keep the fast inverted DF scan. Use `salience_threshold` as a low floor to drop rare OCR one-offs,
+and add a configurable **`mine_max_candidates`** ceiling: after shaping + exclusion + floor, if
+more candidates remain than the ceiling, keep the top-`max_candidates` by DF (deterministic
+tie-break) purely as a runaway guard, and **log the count cut**. This bounds triage cost; it is
+explicitly *not* a novelty ranking (the POC showed DF order is meaningless for novelty), so the
+ceiling is set generously (bounded by what the parallelized triage can afford), not tuned to
+surface targets.
 
-Build the exclusion set from **all** known labels the core dataset exposes — SKOS
-`prefLabel`/`altLabel`, ontology classes, physical properties, salts, and chunk-7's roles/reactors
-— and match a candidate as excluded when its normalized form equals, or is a normalized
-substring/superset token-sequence of, a known label. Normalization collapses case, whitespace, and
-punctuation, so `molten salt` ≡ `MoltenSalt` and is excluded. This closes the space-variant gap
-and drops already-modeled multiword terms before they consume a top-N slot.
+- _Why DF-sort the ceiling if DF isn't a novelty signal?_ Only to make the runaway guard
+  deterministic and bias toward corpus-recurrent terms if a hard cut is ever hit; in normal
+  operation the floor + exclusion keep the set under the ceiling and everything is triaged.
 
-- Exclusion still reads only the three core `FROM` graphs (never staging/proposal), preserving the
-  chunk-8 rule that a still-pending proposal does not suppress re-detection while an
-  approved-into-core term does.
-- _Trade-off:_ substring/superset matching risks over-excluding a legitimately novel term that
-  merely contains a known token (e.g. a novel `... salt` phrase). Mitigated by matching on
-  normalized **token-sequence containment**, not raw substring, and by keeping the match
-  conservative (a candidate is excluded only when a known label's full token sequence is present),
-  so a novel compound is not dropped merely for sharing one token.
+### D4 — Triage gains a reject/not-a-concept verdict (the precision mechanism)
 
-### D4 — Bounded top-N reviewable queue
+Extend the `candidate-triage` classifier so Flash may return an explicit **reject** verdict
+("not a genuine novel ontology concept") in addition to `property`/`class`/`instance`/`relation`.
+The prompt instructs the model to reject OCR fragments, acronyms, proper nouns (people, orgs,
+places), and generic boilerplate. App-side validation treats a reject (and, as today, malformed
+output) as "drop the candidate — emit no proposal." This is what removes the noise that shaping +
+exclusion cannot (a noun-chunk like `laboratory` or an OCR-surname the NER missed). The reject is
+recorded in the run summary counts.
 
-After scoring and exclusion, sort candidates by keyness descending with a deterministic tie-break
-(score, then document frequency, then term) and keep only the top-N (`config`, default ~50). This
-bounds the triage fan-out (Flash calls) and the proposal count to a prioritized, reviewable set.
-The miner logs how many candidates were scored, how many survived exclusion, and how many were
-cut by the top-N (never a silent truncation).
+- _Alternative — a cheap lexical noise filter (dictionary/real-word check) before triage:_
+  rejected as the primary mechanism (the POC's in-vocab band-pass leaked surnames/fragments with
+  moderate web-frequency); may be added later as a cheap pre-cut, but the LLM reject is the
+  reliable filter and it already runs.
 
-- N is a config knob (env-overridable, test-pinned), not a magic literal, consistent with how
-  `salience_threshold` is treated.
-- _Alternative — no cap, rely on the threshold:_ rejected; the real corpus shows no threshold
-  yields a reviewable count without dropping the targets (Context).
+### D5 — `en_core_web_sm` pinned as a model wheel; deterministic; graceful absence
 
-### D5 — Scope containment: selection only, contract preserved
-
-`mine_candidates` is the only behavior that changes shape: enumerate → harden-exclude → score
-(keyness) → top-N → attach evidence. It still returns a `list[Candidate]` with the same fields
-(the keyness score can be carried alongside `doc_frequency`, which is retained for evidence and
-the `msr:docFrequency` proposal field). Triage, proposal emission, auto-accept, and provenance are
-untouched and see a smaller, better-ordered list.
+Pin the model as a wheel URL in `extraction/pyproject.toml`
+(`en_core_web_sm-3.8.x`, matching `spacy==3.8.7`) so builds are reproducible and no runtime
+download occurs. spaCy inference is deterministic (no sampling), preserving mine's determinism
+guarantee. If the model fails to load, log a clear error and fall back to the existing n-gram
+enumeration so the stage degrades rather than hard-fails (mirrors the empty-corpus/absent-baseline
+fallback pattern already in the miner).
 
 ## Risks / Trade-offs
 
-- **Keyness formula mis-tuned drops a real target** → pin the formula against the real-corpus
-  targets (`solubility`, `graphite` must land in the top-N; `molten salt`/`heat transfer` must
-  not) in both unit tests (fixture baseline) and the guarded integration test; treat those as
-  regression gates.
-- **Hardened exclusion over-excludes a novel term** → conservative token-sequence containment
-  (D3), not raw substring; covered by a test asserting a novel multiword term sharing one token
-  with a known label is NOT excluded.
-- **Vendored baseline drifts or is missing** → graceful fallback to df ranking with a logged
-  warning (D2); the file is committed and cross-run stable.
-- **Top-N hides a genuine candidate below the cut** → N is configurable and the run logs the
-  cut count, so a reviewer can widen N; the POC bias is precision over recall.
-- **Editing `novelty.py` again** touches recently-landed code → the change is additive to
-  `mine_candidates` and keeps the fast inverted scan; existing novelty tests must stay green.
+- **Triage cost rises** (LLM is now the filter over a few-thousand-candidate set) → bounded by the
+  DF floor + `mine_max_candidates` ceiling and the already-parallelized triage fan-out; the run
+  summary logs candidate/triaged/rejected counts so cost is visible.
+- **Flash over-rejects a real novel concept, or under-rejects noise** → the reject is a
+  reviewer-visible verdict, not a hard delete of evidence; chunk-9 review is the backstop, and the
+  reject prompt/threshold is tuned against the real-corpus targets (solubility/graphite must
+  survive; `ornl`/`trauger`/`laboratory` must be rejected) as a regression gate.
+- **OCR-fragmented text defeats spaCy NER** (surnames leak as noun-chunks) → accepted; those leak
+  to triage and are rejected there (D4), which is the whole point of the LLM-as-filter split.
+- **Model dependency / image size** (`en_core_web_sm` ≈ 12 MB) → small, pinned, build-time; no GPU;
+  spaCy already a dependency.
+- **Determinism** → spaCy and Flash are deterministic in eval; the ceiling cut is DF-sorted +
+  logged; no randomness introduced.
 
 ## Migration Plan
 
-Additive on top of the merged chunk 8 + the DF-scan perf fix. Commit the vendored frequency file;
-`novelty.py` gains keyness scoring, hardened exclusion, and the top-N cut; config gains the knobs.
-`make mine` then triages ≤ N candidates. Rollback: revert this change — mine returns to the (fast
-but unbounded) df-threshold behavior; nothing else in the pipeline depends on the ranking. No graph
-migration: the change only affects which `Candidate`s are produced in a run, not any stored shape.
+Additive on merged chunk 8 + the DF-scan perf fix. Pin `en_core_web_sm`; rework `novelty.py`
+enumeration (spaCy) + exclusion (hardened) + DF floor/ceiling; extend `triage.py` with the reject
+verdict; `mine_runner` drops rejected candidates and logs the counts. Bootstrap order unchanged
+(`… → link → extract → mine`). Rollback: revert this change — mine returns to the (fast but
+unbounded/unshaped) n-gram+DF behavior; the graph shape and downstream contract are untouched
+(the change only affects which `Candidate`s a run produces). No graph migration.
 
 ## Open Questions
 
-All resolved for implementation:
+All resolved for implementation (informed by the POC):
 
-- **Metric** — Resolved: keyness (weirdness ratio) against a vendored general-English baseline
-  (D1), df retained as floor/evidence. Exact formula pinned against real-corpus targets at
-  implementation.
-- **Baseline source** — Resolved: vendor a compact frequency list as a committed asset with
-  graceful fallback (D2); no package.
-- **Bounding** — Resolved: configurable top-N with deterministic tie-break and logged cut (D4).
+- **Statistical novelty score?** Resolved: no — disproven on this OCR (Context/D3). Selection is
+  shape + exclude + coarse-bound only.
+- **Where does precision come from?** Resolved: the Flash triage reject verdict + chunk-9 review
+  (D4), not a candidate score.
+- **Model dependency?** Resolved: pin `en_core_web_sm` as a wheel, deterministic, with graceful
+  fallback to n-gram enumeration (D5).
+- **Embedding/BERT novelty?** Deferred as a future experiment; not in this change.
