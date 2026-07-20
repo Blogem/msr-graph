@@ -81,7 +81,7 @@ func runNist(env func(string) string, stdout io.Writer) error {
 
 	provenanceSPARQL := buildProvenanceData(time.Now().UTC(), ontologyVersion, factIRIs)
 	if err := client.Update(ctx, provenanceSPARQL); err != nil {
-		return fmt.Errorf("nist: writing provenance activity + lineage into %s: %w", "urn:msr:provenance", err)
+		return fmt.Errorf("nist: writing provenance activity + lineage into %s: %w", graph.Provenance, err)
 	}
 
 	printNistSummary(stdout, summary)
