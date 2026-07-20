@@ -230,6 +230,9 @@ func (c *Client) Update(ctx context.Context, update string) error {
 		return fmt.Errorf("graph: read update response: %w", err)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		if ve := detectValidationError(body); ve != nil {
+			return ve
+		}
 		return fmt.Errorf("graph: update failed: %s: %s", resp.Status, bytes.TrimSpace(body))
 	}
 	return nil
@@ -262,6 +265,9 @@ func (c *Client) PutGraph(ctx context.Context, graphIRI GraphIRI, turtle []byte)
 		return fmt.Errorf("graph: read PutGraph response: %w", err)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		if ve := detectValidationError(body); ve != nil {
+			return ve
+		}
 		return fmt.Errorf("graph: PutGraph failed: %s: %s", resp.Status, bytes.TrimSpace(body))
 	}
 	return nil
