@@ -1,7 +1,7 @@
 ## 1. Confirm the real evidence end-to-end (gate)
 
-- [ ] 1.1 Run the real pipeline (`make up && make load-nist && make ingest && make link`; `link` disambiguation may need `DEEPSEEK_API_KEY`) and confirm `data/corpus/ORNL-TM-2316/mentions.jsonl` contains a layer-3 mention of `"LiF-BeF, (66-34 mole %)"` with `msr:linksTo msrd:salt-BeF2-LiF-34.0-66.0`
-- [ ] 1.2 Capture the exact `surfaceForm` strings the linker writes for that mention (and any other salt mentions), to tune the grounding-query match in §2
+- [x] 1.1 Run the real pipeline (`make up && make load-nist && make ingest && make link`; `link` disambiguation may need `DEEPSEEK_API_KEY`) and confirm `data/corpus/ORNL-TM-2316/mentions.jsonl` contains a layer-3 mention of `"LiF-BeF, (66-34 mole %)"` with `msr:linksTo msrd:salt-BeF2-LiF-34.0-66.0` — VERIFIED against the live `localhost:7200` GraphDB (loader run directly, no Docker/license; link run without `DEEPSEEK` since the composed match is deterministic layer-3): 3 layer-3 mentions of `'LiF-BeF, (66-34 mole %)'` link to `salt-BeF2-LiF-34.0-66.0`
+- [x] 1.2 Capture the exact `surfaceForm` strings the linker writes for that mention (and any other salt mentions), to tune the grounding-query match in §2 — VERIFIED: `'LiF-BeF, (66-34 mole %)'` (matches design exactly); sibling melts `'LiF-BeF, (63-37 mole %'`, `'LiF-BeF, (64-36 mole %'`, `'NaF-ZrF, (53-47 mole %'`. The tolerant matcher's `66`/`34` digit filter distinguishes the target from the siblings
 
 ## 2. Rework agent grounding (linksTo for salts, rdfs:label for properties; no closeMatch)
 
