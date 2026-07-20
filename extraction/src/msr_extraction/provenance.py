@@ -17,6 +17,12 @@ the per-run node and its edges are timestamped, they are intentionally
 outside the ``urn:msr:data`` idempotency guarantee (design.md D4) — a
 repeat wall-clock run appends a new per-run activity and generation edges
 to ``urn:msr:provenance`` rather than mutating existing data.
+
+Each invocation also types the stable :data:`ACTIVITY_IRI` itself, once,
+in ``urn:msr:data`` -- ``a prov:Activity ; prov:wasAssociatedWith
+<agent...> ; owl:versionInfo "<version>"`` with no timestamps -- via
+:func:`stable_activity_insert_data`/:func:`write_stable_activity`, so that
+typing re-asserts as a set-semantics no-op across re-runs (design.md D1).
 """
 
 from __future__ import annotations
@@ -113,5 +119,50 @@ def write_activity(run_ts: str, client: SparqlClient) -> None:
     ``client.update``, appending to the single shared audit graph
     ``urn:msr:provenance`` via additive ``INSERT DATA`` — never a
     graph-replace ``PUT`` (design.md D2, D5).
+
+    Callers write this per-run node *before* any generation-edge writer
+    (``documents.write_documents``/``mentions.write_mentions``) so a crash
+    mid-run never leaves a generation edge in ``urn:msr:provenance``
+    pointing at a run IRI that was never typed ``a prov:Activity``.
     """
     client.update(activity_insert_data(run_ts))
+
+
+def stable_activity_insert_data() -> str:
+    """Return the INSERT DATA update typing the stable per-pipeline Activity.
+
+    Writes, into ``GRAPH <urn:msr:data>``, exactly one ``prov:Activity``
+    triple set — subject :data:`ACTIVITY_IRI` (``msrd:activity-extraction``,
+    the stable per-pipeline IRI every Mention/Document already references
+    via ``prov:wasGeneratedBy``), attributed to :data:`AGENT_IRI` via
+    ``prov:wasAssociatedWith`` and carrying :data:`EXTRACTION_VERSION` as
+    ``owl:versionInfo``. Deliberately carries **no timestamp literals**
+    (no ``prov:startedAtTime``/``prov:endedAtTime``/``xsd:dateTime``) so
+    this typing re-asserts as a set-semantics no-op across re-runs, keeping
+    ``urn:msr:data`` byte-stable (design.md D1/D4; mirrors the Go loader's
+    ``buildInsertData`` typing of ``msrd:activity-loader-nist``).
+    """
+    return (
+        f"{_PREFIXES}\n"
+        "INSERT DATA {\n"
+        "  GRAPH <urn:msr:data> {\n"
+        f"    {ACTIVITY_IRI} a prov:Activity ;\n"
+        f"        prov:wasAssociatedWith {AGENT_IRI} ;\n"
+        f'        owl:versionInfo "{EXTRACTION_VERSION}" .\n'
+        "  }\n"
+        "}"
+    )
+
+
+def write_stable_activity(client: SparqlClient) -> None:
+    """Send the stable per-pipeline Activity typing to ``urn:msr:data``.
+
+    Builds the update with :func:`stable_activity_insert_data` and sends
+    it with ``client.update``. Timestamp-free and deterministic, so
+    re-running is a set-semantics no-op in ``urn:msr:data`` (design.md D1,
+    scenario "The stable pipeline activity is typed idempotently in the
+    data graph"). Callers (``cli.py``) invoke this once per invocation,
+    independent of and unordered with respect to :func:`write_activity`
+    (they target different graphs).
+    """
+    client.update(stable_activity_insert_data())
