@@ -17,6 +17,19 @@ stub shapes used by `test_proposals.py`/`test_mine_integration.py`. No live
 GraphDB, no live LLM -- fully hermetic, runs in normal `pytest` collection
 (unlike `test_mine_integration.py`, which is guarded behind
 `GRAPHDB_REQUIRED=1`).
+
+refine-mine-salience (7.4) additions below: the run-summary key contract
+changes from `{"candidates", "proposals_by_kind", "auto_accepted",
+"rejected", "dropped"}` to additionally split "dropped" into
+`triage_rejected` (an explicit triage `reject` verdict -- design.md D4) and
+`dropped_malformed` (malformed/unrecognized-kind triage output, still a
+`None` `TriagedCandidate`), leaving `dropped` for every other drop reason
+(unsafe/missing evidence, unresolved schema dependency, the
+unreachable-kind branch). The pre-existing
+`test_run_mine_preserves_candidate_order_regardless_of_triage_completion_order`
+test below is updated to the new key semantics: `baddrop`'s
+`{"kind": "not-a-real-kind"}` verdict is an unrecognized-kind malformed
+drop, not a generic "dropped" one, under the new contract.
 """
 
 from __future__ import annotations
@@ -342,7 +355,12 @@ def test_run_mine_preserves_candidate_order_regardless_of_triage_completion_orde
         config, reader=reader, client=completer, sparql=sparql, qudt_path=QUDT_PATH
     )
 
-    assert summary["dropped"] == 1  # baddrop: unrecognized kind
+    # baddrop: unrecognized kind -> a malformed-shape drop under the new
+    # key contract (refine-mine-salience 7.4), distinct from both the
+    # generic "dropped" bucket and an explicit triage "reject" verdict.
+    assert summary["dropped_malformed"] == 1
+    assert summary["dropped"] == 0
+    assert summary["triage_rejected"] == 0
     assert summary["rejected"] == 0
     assert summary["auto_accepted"] == 1  # testminesalt: resolves in core (MoltenSalt)
     assert summary["proposals_by_kind"] == {"class": 1, "property": 1, "relation": 1}
@@ -358,3 +376,90 @@ def test_run_mine_preserves_candidate_order_regardless_of_triage_completion_orde
     relation_index = _first_index("GRAPH <urn:msr:proposal/relation-moderatedby>")
 
     assert class_index < property_index < relation_index
+
+
+# --- refine-mine-salience 7.4: triage reject / malformed summary keys ----
+
+
+def test_run_mine_counts_triage_reject_verdict_and_writes_no_proposal(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """Scenario: "An explicit reject verdict drops the candidate"
+    (candidate-triage spec) -- a well-formed {"kind": "reject"} triage
+    verdict drops the candidate, increments summary["triage_rejected"]
+    (distinct from the QUDT-guard "rejected" count and from a
+    malformed-output drop), and writes no proposal for it."""
+    candidate = _candidate("ornl", "ORNL supported this research effort in 1955.")
+    monkeypatch.setattr(novelty, "mine_candidates", lambda config, reader: [candidate])
+
+    response = json.dumps({"kind": "reject"})
+    client = StubCompleter(response)
+    reader = FakeGraphReader()
+    sparql = FakeSparqlClient()
+    config = Config(corpus_dir=tmp_path)
+
+    summary = mine_runner.run_mine(
+        config, reader=reader, client=client, sparql=sparql, qudt_path=QUDT_PATH
+    )
+
+    assert summary["triage_rejected"] == 1
+    assert summary["rejected"] == 0
+    assert summary["dropped_malformed"] == 0
+    assert summary["dropped"] == 0
+    assert summary["proposals_by_kind"] == {}
+    assert summary["auto_accepted"] == 0
+
+
+def test_run_mine_counts_malformed_triage_output_distinctly_from_reject(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """Scenario: "Malformed classifier output drops the candidate"
+    (candidate-triage spec) -- an unrecognized/missing-kind verdict is
+    counted as summary["dropped_malformed"], never folded into
+    triage_rejected or the generic dropped count."""
+    candidate = _candidate("gibberish", "Some gibberish OCR fragment appeared here.")
+    monkeypatch.setattr(novelty, "mine_candidates", lambda config, reader: [candidate])
+
+    response = json.dumps({"kind": "not-a-real-kind"})
+    client = StubCompleter(response)
+    reader = FakeGraphReader()
+    sparql = FakeSparqlClient()
+    config = Config(corpus_dir=tmp_path)
+
+    summary = mine_runner.run_mine(
+        config, reader=reader, client=client, sparql=sparql, qudt_path=QUDT_PATH
+    )
+
+    assert summary["dropped_malformed"] == 1
+    assert summary["triage_rejected"] == 0
+    assert summary["dropped"] == 0
+    assert summary["rejected"] == 0
+    assert summary["proposals_by_kind"] == {}
+    assert summary["auto_accepted"] == 0
+
+
+def test_run_mine_still_stages_legitimate_candidate_with_valid_kind_verdict(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """Scenario: "a valid kind -> proposal emitted as before" (7.4 positive
+    control) -- a well-formed, routable-kind verdict is unaffected by the
+    reject/malformed key split: it still produces exactly one proposal and
+    increments none of the drop counters."""
+    candidate = _candidate("solubility", "Solubility was reported at 12 mole % BeF2.")
+    monkeypatch.setattr(novelty, "mine_candidates", lambda config, reader: [candidate])
+
+    response = json.dumps({"kind": "property"})
+    client = StubCompleter(response)
+    reader = FakeGraphReader()
+    sparql = FakeSparqlClient()
+    config = Config(corpus_dir=tmp_path)
+
+    summary = mine_runner.run_mine(
+        config, reader=reader, client=client, sparql=sparql, qudt_path=QUDT_PATH
+    )
+
+    assert summary["proposals_by_kind"] == {"property": 1}
+    assert summary["triage_rejected"] == 0
+    assert summary["dropped_malformed"] == 0
+    assert summary["dropped"] == 0
+    assert summary["rejected"] == 0
