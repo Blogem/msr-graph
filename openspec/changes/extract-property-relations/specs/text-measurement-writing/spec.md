@@ -49,18 +49,48 @@ value from colliding with a NIST row (`nist-srd27/…`) for the same salt and pr
 The writer SHALL emit the `msr:PropertyMeasurement` with `msr:ofSalt` (the loaded salt
 individual the mention resolved to), `msr:forProperty`, `msr:hasUnit` (the validated QUDT
 IRI), `msr:equationForm`, `msr:validTempMin`/`Max`, `msr:dataLocator`, `prov:wasDerivedFrom`
-the source `Document`, and **`msr:citedIn`** that `Document`, into `urn:msr:data` via
-additive SPARQL `INSERT DATA` through the chunk-5 Python SPARQL-UPDATE helper — never a
-graph-replace `PUT`, so the seed A-Box, chunk-2 catalog, chunk-5 `Document` nodes, and
-chunk-6 mentions are preserved.
+the source `Document`, `prov:wasGeneratedBy msrd:activity-extraction` (the stable per-pipeline
+activity), and **`msr:citedIn`** that `Document`, into `urn:msr:data` via additive SPARQL
+`INSERT DATA` through the chunk-5 Python SPARQL-UPDATE helper — never a graph-replace `PUT`,
+so the chunk-2 catalog, chunk-5 `Document` nodes, and chunk-6 mentions are preserved. (`ground-demo-in-real-docs`
+removed the seed A-Box, so there is no hand-curated data to preserve — `urn:msr:data` holds
+only real-writer output.) `msr:citedIn` is the citation edge both the `provenance-model` and
+`analysis-agent` main specs leave TBox-declared-but-unused and explicitly defer to this chunk;
+a text-derived measurement genuinely originates in its source document, so asserting it here
+fulfills that deferral truthfully.
 
 #### Scenario: A text-derived measurement is citable to its source document
 - **WHEN** a FLiBe viscosity statement in ORNL-TM-2316 is written
-- **THEN** the graph gains a `msr:PropertyMeasurement` with `msr:citedIn msrd:ORNL-TM-2316`, `msr:ofSalt` the loaded FLiBe salt, `msr:forProperty msr:viscosity`, a QUDT unit, an equation form, and the shared `msr:dataLocator`
+- **THEN** the graph gains a `msr:PropertyMeasurement` with `msr:citedIn msrd:ORNL-TM-2316`, `prov:wasDerivedFrom msrd:ORNL-TM-2316`, `prov:wasGeneratedBy msrd:activity-extraction`, `msr:ofSalt` the loaded FLiBe salt, `msr:forProperty msr:viscosity`, a QUDT unit, an equation form, and the shared `msr:dataLocator`
 
 #### Scenario: Existing graph data is preserved by the additive write
 - **WHEN** text-derived measurement triples are inserted into `urn:msr:data`
-- **THEN** the seed A-Box, chunk-2 catalog triples, chunk-5 `Document` nodes, and chunk-6 mention triples remain present
+- **THEN** the chunk-2 catalog triples, chunk-5 `Document` nodes, and chunk-6 mention triples remain present (the additive insert replaces nothing)
+
+### Requirement: Written measurements carry generation provenance and per-run lineage
+The extraction run SHALL reuse the pipeline provenance helper (`provenance.py`, as `link` does)
+rather than introduce a second provenance path, so that every text-derived measurement carries
+generation provenance — consistent with the merged `provenance-model` spec, under which every
+pipeline-asserted individual carries both derivation and generation provenance. Per `extract`
+invocation it SHALL: type the stable `msrd:activity-extraction`
+`prov:Activity` once in `urn:msr:data` (timestamp-free, a no-op on re-run); write one per-run
+`prov:Activity` node `<urn:msr:run:extraction/<ts>>` into `urn:msr:provenance` (attributed
+`prov:wasAssociatedWith` the extraction agent, with start/end timestamps and ontology
+`owl:versionInfo`) **before** any fact; and, for **each** written text-derived
+`msr:PropertyMeasurement`, emit one `<measurement> prov:wasGeneratedBy
+<urn:msr:run:extraction/<ts>>` generation edge into `urn:msr:provenance` (in addition to the
+stable `prov:wasGeneratedBy msrd:activity-extraction` edge in `urn:msr:data`). All
+`urn:msr:provenance` writes SHALL be additive `INSERT DATA { GRAPH <urn:msr:provenance> { … } }`
+(never a graph-replace `PUT`), and the timestamp SHALL be generated once per invocation and
+shared by the run.
+
+#### Scenario: A measurement references both the stable and the per-run activity
+- **WHEN** the extraction run writes a text-derived `msr:PropertyMeasurement`
+- **THEN** the measurement carries `prov:wasGeneratedBy msrd:activity-extraction` in `urn:msr:data`, and `urn:msr:provenance` carries `<measurement> prov:wasGeneratedBy <urn:msr:run:extraction/<ts>>` plus the attributed per-run `prov:Activity` node
+
+#### Scenario: The provenance graph is append-only across runs
+- **WHEN** the extraction runs twice at distinct wall-clock timestamps over the same corpus
+- **THEN** `urn:msr:data`'s triple count and `measurement_value`'s row count are unchanged, while `urn:msr:provenance` gains a second per-run activity node and a second set of generation edges
 
 ### Requirement: Extraction-provenance vocabulary in the seed ontology
 The change SHALL add a small, self-contained extraction-provenance vocabulary to

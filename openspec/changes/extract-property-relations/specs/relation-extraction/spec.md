@@ -40,12 +40,16 @@ run against a stubbed client and never contact a live model.
 
 ### Requirement: Output is schema-constrained JSON validated to existing IRIs
 Flash output SHALL be schema-constrained JSON proposing zero or more relations. The layer
-MUST validate each proposed relation app-side: the salt IRI MUST be a loaded `MoltenSalt`
-individual, a property IRI MUST be a seed `msr:PhysicalProperty` individual, a role IRI MUST
-be a seed `msr:SaltRole` individual, and a reactor IRI MUST be a loaded
-`msr:MoltenSaltReactor` individual — each checked against the run's known-IRI set (read from
-the core dataset). A relation naming any referent absent from the known set SHALL be
-rejected and never written; the model therefore can only assert facts about known entities.
+MUST validate each proposed relation's **closed-set** referents app-side against the run's
+known-IRI set (read from the core dataset): the salt IRI MUST be a loaded `MoltenSalt`
+individual, a property IRI MUST be a seed `msr:PhysicalProperty` individual, and a role IRI
+MUST be a reintroduced seed `msr:SaltRole` individual. A relation naming a salt, property, or
+role absent from the known set SHALL be rejected and never written; for those referents the
+model can only assert facts about known entities. **Reactors are the exception:** because the
+reactor individuals were removed by `ground-demo-in-real-docs` and are minted by this chunk,
+a reactor referent is not validated against a closed set — it is admitted only when the reactor
+reference is a chunk-6 `status:"linked"` mention resolving to a surviving reactor concept in
+`vocab.ttl`, which grounds the mint (see `salt-role-reactor-edges`).
 
 #### Scenario: A relation over known entities is accepted
 - **WHEN** Flash proposes a measurement whose salt, property, and unit all resolve to known entities
@@ -55,9 +59,13 @@ rejected and never written; the model therefore can only assert facts about know
 - **WHEN** Flash proposes a relation whose property IRI is not a seed `msr:PhysicalProperty` (e.g. a novel `solubility`)
 - **THEN** the relation is rejected and nothing is written, leaving the novel term for chunk 8
 
-#### Scenario: An unknown salt or reactor IRI is rejected
-- **WHEN** Flash proposes a relation whose salt or reactor IRI is absent from the known-IRI set
+#### Scenario: An unknown salt or role IRI is rejected
+- **WHEN** Flash proposes a relation whose salt is absent from the loaded `MoltenSalt` set, or whose role is not one of the seed `msr:SaltRole` individuals
 - **THEN** the relation is rejected and no triple or row is written
+
+#### Scenario: A reactor is admitted only when grounded on a linked mention
+- **WHEN** Flash proposes a `usedIn` relation whose reactor reference is a chunk-6 `linked` mention to a reactor `vocab.ttl` concept
+- **THEN** the relation is admitted and its `msr:MoltenSaltReactor` individual is minted (see `salt-role-reactor-edges`); a reactor reference that is not such a linked mention yields no `usedIn` relation
 
 ### Requirement: All relations present in a sentence are extracted
 A single mention-bearing sentence MAY assert several relations. The extractor SHALL treat

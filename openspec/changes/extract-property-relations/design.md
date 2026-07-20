@@ -2,14 +2,21 @@
 
 ## Context
 
-Chunks 1, 2, 3, 5, and 4 (`grounded-analysis-agent`) are **merged to main and archived**;
-chunk 6 (`ner-entity-linking`) is **merged to main** (code in `extraction/`) though its change
-is not yet archived, and is chunk 7's direct upstream. The chunk-4 agent — now the synced
-`analysis-agent` main spec — is explicitly **schema-generic** ("data added by later chunks
-becomes answerable with no agent code change") and its `sql_query` reads `measurement_value`
-with no `source` filter, so chunk 7's `source='document'` rows and text-derived
-`PropertyMeasurement` nodes are answerable through the unchanged agent by construction. The
-fixed points this change builds on:
+Chunks 1, 2, 3, 5, 4 (`grounded-analysis-agent`), and 6 (`ner-entity-linking`) are all
+**merged to main and archived**; chunk 6's code lives in `extraction/` and is chunk 7's
+direct upstream. Since this proposal was first drafted, the **trust trilogy** also landed and
+archived on main and is now authoritative for chunk 7: `ground-demo-in-real-docs` (removed the
+hand-curated seed A-Box — the `example-flibe.ttl` salt/measurement duplicate, all
+`skos:closeMatch`, **and the entire `msr:hasRole`/`msr:usedIn` role/reactor TBox layer**,
+explicitly deferring the role/reactor layer's return to **chunk 7**), `provenance-model` (a
+PROV-O slice + the requirement that **every** pipeline-asserted individual carry both
+`prov:wasDerivedFrom` and `prov:wasGeneratedBy`), and `provenance-run-lineage` (the shared
+`urn:msr:provenance` run-lineage graph and the reusable `extraction/src/msr_extraction/provenance.py`
+helper). The chunk-4 agent — now the synced `analysis-agent` main spec — is explicitly
+**schema-generic** ("data added by later chunks becomes answerable with no agent code change")
+and its `sql_query` reads `measurement_value` with no `source` filter, so chunk 7's
+`source='document'` rows and text-derived `PropertyMeasurement` nodes are answerable through
+the unchanged agent by construction. The fixed points this change builds on:
 
 - **Chunk 2** landed the salt catalog in `urn:msr:data` (`MoltenSalt`/`Constituent`/
   `PropertyMeasurement` individuals), the `measurement_value` SQLite table, the vendored
@@ -29,6 +36,29 @@ status:"linked"|"novel", target_iri, target_kind, layer, score}` — and the mat
   offsets into `normalized.txt`), the curated-set list, the `Document` nodes
   (`msrd:{report#}`), and the Python `SparqlClient` (UPDATE-only) plus the `cli.py`
   subcommand dispatcher.
+- **The trust trilogy** (`ground-demo-in-real-docs` → `provenance-model` →
+  `provenance-run-lineage`) reshapes three of chunk 7's obligations:
+  - **Generation provenance is mandatory.** The `provenance-model` main spec requires every
+    pipeline-asserted individual — explicitly including `msr:PropertyMeasurement` — to carry
+    **both** `prov:wasDerivedFrom` its source `prov:Entity` **and** `prov:wasGeneratedBy` a run
+    `prov:Activity`, with a per-run generation edge into the append-only `urn:msr:provenance`
+    graph and one stable `prov:wasGeneratedBy msrd:activity-extraction` edge in `urn:msr:data`.
+    The extraction pipeline already implements this for mentions/documents via
+    `provenance.py` (`write_stable_activity` / `write_activity` / `run_activity_iri`), wired
+    into every `cli.py` subcommand — chunk 7 **reuses** it, it does not reinvent it (D12).
+  - **`msr:citedIn` is chunk 7's to turn on.** Both the `provenance-model` and `analysis-agent`
+    main specs leave `msr:citedIn` TBox-declared but **unused**, explicitly deferring the
+    "measurement↔document citation edge" to **chunk-7 citation extraction** because no earlier
+    writer can assert it truthfully (NIST SRD-27 carries no per-row citation). A text-derived
+    measurement genuinely originates in the document its sentence came from, so chunk 7 is the
+    first — and only — writer that can assert `msr:citedIn` without fabricating it; doing so
+    fulfills that deferral rather than inventing a new predicate.
+  - **The role/reactor OWL TBox no longer exists and chunk 7 reintroduces it.**
+    `ground-demo-in-real-docs` removed `msr:SaltRole`/`FuelSalt`/`CoolantSalt`/`FlushSalt`/
+    `msr:hasRole` and `msr:MoltenSaltReactor`/`msr:usedIn` from `msr.ttl`, and removed the
+    `msrd:MSRE` individual with the seed A-Box, because they were populated *only* by the
+    deleted seed. The role/reactor **SKOS concepts survive in `vocab.ttl`** (for NER seeding).
+    Chunk 7 re-adds the OWL layer and populates it from real extraction (D9).
 
 This change reads the linked mentions + segment text and the graph's known entities, has
 Flash extract relations from the sentences that carry linked mentions, validates every
@@ -38,7 +68,9 @@ cross-cutting contracts in `docs/ARCHITECTURE.md` → _Runtime contracts_ and
 `docs/IMPLEMENTATION_PLAN.md` → _Cross-cutting contracts_: DeepSeek V4 Flash only via an
 injected client stubbed in every test; deterministic IRIs, no blank nodes, idempotent
 re-runs; the SQLite runtime contract (journal `DELETE`, `busy_timeout`, no WAL sidecars);
-coefficients live only in SQLite, meaning in the graph.
+coefficients live only in SQLite, meaning in the graph; and the `provenance-model` contract —
+every asserted individual carries `prov:wasDerivedFrom` **and** `prov:wasGeneratedBy`, with
+per-run lineage in `urn:msr:provenance` (D12).
 
 ## Goals / Non-Goals
 
@@ -71,12 +103,20 @@ coefficients live only in SQLite, meaning in the graph.
 - **No NER / linking / mention writing** — chunk 6. Chunk 7 consumes `mentions.jsonl` and
   the `msr:Mention` triples as-is; it does not re-link spans.
 - **No new SQLite schema** — chunk 7 reuses the chunk-1/2 `measurement_value` table
-  unchanged (the `uncertainty` column already exists). The **only** graph-schema change is a
-  small additive extraction-provenance TBox on the seed ontology (`msr:extractionConfidence`,
-  `msr:extractionRationale`; D11) plus RDF reification (`rdf:Statement`) of extracted
-  role/reactor edges to carry that provenance, mirroring chunk 6's additive mention TBox — the
-  existing `PropertyMeasurement` / role / reactor vocabulary and the direct edges themselves
-  are otherwise unchanged.
+  unchanged (the `uncertainty` column already exists). The graph-schema (TBox) changes are
+  additive and confined to the seed ontology `ontology/msr.ttl`, loaded up front via
+  `make load-seed` (D11, D9): (a) a small extraction-provenance vocabulary
+  (`msr:extractionConfidence`, `msr:extractionRationale`; D11), and (b) the **reintroduced
+  role/reactor OWL layer** that `ground-demo-in-real-docs` removed and deferred here —
+  `msr:SaltRole` + the `FuelSalt`/`CoolantSalt`/`FlushSalt` individuals + `msr:hasRole`, and
+  `msr:MoltenSaltReactor` + `msr:usedIn` (D9). RDF reification (`rdf:Statement`) of extracted
+  role/reactor edges carries their extraction provenance. The `PropertyMeasurement` /
+  `EquationForm` vocabulary and the existing PROV-O slice are unchanged. **No agent, loader, or
+  SQLite-schema code change.**
+- **No hand-curated data.** Chunk 7 does not resurrect the deleted seed A-Box. The reintroduced
+  role/reactor layer is populated **only** from real extraction over the corpus (roles are a
+  closed controlled vocabulary of *categories*, not empirical facts; reactor *individuals* are
+  minted from grounded document mentions with full provenance — D9), never by hand.
 - **No changes to the QUDT allowlist or the salt-canonicalization fixture** — both are
   chunk 2's; chunk 7 consumes them.
 - **No Go changes** — chunk 7 is Python and writes SQLite directly (stdlib `sqlite3`) and
@@ -93,9 +133,10 @@ The extraction package gains an `extract` subcommand (a one-shot Compose run, si
 chunk 5's `ingest` and chunk 6's `link`) that, per run: reads the current known schema from
 the graph via chunk 6's core-dataset reader, builds the cached KG-schema prompt (chunk 6's
 builder), iterates the curated documents' sentences that carry linked mentions, calls Flash,
-validates, and writes both stores. There is no long-running service; re-seeding the
-known-IRI set from the graph each run is how approved evolution concepts (chunks 8→9) reach
-extraction, exactly as with NER.
+validates, and writes both stores — and, exactly like chunk 6's `link`, generates one
+`run_ts` and writes the stable + per-run provenance via the shared `provenance.py` helper
+(D12). There is no long-running service; re-seeding the known-IRI set from the graph each run
+is how approved evolution concepts (chunks 8→9) reach extraction, exactly as with NER.
 
 - **Read the core dataset only.** The known-IRI set must include _approved_ concepts/salts
   but must not include pending proposals in `urn:msr:staging`/`urn:msr:proposal/{id}`.
@@ -103,18 +144,23 @@ extraction, exactly as with NER.
   (`extraction/src/msr_extraction/graph_reader.py`, `GraphReader` — a `default-graph-uri`
   restriction to the three core graphs) rather than a new one — same enforcement, no
   duplication.
-- **Extend the reader for role/reactor/property individuals.** As merged, chunk 6's
-  `GraphReader.read_known_entities()` exposes only `concept`/`class`/`salt` kinds (SKOS
-  concepts, `owl:Class`, `PhysicalProperty` — tagged `class` — and `MoltenSalt` individuals).
-  Chunk 7's validation additionally needs the sets of `msr:SaltRole` individuals
-  (`FuelSalt`/`CoolantSalt`/`FlushSalt`) and `msr:MoltenSaltReactor` individuals (e.g.
-  `msrd:MSRE`), and must distinguish `PhysicalProperty` IRIs from other classes. Chunk 7
-  therefore adds **new reader methods** (e.g. `read_salt_roles()`, `read_reactors()`, and a
+- **Extend the reader for role/property individuals (roles are a closed set; reactors are
+  minted).** As merged, chunk 6's `GraphReader.read_known_entities()` exposes only
+  `concept`/`class`/`salt` kinds (SKOS concepts, `owl:Class`, `PhysicalProperty` — tagged
+  `class` — and `MoltenSalt` individuals). Chunk 7's validation additionally needs the set of
+  the reintroduced `msr:SaltRole` individuals (`FuelSalt`/`CoolantSalt`/`FlushSalt` — a
+  **closed** controlled vocabulary; D9) and must distinguish `PhysicalProperty` IRIs from
+  other classes. Chunk 7 therefore adds **new reader methods** (e.g. `read_salt_roles()` and a
   property-specific accessor) rather than folding these into `read_known_entities()` — leaving
   chunk 6's NER seeding and the byte-stable KG-schema prompt prefix (built from
-  `read_known_entities()` via `kg_prompt.KGSchemaPromptCache`) unchanged. The valid
-  role/reactor/property IRIs also enrich the Flash context so the model maps to existing
-  targets; app-side validation against these sets is the hard guarantee.
+  `read_known_entities()` via `kg_prompt.KGSchemaPromptCache`) unchanged. **Reactors are the
+  exception:** because `ground-demo-in-real-docs` removed all reactor individuals and chunk 7
+  *mints* them from grounded extraction (D9), there is no closed reactor set to read or
+  validate against — a reactor relation is admitted when the reactor reference is a chunk-6
+  `linked` mention (to a surviving reactor `vocab.ttl` concept), and its individual is minted
+  deterministically. The valid role/property IRIs also enrich the Flash context so the model
+  maps to existing targets; app-side validation against these sets is the hard guarantee for
+  roles and properties.
 - _Alternative — a chunk-7-specific reader:_ rejected; chunk 6's reader already enforces the
   core-dataset restriction, so chunk 7 extends it additively rather than duplicating it.
 
@@ -144,16 +190,26 @@ relations, code decides what is admissible.
   tables) for robust patterns, and the schema-constrained-plus-validated LLM path is the
   chosen risk trade-off.
 
-### D3 — Validate every extracted IRI/unit against the known set; reject on a miss
+### D3 — Validate every extracted IRI/unit against the known set; reject on a miss (reactors excepted — they are grounded + minted)
 
-Each extracted relation is admitted only if **all** its referents exist in the run's known
-sets: the salt IRI is a loaded `MoltenSalt` individual, the property IRI is a seed
-`msr:PhysicalProperty`, a role IRI is a seed `msr:SaltRole`, a reactor IRI is a seed
-`msr:MoltenSaltReactor`, and the unit resolves into the QUDT allowlist (D4). A relation
-naming anything outside these sets is **rejected and never written** — the model can only
-assert facts about known entities, never mint new ones. Malformed/schema-violating JSON is
-dropped, never a silent write. Novel-property statements (no known property IRI) fall
-through to chunk 8, consistent with chunk 6's "LLM-asserted, reviewer-verified" principle.
+Each extracted relation is admitted only if its **closed-set** referents exist in the run's
+known sets: the salt IRI is a loaded `MoltenSalt` individual, the property IRI is a seed
+`msr:PhysicalProperty`, a role IRI is a seed `msr:SaltRole` (`FuelSalt`/`CoolantSalt`/
+`FlushSalt`), and the unit resolves into the QUDT allowlist (D4). A relation naming anything
+outside these closed sets is **rejected and never written** — for salts, properties, and
+roles the model can only assert facts about known entities, never mint new ones.
+Malformed/schema-violating JSON is dropped, never a silent write. Novel-property statements
+(no known property IRI) fall through to chunk 8, consistent with chunk 6's "LLM-asserted,
+reviewer-verified" principle.
+
+**Reactors are the one open referent.** Because `ground-demo-in-real-docs` removed all reactor
+individuals and deferred their return here, there is no closed reactor set to validate against;
+instead a reactor relation is admitted only when the reactor reference is a chunk-6 `linked`
+mention resolving to a surviving reactor concept in `vocab.ttl` (the grounding that keeps the
+model from minting a reactor out of thin air), and chunk 7 then mints the reactor individual
+deterministically with full provenance (D9). So the guarantee is uniform in spirit — nothing
+is written that isn't anchored on real, already-linked corpus evidence — but its mechanism for
+reactors is *grounded minting*, not closed-set rejection.
 
 ### D4 — Unit-string → QUDT mapping via the chunk-2 vendored allowlist
 
@@ -194,11 +250,15 @@ deterministically by slugging that locator (`msrd:m-doc-{report#}-{property}-{sl
 and `#` and `|` → `-`), no blank nodes — so re-asserting is a set-semantics no-op. The
 graph node carries `msr:ofSalt` (the loaded salt individual the mention resolved to),
 `msr:forProperty`, `msr:hasUnit`, `msr:equationForm`, `msr:validTempMin`/`Max`,
-`msr:dataLocator` (the shared locator), `prov:wasDerivedFrom` the source `Document`, and
-**`msr:citedIn`** that `Document`; the SQLite row carries `source='document'`, `doc_id` =
+`msr:dataLocator` (the shared locator), `prov:wasDerivedFrom` the source `Document`,
+**`prov:wasGeneratedBy msrd:activity-extraction`** (the stable per-pipeline activity, from
+`provenance.py`; D12), and **`msr:citedIn`** that `Document`; the SQLite row carries
+`source='document'`, `doc_id` =
 report#, the canonical `salt`, `property`, `equation_form`, `t_min`/`t_max`, `uncertainty`,
 and `c0..c4`. The triple write is additive `INSERT DATA` via chunk 5's `SparqlClient`; the
-SQLite write upserts on the `locator` primary key.
+SQLite write upserts on the `locator` primary key. The measurement's per-run generation edge
+(`<measurement> prov:wasGeneratedBy <urn:msr:run:extraction/{run_ts}>`) is written to
+`urn:msr:provenance`, not `urn:msr:data` (D12).
 
 - _Salt must be a composed individual._ A measurement needs `msr:ofSalt` a specific loaded
   `MoltenSalt`. Chunk 6's normalizer resolves a bare formula (no composition) to the salt
@@ -223,21 +283,62 @@ Python self-contained. A test asserts no WAL sidecars appear after a write.
 
 ### D8 — Idempotency across both stores
 
-Re-running `extract` MUST leave both stores unchanged: graph triples re-assert as a no-op
-via deterministic IRIs and no blank nodes (RDF set semantics over additive `INSERT DATA`),
-and SQLite rows upsert on the `locator` primary key (`INSERT … ON CONFLICT(locator) DO
-UPDATE`), so a second run neither duplicates a measurement nor changes a row count. This is
-tested on both stores.
+Re-running `extract` MUST leave both stores' `urn:msr:data`/`measurement_value` content
+unchanged: graph triples re-assert as a no-op via deterministic IRIs and no blank nodes (RDF
+set semantics over additive `INSERT DATA`), and SQLite rows upsert on the `locator` primary
+key (`INSERT … ON CONFLICT(locator) DO UPDATE`), so a second run neither duplicates a
+measurement nor changes a row count. This is tested on both stores. The **`urn:msr:provenance`
+audit graph is the one intentional exception** (D12, inherited from `provenance-run-lineage`):
+each wall-clock run appends a fresh per-run `prov:Activity` node and one generation edge per
+asserted fact, so it grows across runs by design — `urn:msr:data` and `measurement_value`
+stay byte-stable.
 
-### D9 — Salt role / reactor edges
+### D9 — Salt role / reactor edges — chunk 7 reintroduces the removed TBox and populates it from real text
 
-Validated salt↔role and salt↔reactor statements write `msrd:{salt} msr:hasRole
-msr:{Role}` and `msrd:{salt} msr:usedIn msrd:{Reactor}` into `urn:msr:data`, where the role
-is a seed `msr:SaltRole` individual (`FuelSalt`/`CoolantSalt`/`FlushSalt`) and the reactor a
-loaded `msr:MoltenSaltReactor` individual (e.g. `msrd:MSRE`). These are plain edges on
-existing individuals — no new nodes, no blank nodes — so re-asserting an edge already
-present (incl. the seed's hand-curated `hasRole`/`usedIn`) is a set-semantics no-op. A
-role/reactor naming an unknown individual is rejected (D3).
+`ground-demo-in-real-docs` removed the `msr:hasRole`/`msr:usedIn` OWL layer from `msr.ttl`
+(`msr:SaltRole` + `FuelSalt`/`CoolantSalt`/`FlushSalt` + `msr:hasRole`; `msr:MoltenSaltReactor`
++ `msr:usedIn`) and the `msrd:MSRE` individual with the seed A-Box, because they were populated
+*only* by the deleted seed, and **deferred their return to chunk 7**. Chunk 7 therefore does two
+things ground-demo could not: it re-adds that TBox, and it populates it from real extraction.
+
+- **Reintroduce the TBox (additive, on the seed ontology).** Chunk 7 adds back to
+  `ontology/msr.ttl`, loaded up front by `make load-seed` into `urn:msr:ontology` (exactly like
+  the extraction-provenance TBox, D11): the `msr:SaltRole` class with its three closed
+  controlled-vocabulary individuals `msr:FuelSalt`/`msr:CoolantSalt`/`msr:FlushSalt`, the
+  `msr:hasRole` object property (domain `msr:MoltenSalt`, range `msr:SaltRole`), the
+  `msr:MoltenSaltReactor` class, and the `msr:usedIn` object property (domain `msr:MoltenSalt`,
+  range `msr:MoltenSaltReactor`). The roles are *categories*, not empirical facts, so they are
+  legitimate seed TBox individuals; reactor *individuals* are **not** seeded (see below).
+
+- **Roles: closed-set validated (`msr:hasRole`).** A validated salt↔role statement writes
+  `msrd:{salt} msr:hasRole msr:{Role}` into `urn:msr:data`, where the role is one of the three
+  reintroduced `msr:SaltRole` individuals. A role naming anything else is rejected (D3). This is
+  a plain edge on existing individuals — no new nodes, no blank nodes.
+
+- **Reactors: grounded + minted (`msr:usedIn`).** Since no reactor individuals exist, chunk 7
+  *mints* one when — and only when — the reactor reference in the sentence is a chunk-6 `linked`
+  mention resolving to a surviving reactor concept in `vocab.ttl` (e.g. the "MSRE" span linking
+  to `voc:molten-salt-reactors`/its narrower concept). The minted individual has a deterministic
+  IRI (`msrd:reactor-{slug}`, e.g. `msrd:reactor-msre`), is typed `a msr:MoltenSaltReactor`,
+  carries an `rdfs:label` and a link to its grounding vocab concept, and — as a
+  pipeline-asserted individual — carries `prov:wasDerivedFrom` the source `Document` and
+  `prov:wasGeneratedBy msrd:activity-extraction` plus a per-run generation edge (D12), so its
+  identity is fully attributed to the document it came from. The salt↔reactor edge
+  `msrd:{salt} msr:usedIn msrd:reactor-{slug}` is then written. Minting is deterministic (same
+  reactor → same IRI), so it is idempotent (D8); a reactor reference that is *not* a linked
+  mention yields no `usedIn` relation (precision-biased, no guessing).
+
+Re-asserting an edge or a minted reactor already present is a set-semantics no-op (deterministic
+IRIs, no blank nodes). There are no hand-curated seed edges to preserve any more — ground-demo
+removed them all.
+
+- _Why mint reactors rather than seed a closed reference set:_ chosen so every reactor
+  individual is traceable to the real document that mentions it (Principle 3 — only real data),
+  parallel to how chunk 7 mints measurements. The trade-off is an asymmetry with roles (open
+  minted set vs. closed validated set, D3); it is accepted because a reactor is a real-world
+  *entity* discovered in text, whereas a role is a fixed *category*. Seeding a hand-curated
+  reactor reference set was rejected as re-introducing exactly the kind of unsourced individual
+  ground-demo removed.
 
 ### D11 — Per-relation extraction confidence + rationale: queryable in the graph, full trace in an artifact
 
@@ -275,17 +376,22 @@ The two properties are domain-agnostic (no `rdfs:domain`) so they attach to eith
   ```turtle
   msrd:edge-{report#}-{salt}-hasRole-{role} a rdf:Statement ;
       rdf:subject msrd:{salt} ; rdf:predicate msr:hasRole ; rdf:object msr:{Role} ;
-      msr:extractionConfidence 0.80 ; msr:extractionRationale "…" ; msr:citedIn msrd:{report#} .
+      msr:extractionConfidence 0.80 ; msr:extractionRationale "…" ; msr:citedIn msrd:{report#} ;
+      prov:wasDerivedFrom msrd:{report#} ; prov:wasGeneratedBy msrd:activity-extraction .
   ```
 
   Edge confidence is then queryable: `?s a rdf:Statement ; rdf:predicate msr:hasRole ;
-  rdf:subject ?salt ; rdf:object ?role ; msr:extractionConfidence ?c`. The reification node
-  has a deterministic IRI and no blank nodes, so re-asserting it is a no-op; the direct edge
-  is untouched, so the agent's grounding is unaffected and hand-curated seed edges (which
-  carry no reification) simply have no confidence. This is provenance reification only — the
-  salt-role _model_ stays direct edges, so it does **not** change the ONTOLOGY.md POC
-  simplification (which deferred reifying the role _itself_ for a salt with several
-  roles/reactors); we reify solely to annotate an extracted edge with its confidence.
+  rdf:subject ?salt ; rdf:object ?role ; msr:extractionConfidence ?c`. The reification node is
+  itself a pipeline-asserted individual, so it carries generation provenance like any other
+  (D12): `prov:wasDerivedFrom`/`prov:wasGeneratedBy msrd:activity-extraction` in `urn:msr:data`
+  and a per-run generation edge in `urn:msr:provenance`. It has a deterministic IRI and no blank
+  nodes, so re-asserting it is a no-op; the direct edge is untouched, so the agent's grounding is
+  unaffected. (There are no hand-curated seed role/reactor edges any more — ground-demo removed
+  them — so every role/reactor edge in the graph is a text-derived one carrying its
+  reification.) This is provenance reification only — the salt-role _model_ stays direct edges,
+  so it does **not** change the ONTOLOGY.md POC simplification (which deferred reifying the role
+  _itself_ for a salt with several roles/reactors); we reify solely to annotate an extracted
+  edge with its confidence.
 
 **Full trace in an artifact (all relations, all dispositions).** Chunk 7 additionally records
 **every** proposed relation — written, rejected, or skipped, measurement _and_ role/reactor —
@@ -307,14 +413,51 @@ the artifact — nothing is written to the graph for them.
   already a node, so annotating it needs no extra node/join and matches how `msr:uncertainty`
   already sits on the measurement.
 
+### D12 — Generation provenance: reuse `provenance.py`, do not reinvent it
+
+The `provenance-model` main spec requires **every** pipeline-asserted individual to carry
+generation provenance, and `provenance-run-lineage` already gave the extraction pipeline the
+machinery for it — `extraction/src/msr_extraction/provenance.py`, wired into `cli.py`'s
+`ingest`/`link` subcommands. Chunk 7's `extract` subcommand reuses that helper unchanged; it
+does not add a second provenance model. Concretely, per `extract` run:
+
+- **One `run_ts`** is minted once (`provenance.run_timestamp()`) and threaded through the run,
+  so every fact from the run shares one per-run activity node.
+- **The stable per-pipeline activity** is typed once via `provenance.write_stable_activity()`
+  — `msrd:activity-extraction a prov:Activity ; prov:wasAssociatedWith <agent:extraction@…> ;
+  owl:versionInfo …` in `urn:msr:data`, timestamp-free so it re-asserts as a no-op.
+- **The per-run activity node** `<urn:msr:run:extraction/{run_ts}>` is written via
+  `provenance.write_activity(run_ts, client)` into `urn:msr:provenance` **before** any fact, so
+  a mid-run crash never leaves a dangling generation edge.
+- **Every text-derived individual chunk 7 asserts** — each `msr:PropertyMeasurement`, each
+  minted `msr:MoltenSaltReactor`, and each `rdf:Statement` reification node — carries a stable
+  `prov:wasGeneratedBy msrd:activity-extraction` edge in `urn:msr:data` (alongside its
+  `prov:wasDerivedFrom` source `Document`), **and** one `<individual> prov:wasGeneratedBy
+  <urn:msr:run:extraction/{run_ts}>` per-run generation edge in `urn:msr:provenance`. The
+  salt↔role/reactor *direct edges* connect already-provenanced individuals (the loaded salt,
+  the seed role, the minted-and-provenanced reactor), so the edge itself needs no new
+  provenance node; its extraction provenance rides its `rdf:Statement` reification (D11).
+- Because `provenance.py` bumps `EXTRACTION_VERSION` as the pipeline gains capabilities, adding
+  the relation-extraction stage is a version bump (e.g. `0.3.0` → `0.4.0`), which also rebuilds
+  the cached KG-schema prompt — consistent with the version-gated prompt cache.
+
+This keeps chunk 7's measurements first-class provenanced facts (indistinguishable in prov
+shape from mentions/documents), satisfies the merged `provenance-model` spec, and means the
+future chunk-13 SHACL shapes validate chunk-7 output for free.
+
+- _Why reuse, not extend:_ `provenance.py`'s stable/per-run split, its ordering guarantee, and
+  its append-only `urn:msr:provenance` semantics are exactly what a new fact type needs; a
+  chunk-7-specific provenance path would duplicate a contract already tested against
+  mentions/documents.
+
 ### D10 — Test strategy
 
 Hermetic pytest, no live model and (for units) no GraphDB:
 
 - **Relation extraction** — stubbed-Flash fixture sentences → expected validated relations
   (salt + property + value + unit, incl. the Arrhenius `η = 0.084·exp(4340/T)` case and a
-  `DiscretePoint` value-at-T case); relations naming an unknown salt/property/reactor/role
-  IRI or an out-of-allowlist unit are **rejected**; malformed JSON → dropped, no write.
+  `DiscretePoint` value-at-T case); relations naming an unknown salt/property/role IRI or an
+  out-of-allowlist unit are **rejected**; malformed JSON → dropped, no write.
 - **Unit → QUDT mapping** — a table of surface forms → canonical `unit:` IRIs
   (`cP`→`unit:MilliPA-SEC`, `g/cm³`→`unit:GM-PER-CentiM3`, `mN/m`→`unit:MilliN-PER-M`,
   `S/cm`→`unit:S-PER-CentiM`); unmappable/out-of-allowlist surface forms rejected;
@@ -326,12 +469,25 @@ Hermetic pytest, no live model and (for units) no GraphDB:
   SPARQL client **and** the exact `measurement_value` row (`source='document'`, shared
   locator, coefficients) against a temp SQLite DB; re-run leaves both unchanged
   (idempotency); no `-wal`/`-shm` sidecar after the write.
-- **Role/reactor edges** — a validated statement → the expected `hasRole`/`usedIn` triple;
-  unknown role/reactor rejected; re-assert is a no-op.
+- **Role/reactor edges** — a validated role statement → the expected `hasRole` triple to a
+  reintroduced `msr:SaltRole` individual, an **unknown role rejected**; a reactor statement
+  whose reference is a chunk-6 `linked` mention **mints** a deterministic
+  `msr:MoltenSaltReactor` individual (with `rdfs:label`, grounding concept, and generation
+  provenance) and the `usedIn` edge, while a reactor reference that is *not* a linked mention
+  yields no `usedIn` relation; re-assert (edge + minted reactor) is a no-op.
+- **Reintroduced role/reactor TBox** — `ontology/msr.ttl` parses (rdflib-valid) and declares
+  `msr:SaltRole` + `FuelSalt`/`CoolantSalt`/`FlushSalt`, `msr:hasRole`, `msr:MoltenSaltReactor`,
+  and `msr:usedIn`; the role/reactor SKOS concepts remain in `vocab.ttl`.
+- **Generation provenance (D12)** — a written measurement, a minted reactor, and a reification
+  node each carry `prov:wasGeneratedBy msrd:activity-extraction` (+ `prov:wasDerivedFrom`) in
+  `urn:msr:data`; the `extract` run writes the per-run `prov:Activity` node and one per-fact
+  generation edge into `urn:msr:provenance`; a second wall-clock run appends a new per-run
+  activity + edges while `urn:msr:data`/`measurement_value` counts are unchanged (append-only
+  audit graph, stable fact stores). Reuses `provenance.py` (stub the clock/`run_ts`).
 - **Confidence + rationale + trace** — a written measurement carries queryable
   `msr:extractionConfidence`/`msr:extractionRationale` in the graph, and a written role/reactor
   edge is queryable via its `rdf:Statement` reification carrying the same properties (a NIST
-  measurement and a hand-curated seed edge carry neither); a written relation appears in
+  measurement carries neither, marking it as loaded not extracted); a written relation appears in
   `relations.jsonl` with its confidence, rationale, and `disposition:"written"`; a
   below-threshold relation is `skipped` (nothing written); a validation failure is `rejected`
   with its reason; a multi-relation sentence yields one record per relation.
@@ -348,9 +504,11 @@ Hermetic pytest, no live model and (for units) no GraphDB:
 
 ## Risks / Trade-offs
 
-- **Flash hallucinates an IRI, unit, or value** → every referent is validated against the
-  known-IRI set + QUDT allowlist and rejected on a miss (D3/D4); the model can only assert
-  facts about known entities; malformed output is dropped, never a silent write.
+- **Flash hallucinates an IRI, unit, or value** → every closed-set referent (salt, property,
+  role) is validated against the known-IRI set + QUDT allowlist and rejected on a miss (D3/D4);
+  a reactor is admitted only when grounded on a chunk-6 `linked` mention and then minted (D9);
+  the model can only assert facts anchored on real, already-linked corpus evidence; malformed
+  output is dropped, never a silent write.
 - **Go/Python SQLite runtime-contract drift** (a stray WAL sidecar would break the
   sandboxes' read-only mounts) → the Python writer pins `journal_mode=DELETE` +
   `busy_timeout` (D7) and a test asserts no `-wal`/`-shm` files appear next to the DB.
@@ -366,25 +524,35 @@ Hermetic pytest, no live model and (for units) no GraphDB:
 - **Equation split across sentences/lines** (a correlation whose coefficients span OCR
   line breaks) → the extractor sees the segment text as chunk 5 normalized it; genuinely
   multi-sentence correlations are an accepted POC limitation (recall, not precision).
-- **Reusing chunk 6's merged code** → chunk 6 is now merged to `main`; chunk 7 branches from
-  it and reuses `graph_reader.py` (`GraphReader`), `kg_prompt.py`
-  (`KGSchemaPromptCache`/`build_prefix`), `sparql.py` (`SparqlClient`), and the
-  `mentions.jsonl` artifact (`linker.MentionRecord`, `config.mentions_path(report)`). Chunk 7
-  extends `graph_reader.py` additively (new role/reactor/property accessors) and imports the
-  rest unchanged; the coupling is import-level and covered by tests. (The chunk-7 worktree
-  branched from an older base — it must ff-merge `main` before implementation so the merged
-  chunk-6 modules are present.)
-- **Editing the seed `ontology/msr.ttl`** (shared with chunk 6's mention TBox) → chunk 7
-  starts after chunk 6 is merged (P4 after M3), so it adds its extraction-provenance TBox on
-  top of chunk 6's; the addition is additive and self-contained (two datatype properties + the
-  `rdf:` prefix), loaded by the existing `PUT` on `urn:msr:ontology`, with no loader change.
-- **`make load-seed` graph-replaces `urn:msr:data`** (from `example-flibe.ttl`), so a
-  re-seed after data is loaded would wipe NIST salts, mentions, and text-derived measurements
-  → chunk 7 (like chunks 2/6) writes additively via `INSERT DATA` and **never** `PUT`s
-  `urn:msr:data`; the `extract` target carries no `load-seed` prerequisite, and the run order
-  (`load-nist` → `ingest` → `link` → `extract`) never re-seeds after data lands. The
-  extraction-provenance TBox is loaded up front (it rides `urn:msr:ontology`, not
-  `urn:msr:data`).
+- **Reusing chunk 6's merged code** → chunk 6 is merged and archived; chunk 7 reuses
+  `graph_reader.py` (`GraphReader`), `kg_prompt.py` (`KGSchemaPromptCache`/`build_prefix`),
+  `sparql.py` (`SparqlClient`), `provenance.py` (`write_stable_activity`/`write_activity`/
+  `run_activity_iri`; D12), and the `mentions.jsonl` artifact (`linker.MentionRecord`,
+  `config.mentions_path(report)`). Chunk 7 extends `graph_reader.py` additively (new
+  role/property accessors — reactors are minted, not read; D9) and imports the rest unchanged;
+  the coupling is import-level and covered by tests. (This worktree has already ff-merged
+  `main`, so the merged chunk-6 + trust-trilogy modules are present.)
+- **Minting reactors could over-generate** (a spurious `msr:MoltenSaltReactor` from a loose
+  mention) → a reactor is minted only when its reference is a chunk-6 `linked` mention resolving
+  to a surviving reactor `vocab.ttl` concept (D9), so minting is bounded by the same
+  linked-mention gate as everything else; a reactor reference that is not a linked mention
+  produces no `usedIn` relation. The minted individual carries `prov:wasDerivedFrom` its
+  document, so a bad mint is traceable and rollback-able.
+- **Editing the seed `ontology/msr.ttl`** (shared with chunk 6's mention TBox + the
+  `provenance-model` PROV-O slice) → chunk 7's two additions are additive and self-contained:
+  the extraction-provenance vocabulary (`msr:extractionConfidence`/`msr:extractionRationale` +
+  the `rdf:` prefix; D11) and the reintroduced role/reactor OWL layer (`msr:SaltRole` + three
+  role individuals + `msr:hasRole`; `msr:MoltenSaltReactor` + `msr:usedIn`; D9). Both load via
+  the existing `PUT` on `urn:msr:ontology`, with no loader change; adding to `msr.ttl` bumps
+  `owl:versionInfo`, rebuilding the cached KG-schema prompt.
+- **`make load-seed` no longer touches `urn:msr:data`** → `ground-demo-in-real-docs` removed
+  `example-flibe.ttl`; `loader seed` now PUTs only `msr.ttl` → `urn:msr:ontology` and
+  `vocab.ttl` → `urn:msr:vocab` and `CREATE SILENT`s `urn:msr:staging` (`cmd/loader/seed.go`,
+  `seed-graph-loading` spec). So a re-`load-seed` is **safe** for the NIST salts, mentions, and
+  text-derived measurements in `urn:msr:data`; it only re-PUTs the TBox/vocab (idempotent, and
+  the intended way to apply a `msr.ttl` edit). Chunk 7 still (like chunks 2/6) writes its data
+  additively via `INSERT DATA` and never `PUT`s `urn:msr:data`; its TBox additions ride
+  `urn:msr:ontology`. The `extract` target carries no `load-seed` prerequisite.
 - **Confidence leaking into the agent's answer surface** → confidence/rationale are
   measurement-provenance properties, not property values; the schema-generic agent grounds on
   `msr:forProperty`/`msr:hasUnit`/coefficients and never treats `msr:extractionConfidence` as
@@ -393,24 +561,28 @@ Hermetic pytest, no live model and (for units) no GraphDB:
 
 ## Migration Plan
 
-Additive on top of chunks 2 and 6 (both merged to `main`). The extraction-provenance TBox
-(D11) is committed to `ontology/msr.ttl` **before** the bootstrap's initial `load-seed`, so it
-loads into `urn:msr:ontology` up front. Note `make load-seed` graph-**replaces** each core
-graph — including `urn:msr:data` from `example-flibe.ttl` — and `make load-nist` **depends on**
-`load-seed`; the canonical fresh bootstrap is therefore `make up` → `make load-nist` (runs
-`load-seed` then the NIST load) → `make ingest` → `make link` → `make extract` → `make test`.
-**Do not re-run `make load-seed` after data is loaded** — it would wipe `urn:msr:data` (NIST
-salts, chunk-6 mentions, and chunk-7 text-derived measurements + reifications); a TBox change
-is applied by editing `msr.ttl` and re-bootstrapping from `load-nist`, not by re-seeding a live
-store. The root `Makefile` gains an `extract` target additively (like `link:`, with **no**
-`load-seed` prerequisite); the `extraction` image needs no new heavy dependency beyond the
-DeepSeek client chunk 6 already added (stdlib `sqlite3` and the QUDT allowlist file are already
-present). Rollback: delete
-the text-derived measurement triples (`DELETE WHERE { GRAPH <urn:msr:data> { ?m a
-msr:PropertyMeasurement ; msr:citedIn ?d . … } }` scoped to text-derived IRIs) and role/
-reactor edges, and `DELETE FROM measurement_value WHERE source='document'`; everything is
-re-creatable from the vendored inputs, the graph, and `mentions.jsonl` by re-running
-`extract`.
+Additive on top of chunks 2 and 6 and the trust trilogy (all merged and archived). Chunk 7's
+two `ontology/msr.ttl` additions — the extraction-provenance vocabulary (D11) and the
+reintroduced role/reactor OWL layer (D9) — are committed **before** the bootstrap's initial
+`load-seed`, so they load into `urn:msr:ontology` up front. `make load-seed` now PUTs **only**
+the TBox and vocab (`msr.ttl` → `urn:msr:ontology`, `vocab.ttl` → `urn:msr:vocab`) and
+`CREATE SILENT`s `urn:msr:staging` — it **no longer touches `urn:msr:data`** (the seed A-Box
+`example-flibe.ttl` was removed by `ground-demo-in-real-docs`). The canonical fresh bootstrap
+is `make up` → `make load-nist` (runs `load-seed` then the NIST load) → `make ingest` →
+`make link` → `make extract` → `make test`. A **re-`load-seed` is safe** for loaded data now:
+it re-PUTs the TBox/vocab idempotently and leaves `urn:msr:data` (NIST salts, mentions, and
+chunk-7 measurements/reifications/minted reactors) intact — indeed re-running `load-seed` is
+the intended way to apply a `msr.ttl` TBox edit to a live store. The root `Makefile` gains an
+`extract` target additively (like `link:`, with **no** `load-seed` prerequisite); the
+`extraction` image needs no new heavy dependency beyond the DeepSeek client chunk 6 already
+added (stdlib `sqlite3` and the QUDT allowlist file are already present). Rollback: delete the
+text-derived measurement triples (`DELETE WHERE { GRAPH <urn:msr:data> { ?m a
+msr:PropertyMeasurement ; msr:citedIn ?d . … } }` scoped to text-derived IRIs), the role/
+reactor edges + `rdf:Statement` reifications + minted `msr:MoltenSaltReactor` individuals, and
+`DELETE FROM measurement_value WHERE source='document'`; the per-run provenance in
+`urn:msr:provenance` is append-only audit history and may be left or truncated separately.
+Everything is re-creatable from the vendored inputs, the graph, and `mentions.jsonl` by
+re-running `extract`.
 
 ## Resolved Questions
 
@@ -424,6 +596,20 @@ re-creatable from the vendored inputs, the graph, and `mentions.jsonl` by re-run
   with `|` (`doc/{report#}/{property}#BeF2-LiF|34.0-66.0`); the derived measurement IRI
   slugs `|` and `/`/`#` to `-`. Final spelling is settled at implementation and pinned by
   the dual-store write tests. Non-blocking.
+- **Where reactor individuals come from — RESOLVED: mint from grounded extraction.**
+  `ground-demo-in-real-docs` removed the `msrd:MSRE` individual (unsourced hand-curated seed)
+  and deferred the role/reactor layer's return to chunk 7. Chunk 7 reintroduces the OWL TBox
+  (D9) and **mints** each `msr:MoltenSaltReactor` individual from a real, chunk-6-linked reactor
+  mention, with full `prov:wasDerivedFrom`/`prov:wasGeneratedBy` provenance — rather than
+  seeding a hand-curated reactor reference set — so every reactor is traceable to the document
+  that mentions it (Principle 3). Roles stay a closed seed controlled vocabulary. This makes the
+  reactor referent an open minted set while salt/property/role stay closed validated sets (D3),
+  an accepted asymmetry.
+- **Generation provenance — RESOLVED: reuse `provenance.py` (D12).** The `provenance-model`
+  main spec requires `prov:wasGeneratedBy` (stable + per-run) on every asserted individual;
+  chunk 7 satisfies it by reusing the existing pipeline provenance helper for its measurements,
+  minted reactors, and reification nodes, writing per-run lineage into `urn:msr:provenance`
+  exactly as chunk 6 does for mentions/documents. No second provenance model is introduced.
 - **Uncertainty & extraction confidence — RESOLVED: capture both, in separate places,
   confidence queryable in the graph.** The source-stated _physical_ uncertainty string is
   captured into the `uncertainty` column / `msr:uncertainty` when the prose gives one (empty
