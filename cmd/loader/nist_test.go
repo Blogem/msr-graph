@@ -20,6 +20,19 @@ package main
 //   - "Coefficients are not emitted as triples"
 //   - "Composition-isotherm measurements" / KF-ZrF4 isotherm scenario
 //   - "Seed hand-curated edges survive the load"
+//
+// --- openspec/changes/provenance-run-lineage additions (tasks 5.1-5.5) -----
+//
+// This change's agreed task contract (tasks.md 2.1-2.5) replaces the single
+// buildInsertData(ms) string with buildInsertData(ms, version) (string,
+// []string) -- the second return value is the deduped, ordered slice of
+// every fact IRI the call emitted (MoltenSalt/Constituent/ChemicalCompound/
+// PropertyMeasurement/Dataset), so the caller can thread it into the
+// provenance builder without re-deriving it. buildRunGraphData(ts, version)
+// is replaced by buildProvenanceData(ts, version, factIRIs) string, which
+// renders the GRAPH <urn:msr:provenance> update: the per-run
+// urn:msr:run:loader/<ts> Activity node plus one prov:wasGeneratedBy edge
+// per factIRI. It no longer touches urn:msr:src:*.
 
 import (
 	"strings"
@@ -100,14 +113,14 @@ func kfZrf4IsothermMeasurement() nist.Measurement {
 func assertContains(t *testing.T, out, want string) {
 	t.Helper()
 	if !strings.Contains(out, want) {
-		t.Errorf("buildInsertData output missing %q\n--- full output ---\n%s", want, out)
+		t.Errorf("output missing %q\n--- full output ---\n%s", want, out)
 	}
 }
 
 func assertNotContains(t *testing.T, out, unwanted string) {
 	t.Helper()
 	if strings.Contains(out, unwanted) {
-		t.Errorf("buildInsertData output unexpectedly contains %q\n--- full output ---\n%s", unwanted, out)
+		t.Errorf("output unexpectedly contains %q\n--- full output ---\n%s", unwanted, out)
 	}
 }
 
@@ -116,7 +129,7 @@ func assertNotContains(t *testing.T, out, unwanted string) {
 // carry every triple a consumer needs to resolve the measurement, its salt,
 // unit, equation form, validity range, locator, and provenance.
 func TestBuildInsertData_FLiBeDensity(t *testing.T) {
-	out := buildInsertData([]nist.Measurement{flibeDensityMeasurement()})
+	out, _ := buildInsertData([]nist.Measurement{flibeDensityMeasurement()}, ontologyVersion)
 
 	assertContains(t, out, "INSERT DATA")
 	assertContains(t, out, "GRAPH <urn:msr:data>")
@@ -148,7 +161,7 @@ func TestBuildInsertData_FLiBeDensity(t *testing.T) {
 // predicate must never appear in the graph payload; they live only in
 // SQLite (measurement_value.c0..c4), keyed by locator.
 func TestBuildInsertData_CoefficientsNotEmitted(t *testing.T) {
-	out := buildInsertData([]nist.Measurement{flibeDensityMeasurement()})
+	out, _ := buildInsertData([]nist.Measurement{flibeDensityMeasurement()}, ontologyVersion)
 
 	assertNotContains(t, out, "2.413")
 	assertNotContains(t, out, "-4.88")
@@ -164,7 +177,7 @@ func TestBuildInsertData_CoefficientsNotEmitted(t *testing.T) {
 // measurement carries compositionComponent naming the varying compound, and
 // equationForm resolves to the matching msr:IsothermN individual.
 func TestBuildInsertData_IsothermCompositionRange(t *testing.T) {
-	out := buildInsertData([]nist.Measurement{kfZrf4IsothermMeasurement()})
+	out, _ := buildInsertData([]nist.Measurement{kfZrf4IsothermMeasurement()}, ontologyVersion)
 
 	assertContains(t, out, "msr:equationForm msr:Isotherm3")
 	assertContains(t, out, "msr:compositionComponent msrd:ZrF4")
@@ -186,7 +199,7 @@ func TestBuildInsertData_IsothermCompositionRange(t *testing.T) {
 // fabricate them. These predicates are seed-owned; buildInsertData's
 // output must never mention them, for either fixture.
 func TestBuildInsertData_NoHandCuratedEdges(t *testing.T) {
-	out := buildInsertData([]nist.Measurement{flibeDensityMeasurement(), kfZrf4IsothermMeasurement()})
+	out, _ := buildInsertData([]nist.Measurement{flibeDensityMeasurement(), kfZrf4IsothermMeasurement()}, ontologyVersion)
 
 	for _, unwanted := range []string{"msr:hasRole", "msr:usedIn", "msr:citedIn", "skos:closeMatch"} {
 		assertNotContains(t, out, unwanted)
@@ -194,17 +207,23 @@ func TestBuildInsertData_NoHandCuratedEdges(t *testing.T) {
 }
 
 // TestBuildInsertData_Empty documents the trivial boundary: an empty
-// measurement slice should not panic and (if it produces output at all)
-// should not fabricate a GRAPH block with no content worth asserting on
-// beyond "no panic, no crash". This guards against buildInsertData
-// dereferencing ms[0] unconditionally.
+// measurement slice should not panic. buildInsertData ALWAYS emits the
+// msrd:nist-srd27 Dataset node -- it is a derivation root, emitted
+// regardless of measurement count (design D3, task 5.2) -- so even a nil
+// measurement slice yields exactly one fact IRI: the Dataset node itself.
+// This guards against buildInsertData dereferencing ms[0] unconditionally,
+// while still pinning that the Dataset node is always a fact IRI carrying a
+// generation edge.
 func TestBuildInsertData_Empty(t *testing.T) {
 	defer func() {
 		if r := recover(); r != nil {
 			t.Fatalf("buildInsertData(nil) panicked: %v", r)
 		}
 	}()
-	_ = buildInsertData(nil)
+	_, factIRIs := buildInsertData(nil, ontologyVersion)
+	if len(factIRIs) != 1 || factIRIs[0] != nistDatasetIRI {
+		t.Errorf("buildInsertData(nil) returned fact IRIs %v, want exactly [%s]", factIRIs, nistDatasetIRI)
+	}
 }
 
 // --- openspec/changes/provenance-model additions (tasks 6.1/6.2) -----------
@@ -247,7 +266,7 @@ func countOccurrences(s, substr string) int {
 // fixtures, this test re-asserts it alongside the new generation edge for
 // clarity).
 func TestBuildInsertData_MeasurementCarriesGenerationProvenance(t *testing.T) {
-	out := buildInsertData([]nist.Measurement{flibeDensityMeasurement(), kfZrf4IsothermMeasurement()})
+	out, _ := buildInsertData([]nist.Measurement{flibeDensityMeasurement(), kfZrf4IsothermMeasurement()}, ontologyVersion)
 
 	assertContains(t, out, "prov:wasDerivedFrom "+nistDatasetIRI)
 	assertContains(t, out, "prov:wasGeneratedBy "+loaderActivityIRI)
@@ -271,7 +290,7 @@ func TestBuildInsertData_MeasurementCarriesGenerationProvenance(t *testing.T) {
 // prov:wasDerivedFrom resolves to a real, DOI-bearing dataset even with the
 // hand-curated seed gone (design D3/D9).
 func TestBuildInsertData_DatasetNodeWithDOI(t *testing.T) {
-	out := buildInsertData([]nist.Measurement{flibeDensityMeasurement()})
+	out, _ := buildInsertData([]nist.Measurement{flibeDensityMeasurement()}, ontologyVersion)
 
 	assertContains(t, out, nistDatasetIRI+" a msr:Dataset")
 	assertContains(t, out, "dcterms:identifier "+quoteLiteral(nistDatasetDOI))
@@ -284,7 +303,7 @@ func TestBuildInsertData_DatasetNodeWithDOI(t *testing.T) {
 // prov:wasDerivedFrom msrd:nist-srd27 -- design D1 scopes provenance to all
 // instance data the loader asserts, not only measurements.
 func TestBuildInsertData_CatalogIndividualsCarryProvenance(t *testing.T) {
-	out := buildInsertData([]nist.Measurement{flibeDensityMeasurement(), kfZrf4IsothermMeasurement()})
+	out, _ := buildInsertData([]nist.Measurement{flibeDensityMeasurement(), kfZrf4IsothermMeasurement()}, ontologyVersion)
 
 	entityCount := countOccurrences(out, "a msr:MoltenSalt") +
 		countOccurrences(out, "a msr:Constituent") +
@@ -319,45 +338,186 @@ func TestBuildInsertData_CatalogIndividualsCarryProvenance(t *testing.T) {
 func TestBuildInsertData_DeterministicAcrossCalls(t *testing.T) {
 	ms := []nist.Measurement{flibeDensityMeasurement(), kfZrf4IsothermMeasurement()}
 
-	first := buildInsertData(ms)
-	second := buildInsertData(ms)
+	first, firstIRIs := buildInsertData(ms, ontologyVersion)
+	second, secondIRIs := buildInsertData(ms, ontologyVersion)
 
 	if first != second {
 		t.Errorf("buildInsertData is not deterministic across calls with identical input:\n--- first ---\n%s\n--- second ---\n%s", first, second)
 	}
+	if strings.Join(firstIRIs, ",") != strings.Join(secondIRIs, ",") {
+		t.Errorf("buildInsertData fact-IRI slice is not deterministic across calls:\nfirst:  %v\nsecond: %v", firstIRIs, secondIRIs)
+	}
 }
 
-// TestBuildRunGraphData_DeterministicWithFixedTimestamp covers 6.2's
-// "audit-graph" carve-out from design D8: the wall-clock loader-run
-// Activity *record* (urn:msr:run:loader/<ts>) is intentionally per-run, but
-// with a FIXED injected timestamp the builder must still be a pure,
-// deterministic function of its inputs, and the msrd:activity-loader-nist
-// IRI it writes must be the exact IRI every measurement's
-// prov:wasGeneratedBy references (so "everything from this run" is
-// reachable by joining on that IRI).
+// --- openspec/changes/provenance-run-lineage additions (tasks 5.1-5.5) -----
 //
-// ASSUMPTION (pass-1, flagged in the tester handoff report for
-// reconciliation at merge): this pins the task contract's suggested symbol
-// buildRunGraphData(ts time.Time, version string) string in package main.
-// It is not required to compile until the coder's loader change (which
-// must expose *some* pure, timestamp-injectable builder for the run graph
-// per task 2.4) lands; if the coder chooses a different name/signature,
-// this test needs updating at merge, not the acceptance intent it encodes.
-func TestBuildRunGraphData_DeterministicWithFixedTimestamp(t *testing.T) {
+// buildRunGraphData(ts, version) is REPLACED by
+// buildProvenanceData(ts time.Time, version string, factIRIs []string) string
+// (task 2.2): it renders the additive INSERT DATA targeting
+// GRAPH <urn:msr:provenance> only -- the per-run activity node
+// <urn:msr:run:loader/<ts>> plus one <factIRI> prov:wasGeneratedBy <run> edge
+// per element of factIRIs. It no longer touches urn:msr:src:*, and it no
+// longer re-emits the stable msrd:activity-loader-nist typing -- that moved
+// into buildInsertData (task 2.1), which now also returns the deduped,
+// ordered fact-IRI slice these tests thread into buildProvenanceData.
+//
+// Spec: openspec/changes/provenance-run-lineage/specs/{nist-structured-loading,provenance-model}/spec.md
+//   - "Loader-run activity recorded in a named graph" (MODIFIED)
+//   - "Per-run generation lineage" (ADDED)
+//   - "A single provenance graph holds run activities and lineage" (ADDED)
+//   - "Generating activities record agent, timestamps, and ontology version" (MODIFIED)
+
+// runFactIRIs is a small helper: build the two fixtures' INSERT DATA and
+// return the fact-IRI slice buildInsertData reports for them, so the
+// provenance tests below don't have to re-derive the entity list by hand.
+func runFactIRIs(t *testing.T) []string {
+	t.Helper()
+	_, factIRIs := buildInsertData([]nist.Measurement{flibeDensityMeasurement(), kfZrf4IsothermMeasurement()}, ontologyVersion)
+	return factIRIs
+}
+
+// TestBuildProvenanceData_RunActivity covers 5.1: the provenance update
+// targets GRAPH <urn:msr:provenance> and contains the per-run activity
+// <urn:msr:run:loader/<ts>> fully attributed (agent, start/end timestamps,
+// ontology version).
+func TestBuildProvenanceData_RunActivity(t *testing.T) {
 	fixedTS := time.Date(2024, 1, 2, 3, 4, 5, 0, time.UTC)
+	tsStr := fixedTS.UTC().Format(time.RFC3339)
+	factIRIs := runFactIRIs(t)
 
-	first := buildRunGraphData(fixedTS, "0.3.0")
-	second := buildRunGraphData(fixedTS, "0.3.0")
+	out := buildProvenanceData(fixedTS, ontologyVersion, factIRIs)
 
-	if first != second {
-		t.Errorf("buildRunGraphData is not deterministic for a fixed timestamp:\n--- first ---\n%s\n--- second ---\n%s", first, second)
+	assertContains(t, out, "GRAPH <urn:msr:provenance>")
+	runIRI := "urn:msr:run:loader/" + tsStr
+	assertContains(t, out, "<"+runIRI+">")
+	assertContains(t, out, "a prov:Activity")
+	assertContains(t, out, "prov:wasAssociatedWith <agent:loader@"+ontologyVersion+">")
+	assertContains(t, out, "prov:startedAtTime")
+	assertContains(t, out, "prov:endedAtTime")
+	assertContains(t, out, `owl:versionInfo "`+ontologyVersion+`"`)
+}
+
+// TestBuildProvenanceData_GenerationEdgeCountParity covers 5.2: every fact
+// IRI buildInsertData reports appears exactly once as the subject of a
+// prov:wasGeneratedBy <run> edge in buildProvenanceData's output, the total
+// edge count equals len(factIRIs), and the slice is not missing any
+// subject-typed fact buildInsertData actually emitted (sanity check that
+// the slice and the INSERT DATA output agree on "how many facts").
+func TestBuildProvenanceData_GenerationEdgeCountParity(t *testing.T) {
+	insertOut, factIRIs := buildInsertData([]nist.Measurement{flibeDensityMeasurement(), kfZrf4IsothermMeasurement()}, ontologyVersion)
+	if len(factIRIs) == 0 {
+		t.Fatal("buildInsertData returned zero fact IRIs -- fixtures produced nothing to check")
 	}
 
-	assertContains(t, first, "GRAPH <urn:msr:run:loader/")
-	assertContains(t, first, "a prov:Activity")
-	assertContains(t, first, loaderActivityIRI)
-	assertContains(t, first, "prov:wasAssociatedWith <agent:loader@0.3.0>")
-	assertContains(t, first, "prov:startedAtTime")
-	assertContains(t, first, "prov:endedAtTime")
-	assertContains(t, first, `owl:versionInfo "0.3.0"`)
+	// Sanity: the number of distinct typed individuals buildInsertData
+	// actually wrote (Dataset + every MoltenSalt/Constituent/
+	// ChemicalCompound/PropertyMeasurement block) must equal len(factIRIs) --
+	// the slice must be neither missing facts nor padded with extras.
+	entityCount := countOccurrences(insertOut, "a msr:Dataset") +
+		countOccurrences(insertOut, "a msr:MoltenSalt") +
+		countOccurrences(insertOut, "a msr:Constituent") +
+		countOccurrences(insertOut, "a msr:ChemicalCompound") +
+		countOccurrences(insertOut, "a msr:PropertyMeasurement")
+	if entityCount != len(factIRIs) {
+		t.Errorf("buildInsertData emitted %d typed individuals but returned %d fact IRIs, want equal\nfactIRIs: %v", entityCount, len(factIRIs), factIRIs)
+	}
+
+	// No duplicate IRIs in the returned slice.
+	seen := make(map[string]bool, len(factIRIs))
+	for _, iri := range factIRIs {
+		if seen[iri] {
+			t.Errorf("buildInsertData fact-IRI slice contains duplicate %q: %v", iri, factIRIs)
+		}
+		seen[iri] = true
+	}
+
+	fixedTS := time.Date(2024, 1, 2, 3, 4, 5, 0, time.UTC)
+	tsStr := fixedTS.UTC().Format(time.RFC3339)
+	runIRI := "urn:msr:run:loader/" + tsStr
+	provOut := buildProvenanceData(fixedTS, ontologyVersion, factIRIs)
+
+	totalEdges := countOccurrences(provOut, "prov:wasGeneratedBy <"+runIRI+">")
+	if totalEdges != len(factIRIs) {
+		t.Errorf("buildProvenanceData emitted %d generation edges to <%s>, want exactly %d (one per fact IRI)", totalEdges, runIRI, len(factIRIs))
+	}
+
+	for _, iri := range factIRIs {
+		want := iri + " prov:wasGeneratedBy <" + runIRI + ">"
+		got := countOccurrences(provOut, want)
+		if got != 1 {
+			t.Errorf("fact IRI %q has %d generation edges to <%s>, want exactly 1", iri, got, runIRI)
+		}
+	}
+}
+
+// TestBuildInsertData_StableActivityNoTimestamps covers 5.3: buildInsertData
+// types the stable msrd:activity-loader-nist as a prov:Activity with no
+// timestamp literals at all -- neither an xsd:dateTime literal nor a
+// startedAtTime/endedAtTime predicate -- so urn:msr:data stays a
+// set-semantics no-op across re-runs.
+func TestBuildInsertData_StableActivityNoTimestamps(t *testing.T) {
+	out, _ := buildInsertData([]nist.Measurement{flibeDensityMeasurement()}, ontologyVersion)
+
+	assertContains(t, out, loaderActivityIRI+" a prov:Activity")
+	assertContains(t, out, "prov:wasAssociatedWith <agent:loader@"+ontologyVersion+">")
+	assertContains(t, out, `owl:versionInfo "`+ontologyVersion+`"`)
+
+	assertNotContains(t, out, "xsd:dateTime")
+	assertNotContains(t, out, "startedAtTime")
+	assertNotContains(t, out, "endedAtTime")
+}
+
+// TestNoSourceGraphAnywhere covers 5.4: neither buildInsertData nor
+// buildProvenanceData ever names a urn:msr:src:* graph -- the per-source
+// audit graph is removed entirely (design D2), the Dataset node stays
+// self-contained in urn:msr:data, and the run identifier survives only as
+// the per-run activity node IRI inside urn:msr:provenance.
+func TestNoSourceGraphAnywhere(t *testing.T) {
+	insertOut, factIRIs := buildInsertData([]nist.Measurement{flibeDensityMeasurement(), kfZrf4IsothermMeasurement()}, ontologyVersion)
+	assertNotContains(t, insertOut, "urn:msr:src:")
+
+	fixedTS := time.Date(2024, 1, 2, 3, 4, 5, 0, time.UTC)
+	provOut := buildProvenanceData(fixedTS, ontologyVersion, factIRIs)
+	assertNotContains(t, provOut, "urn:msr:src:")
+}
+
+// TestBuildProvenanceData_AppendOnlyAcrossRuns covers 5.5: two distinct ts
+// values produce two distinct per-run activity IRIs and two disjoint sets of
+// generation edges -- a generation edge minted for run A's per-run activity
+// never appears in run B's output and vice versa, matching the append-only
+// lineage semantics (design D2/D4): rollback or inspection of one run's
+// output never leaks into another run's.
+func TestBuildProvenanceData_AppendOnlyAcrossRuns(t *testing.T) {
+	factIRIs := runFactIRIs(t)
+
+	tsA := time.Date(2024, 1, 2, 3, 4, 5, 0, time.UTC)
+	tsB := time.Date(2024, 6, 7, 8, 9, 10, 0, time.UTC)
+	runA := "urn:msr:run:loader/" + tsA.UTC().Format(time.RFC3339)
+	runB := "urn:msr:run:loader/" + tsB.UTC().Format(time.RFC3339)
+
+	outA := buildProvenanceData(tsA, ontologyVersion, factIRIs)
+	outB := buildProvenanceData(tsB, ontologyVersion, factIRIs)
+
+	assertContains(t, outA, "<"+runA+">")
+	assertNotContains(t, outA, "<"+runB+">")
+	assertContains(t, outB, "<"+runB+">")
+	assertNotContains(t, outB, "<"+runA+">")
+
+	for _, iri := range factIRIs {
+		edgeA := iri + " prov:wasGeneratedBy <" + runA + ">"
+		edgeB := iri + " prov:wasGeneratedBy <" + runB + ">"
+
+		if !strings.Contains(outA, edgeA) {
+			t.Errorf("run A output missing its own generation edge for %q", iri)
+		}
+		if strings.Contains(outA, edgeB) {
+			t.Errorf("run A output unexpectedly contains run B's generation edge for %q", iri)
+		}
+		if !strings.Contains(outB, edgeB) {
+			t.Errorf("run B output missing its own generation edge for %q", iri)
+		}
+		if strings.Contains(outB, edgeA) {
+			t.Errorf("run B output unexpectedly contains run A's generation edge for %q", iri)
+		}
+	}
 }

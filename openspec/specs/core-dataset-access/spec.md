@@ -57,6 +57,17 @@ The package SHALL export the named-graph IRIs (`urn:msr:ontology`, `urn:msr:data
 - **WHEN** loader and test code reference named graphs
 - **THEN** they reference the exported constants from `internal/graph`, not literal IRI strings
 
+### Requirement: Provenance graph is a typed constant excluded from core reads
+The graph package SHALL expose a typed constant `Provenance GraphIRI = "urn:msr:provenance"` for the append-only provenance/lineage graph. This graph SHALL NOT be a member of `CoreGraphs`, so core reads (`Select`) exclude it exactly as they exclude `urn:msr:staging`; per-run lineage is reachable only via an explicit `GRAPH <urn:msr:provenance>` clause or the unrestricted read path (`SelectRaw`). Because `urn:msr:provenance` is written via SPARQL `Update` with an explicit `GRAPH` target (not Graph Store `PUT`), it is deliberately absent from the `PutGraph` known-graph allowlist.
+
+#### Scenario: Provenance graph is not in the core read set
+- **WHEN** a core read (`Select`) evaluates a query for a fact's `prov:wasGeneratedBy`
+- **THEN** only the single stable `msrd:activity-<pipeline>` edge in `urn:msr:data` is returned; the per-run lineage edges in `urn:msr:provenance` are not visible
+
+#### Scenario: Provenance lineage is reachable via an explicit graph scope
+- **WHEN** a query names `GRAPH <urn:msr:provenance>` (or uses the unrestricted `SelectRaw` path)
+- **THEN** the per-run `prov:wasGeneratedBy` lineage edges are returned
+
 ### Requirement: Integration tests guarded by environment
 Integration tests requiring a live GraphDB SHALL read `GRAPHDB_URL` (default `http://localhost:7200`) and check reachability once via a shared helper. With `GRAPHDB_REQUIRED` unset, an unreachable GraphDB (connection refused/timeout only) causes `t.Skip` with the reason; with `GRAPHDB_REQUIRED=1`, it causes `t.Fatal`. A GraphDB that responds but errors MUST fail the test in both modes. Pure-Go unit tests (dataset-clause rejection, request construction) MUST run unconditionally.
 
