@@ -3,13 +3,13 @@
 ## 1. Extraction project setup
 
 - [ ] 1.1 Add novelty-mining modules under `extraction/src/msr_extraction/`: lexical term-candidate pass, chunk-6 miss reader, document-frequency scorer, triage classifier, proposal builder + QUDT-allowlist validator, staging/proposal-graph writer, instance auto-accept writer, a provenance writer (stable `msrd:activity-mine` typing in `urn:msr:data` + per-run activity/lineage into `urn:msr:provenance`, per the `provenance-model` two-activity pattern), and a `mine` CLI subcommand (extending chunk 6's `cli.py` dispatcher)
-- [ ] 1.2 Extend the config module with the salience threshold (document-frequency cutoff) and corpus paths (curated `mentions.jsonl` dir + the full-corpus OCR dir `data/corpus/msr-archive/`); injectable for tests. Reuse chunk 6's `DEEPSEEK_BASE_URL` / `LLM_MODEL_EXTRACT` config
-- [ ] 1.3 Confirm no new third-party dependency is needed (reuse chunk 6's Flash client, KG-schema prompt builder, and core-dataset graph reader; chunk 5's SPARQL-UPDATE helper); the `extraction` image is unchanged
+- [x] 1.2 Extend the config module with the salience threshold (document-frequency cutoff) and corpus paths (curated `mentions.jsonl` dir + the full-corpus OCR dir `data/corpus/msr-archive/`); injectable for tests. Reuse chunk 6's `DEEPSEEK_BASE_URL` / `LLM_MODEL_EXTRACT` config
+- [x] 1.3 Confirm no new third-party dependency is needed (reuse chunk 6's Flash client, KG-schema prompt builder, and core-dataset graph reader; chunk 5's SPARQL-UPDATE helper); the `extraction` image is unchanged
 
 ## 2. Governance vocabulary in the seed ontology (`change-proposal-schema`)
 
-- [ ] 2.1 Add the `msr:ChangeProposal` governance TBox to `ontology/msr.ttl` — `msr:ChangeProposal` class plus `msr:kind`, `msr:reviewStatus`, `msr:term`, `msr:docFrequency`, `msr:hasProposalGraph`, `msr:hasEvidence` + `msr:Evidence`/`msr:evidenceText`, and `msr:autoAccepted`; reuse chunk-1 `msr:citedIn` and chunk-6 `msr:startOffset`/`msr:endOffset` for evidence provenance; keep it additive and rdflib-valid
-- [ ] 2.2 Update the README/bootstrap order so `make load-seed` loads the governance TBox into `urn:msr:ontology` **at bootstrap, before `load-nist`/`link`/`mine`**; document that after `ground-demo-in-real-docs` `load-seed` loads **TBox + vocab only** and never touches `urn:msr:data` (which is written additively by real-data writers via `INSERT DATA`, never `PUT`), so re-running `load-seed` is harmless to salts, mentions, and `msr:autoAccepted` instances — `load-nist` already runs `load-seed` as a prerequisite; the demo precondition is the full real pipeline (`load-nist` → `ingest` → `link` → `mine`)
+- [x] 2.1 Add the `msr:ChangeProposal` governance TBox to `ontology/msr.ttl` — `msr:ChangeProposal` class plus `msr:kind`, `msr:reviewStatus`, `msr:term`, `msr:docFrequency`, `msr:hasProposalGraph`, `msr:hasEvidence` + `msr:Evidence`/`msr:evidenceText`, and `msr:autoAccepted`; reuse chunk-1 `msr:citedIn` and chunk-6 `msr:startOffset`/`msr:endOffset` for evidence provenance; keep it additive and rdflib-valid
+- [x] 2.2 Update the README/bootstrap order so `make load-seed` loads the governance TBox into `urn:msr:ontology` **at bootstrap, before `load-nist`/`link`/`mine`**; document that after `ground-demo-in-real-docs` `load-seed` loads **TBox + vocab only** and never touches `urn:msr:data` (which is written additively by real-data writers via `INSERT DATA`, never `PUT`), so re-running `load-seed` is harmless to salts, mentions, and `msr:autoAccepted` instances — `load-nist` already runs `load-seed` as a prerequisite; the demo precondition is the full real pipeline (`load-nist` → `ingest` → `link` → `mine`)
 
 ## 3. Novelty detection (`novelty-detection`)
 
@@ -41,7 +41,7 @@
 ## 7. `mine` orchestration, wiring & docs
 
 - [ ] 7.1 Implement the `mine` CLI umbrella: read misses → exclude known → score → triage → build bundles → write proposals + auto-accepted instances, over the curated set; print a run summary (candidates, per-kind proposal counts, auto-accepted count, rejected count)
-- [ ] 7.2 Add the `make mine` target (one-shot Compose run of the extraction container invoking `mine`, ordered after `make link`); update the README bootstrap order
+- [x] 7.2 Add the `make mine` target (one-shot Compose run of the extraction container invoking `mine`, ordered after `make link`); update the README bootstrap order
 
 ## 8. Tests
 
