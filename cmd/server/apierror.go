@@ -3,12 +3,24 @@ package main
 import (
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 
 	"github.com/blogem/msr-graph/internal/checkpoint"
 	"github.com/blogem/msr-graph/internal/graph"
 	"github.com/blogem/msr-graph/internal/proposal"
 )
+
+// internalErrorMessage is the fixed, detail-free message returned to the
+// client for every unclassified (500) error. The real error is logged
+// server-side instead (see mapEngineError's default case) -- an
+// unclassified error here is often a raw upstream GraphDB response
+// (parse errors, offending query text, endpoint/repo detail), and
+// echoing err.Error() verbatim to an unauthenticated client would both
+// leak internal detail and hand back an injection oracle (the client
+// could use rejected-query echoes to iteratively refine an attack
+// payload).
+const internalErrorMessage = "internal error"
 
 // statusResponse is the wire shape every disposition endpoint (approve,
 // reject, edit, restore) returns on success: a single "status" field
@@ -77,6 +89,16 @@ func writeBadRequest(w http.ResponseWriter, message string) {
 // itself surfaced by the engines as an unwrapped *graph.ValidationError
 // (see internal/proposal/lifecycle.go), so it must be checked with
 // errors.As before the sentinel errors.Is checks below it.
+//
+// The 404/409/400 sentinel branches below echo err.Error() to the
+// client: that text is always one of this codebase's own
+// fmt.Errorf("%w: ...", sentinel) wrappers (internal/proposal,
+// internal/checkpoint), never raw upstream response text, so it is safe
+// to return verbatim. The default (500) branch is different -- an
+// unclassified error there is typically an *unwrapped* transport/parse
+// failure straight from graph.Client, which can carry raw GraphDB
+// response body content -- so it is logged server-side and never
+// returned to the client (see internalErrorMessage).
 func mapEngineError(w http.ResponseWriter, err error) {
 	var ve *graph.ValidationError
 	switch {
@@ -103,6 +125,7 @@ func mapEngineError(w http.ResponseWriter, err error) {
 	case errors.Is(err, checkpoint.ErrInvalidLabel):
 		writeAPIError(w, http.StatusBadRequest, "invalid_label", err.Error())
 	default:
-		writeAPIError(w, http.StatusInternalServerError, "internal", err.Error())
+		log.Printf("server: internal error: %v", err)
+		writeAPIError(w, http.StatusInternalServerError, "internal", internalErrorMessage)
 	}
 }
