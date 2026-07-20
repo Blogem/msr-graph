@@ -36,10 +36,10 @@
 - [x] 5.2 Soften any claim that the demo shows salt roles / reactor association (deferred to chunk-7); note the coolant/MSRE usage is real in `ORNL-TM-2316` but not yet extracted
 - [x] 5.3 Add the `document-graph` spec delta: reconcile the two seed-referencing requirements for seed removal — the `msr:Document` write is additive over real-data-writer triples (not a seed A-Box), and `msrd:ORNL-TM-2316` is written by the loader/ingest rather than "already typed in the seed A-Box"
 - [x] 5.4 Add the `salt-canonicalization` spec delta: reword the "matching the seed A-Box" IRI-minting phrasing to reference the deterministic minting contract itself (no behavior change; the seed A-Box no longer exists to match)
-- [ ] 5.5 Confirm `make demo-density` works end-to-end after a full real build, returning ≈ 1.974 g·cm⁻³ with grounding traced to `ORNL-TM-2316`
+- [x] 5.5 Confirm `make demo-density` works end-to-end after a full real build, returning ≈ 1.974 g·cm⁻³ with grounding traced to `ORNL-TM-2316` — VERIFIED via the worktree server (`go run ./cmd/server` on :8090, keyed from `.env`, against the live GraphDB + real sandbox): agent grounded through the real mention → `linksTo` → salt, `run_python` computed 1.9738 g/cm³
 
 ## 6. Validation
 
 - [x] 6.1 `go test ./...` and the extraction pytest suite green (offline unit tests; guarded integration tests documented)
 - [x] 6.2 `openspec validate ground-demo-in-real-docs --strict` passes
-- [ ] 6.3 Manual acceptance: full build + `make demo-density`, inspect the trace — grounding resolves via a real `msr:Mention`/`msr:linksTo` and the provenance names `ORNL-TM-2316`; no `skos:closeMatch`-to-a-salt anywhere
+- [x] 6.3 Manual acceptance: full build + `make demo-density`, inspect the trace — grounding resolves via a real `msr:Mention`/`msr:linksTo` and the provenance names `ORNL-TM-2316`; no `skos:closeMatch`-to-a-salt anywhere — VERIFIED: trace shows sparql grounding via surfaceForm `"LiF-BeF, (66-34 mole %)"` → `linksTo` → `salt-BeF2-LiF-34.0-66.0`, provenance `ontology_version=0.2.0` + real dataLocator, `run_python` → 1.9738; 0 `skos:closeMatch` triples repo-wide
