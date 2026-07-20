@@ -417,6 +417,13 @@ func renderPrompt(classes []schemaClass, properties []schemaProperty, concepts [
 		"read the salt's msr:PropertyMeasurement. The sparql_query tool description " +
 		"carries a worked grounding query.\n\n")
 
+	b.WriteString("**Always** resolve a salt by running that msr:Mention -> msr:linksTo " +
+		"grounding query (see the sparql_query tool description) so the answer is traceable " +
+		"to a real document. Do not resolve a salt by guessing an msrd: individual IRI, by " +
+		"label-matching the salt catalog below directly, or by inventing a concept-to-salt " +
+		"link (no such edge exists) -- the catalog below is for orientation only, not a " +
+		"grounding path.\n\n")
+
 	b.WriteString("## Ontology classes\n\n")
 	for _, c := range classes {
 		b.WriteString("- " + c.IRI)
