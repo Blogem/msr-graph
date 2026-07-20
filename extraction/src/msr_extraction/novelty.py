@@ -265,6 +265,30 @@ def _normalize_plain_tokens(text: str) -> tuple[str, ...]:
     return tuple(tok.casefold() for tok in _SEPARATOR_RE.split(text) if tok)
 
 
+def _normalize_salt_label(label: str) -> tuple[str, ...]:
+    """Normalize a salt-catalog label into a casefolded token sequence (design D2 fix).
+
+    Salt-catalog (`KnownEntity(kind="salt")`) labels are formula strings
+    with a trailing concentration suffix (e.g. ``"LiF-BeF2 (34.0-66.0
+    mol%)"``) -- authored chemistry notation, not camelCase-authored
+    identifiers. Running them through :func:`_normalize_token_sequence`
+    would camelCase-split each formula at every lower->upper boundary
+    (``BeF2`` -> ``be f2``) AND turn the concentration digits into extra
+    tokens, producing a ~9-token sequence (e.g. ``("li", "f", "be", "f2",
+    "34", "0", "66", "0", "mol")``) no real candidate term could ever
+    contain, so salt labels would never actually exclude anything. Instead:
+    (1) strip everything from the first ``(`` onward (the concentration/
+    mol% suffix), then (2) normalize the remainder with
+    :func:`_normalize_plain_tokens` (casefold + separator collapse, no
+    camelCase split) -- identical treatment to the linked-mention
+    `surface_form` handling, since both are formula-shaped chemistry spans,
+    not authored compound-word labels. ``"LiF-BeF2 (34.0-66.0 mol%)"`` thus
+    normalizes to ``("lif", "bef2")``.
+    """
+    formula = label.split("(", 1)[0]
+    return _normalize_plain_tokens(formula)
+
+
 class ExclusionIndex:
     """Normalized-label token-sequence exclusion index (design D2).
 
@@ -610,10 +634,19 @@ def build_exclusion_set(reader: GraphReader, reports: list[str], config: Config)
     ``surface_form`` from each report's `mentions.jsonl` (chunk 6's own
     already-resolved mentions).
 
-    Ontology labels are normalized via :func:`_normalize_token_sequence`
-    (casefold + camelCase split + separator collapse), so the returned
-    :class:`ExclusionIndex` excludes spelling/spacing/camelCase variants of
-    a known label (e.g. `molten salt` vs the class label `MoltenSalt`).
+    Ontology/concept labels (`entity.kind` `"concept"`/`"class"`) are
+    normalized via :func:`_normalize_token_sequence` (casefold + camelCase
+    split + separator collapse), so the returned :class:`ExclusionIndex`
+    excludes spelling/spacing/camelCase variants of a known label (e.g.
+    `molten salt` vs the class label `MoltenSalt`). Salt-catalog labels
+    (`entity.kind == "salt"`) are formula strings with a concentration
+    suffix (e.g. `"LiF-BeF2 (34.0-66.0 mol%)"`), not camelCase-authored
+    identifiers, so they are normalized instead via
+    :func:`_normalize_salt_label`: the parenthetical concentration/`mol%`
+    suffix is stripped and the remaining formula is normalized WITHOUT
+    camelCase splitting (like linked-mention surface forms below), so
+    `"LiF-BeF2 (34.0-66.0 mol%)"` indexes as `("lif", "bef2")` rather than
+    fragmenting into single letters plus stray concentration digits.
     Linked-mention `surface_form`s are normalized via
     :func:`_normalize_plain_tokens` (casefold + separator collapse, no
     camelCase split): those are OCR'd formula/nickname spans (e.g.
@@ -627,6 +660,11 @@ def build_exclusion_set(reader: GraphReader, reports: list[str], config: Config)
         if tokens:
             sequences.add(tokens)
 
+    def _index_salt_label(label: str) -> None:
+        tokens = _normalize_salt_label(label)
+        if tokens:
+            sequences.add(tokens)
+
     def _index_surface(surface_form: str) -> None:
         tokens = _normalize_plain_tokens(surface_form)
         if tokens:
@@ -634,7 +672,10 @@ def build_exclusion_set(reader: GraphReader, reports: list[str], config: Config)
 
     for entity in reader.read_known_entities():
         for label in entity.labels:
-            _index_label(label)
+            if entity.kind == "salt":
+                _index_salt_label(label)
+            else:
+                _index_label(label)
 
     for label in reader.read_role_reactor_labels():
         _index_label(label)
