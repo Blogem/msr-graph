@@ -147,8 +147,14 @@ func nullFloat(v *float64) sql.NullFloat64 {
 // per-run Activity is a distinct, per-run IRI (urn:msr:run:loader/<ts>)
 // written into urn:msr:provenance by buildProvenanceData -- see design D1.
 const (
-	nistDatasetIRI    = "msrd:nist-srd27"
-	nistDatasetDOI    = "doi:10.18434/mds2-2298"
+	nistDatasetIRI = "msrd:nist-srd27"
+	nistDatasetDOI = "doi:10.18434/mds2-2298"
+	// nistDatasetTitle is the dataset's human-readable name (from
+	// data/nist/PROVENANCE.md). Emitted as both rdfs:label (what the
+	// analysis agent queries for a dataset name) and dcterms:title (the
+	// dataset idiom) so a grounded answer can cite the source dataset by
+	// name, not just by its bare IRI.
+	nistDatasetTitle  = "NIST Properties of Molten Salts Database (formerly SRD 27)"
 	loaderActivityIRI = "msrd:activity-loader-nist"
 )
 
@@ -179,9 +185,10 @@ PREFIX dcterms: <http://purl.org/dc/terms/>
 //
 // The loader is now the sole source of the msrd:nist-srd27 msr:Dataset
 // node (design D3: the seed that used to define it is gone), so this
-// function also emits that node -- with its DOI -- exactly once,
+// function also emits that node -- with its human-readable name
+// (rdfs:label + dcterms:title) and DOI (dcterms:identifier) -- exactly once,
 // regardless of how many measurements follow. It is a derivation root: it
-// carries its external id (dcterms:identifier), never a wasDerivedFrom.
+// carries its own metadata, never a wasDerivedFrom.
 // Every emitted MoltenSalt/Constituent/ChemicalCompound/PropertyMeasurement
 // additionally carries prov:wasGeneratedBy the stable, deterministic
 // loaderActivityIRI and prov:wasDerivedFrom this Dataset node, so all
@@ -204,7 +211,8 @@ func buildInsertData(ms []nist.Measurement, version string) (string, []string) {
 	b.WriteString(insertPrefixes)
 	b.WriteString("INSERT DATA {\nGRAPH <urn:msr:data> {\n")
 
-	fmt.Fprintf(&b, "%s a msr:Dataset ; dcterms:identifier %s .\n", nistDatasetIRI, quoteLiteral(nistDatasetDOI))
+	fmt.Fprintf(&b, "%s a msr:Dataset ; rdfs:label %s ; dcterms:title %s ; dcterms:identifier %s .\n",
+		nistDatasetIRI, quoteLiteral(nistDatasetTitle), quoteLiteral(nistDatasetTitle), quoteLiteral(nistDatasetDOI))
 	fmt.Fprintf(&b, "%s a prov:Activity ; prov:wasAssociatedWith <agent:loader@%s> ; owl:versionInfo %s .\n",
 		loaderActivityIRI, version, quoteLiteral(version))
 
