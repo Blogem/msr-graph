@@ -1,4 +1,4 @@
-"""Novelty-detection miner (novelty-detection spec, refine-mine-salience design.md D1/D5).
+"""Novelty-detection miner (novelty-detection spec, refine-mine-salience design.md D1-D3/D5).
 
 Enumerates candidate terms from two sources without re-running the chunk-6
 spaCy linker: (a) a **spaCy noun-chunk pass** (:func:`enumerate_spacy_terms`)
@@ -16,31 +16,45 @@ salt-formula-shaped spans, so it never surfaces arbitrary novel
 terminology such as ``solubility`` or ``graphite`` -- the spaCy/lexical pass
 is what makes those plain-prose terms discoverable at all.
 
-Before scoring, candidates whose normalized term already resolves to a
-known concept/class/individual in the **core dataset** (read through
-:class:`msr_extraction.graph_reader.GraphReader`, which itself is
-restricted to the three core ``FROM`` graphs) or that chunk 6 already
-linked (a ``status:"linked"`` record) are dropped. Staging and proposal
-graphs are never consulted -- the reader already excludes them, so this
-module deliberately adds no graph parameters of its own.
+Before scoring, candidates whose normalized term already resolves to a known
+concept/class/individual in the **core dataset** (read through
+:class:`msr_extraction.graph_reader.GraphReader`, which itself is restricted
+to the three core ``FROM`` graphs -- SKOS concepts incl. reactor concepts,
+ontology classes, physical properties, salts, and chunk-7's salt-role
+labels) or that chunk 6 already linked (a ``status:"linked"`` record) are
+dropped. Exclusion is normalization/token-sequence aware (design D2): both
+candidate terms and known labels are casefolded, camelCase-split, and
+separator-collapsed into a token sequence, and a candidate is excluded when
+some known label's *full* token sequence is a contiguous run within the
+candidate's (so ``molten salt`` excludes on the class label
+``MoltenSalt``, but a candidate merely sharing one token with a
+multi-token label is not excluded). Staging and proposal graphs are never
+consulted -- the reader already excludes them, so this module deliberately
+adds no graph parameters of its own.
 
-Surviving candidates are scored by **document frequency**: the number of
-the full 637-document OCR corpus (``config.archive_dir``, chunk 5's
-LFS-skip clone) whose case-folded text contains the term. Only candidates
-at or above ``config.salience_threshold`` are retained. Evidence
-(sentence text, source ``Document``, and offsets into that document's
-``normalized.txt``) is drawn only from the curated ~12-report set, where
-those offsets and ``msr:Document`` nodes exist, even though the frequency
-count itself spans all 637 documents.
+Document frequency (:func:`score_document_frequency`, unchanged) is a
+**coarse cost bound only, never a novelty rank** (design D3 -- the POC
+showed DF does not separate genuine targets from common/known phrases):
+surviving candidates below ``config.salience_threshold`` (the floor) are
+dropped, and if more than ``config.mine_max_candidates`` (the ceiling)
+survive, only the top-N by document frequency (deterministic
+``(-doc_frequency, term)`` tie-break) are kept as a pure runaway guard on
+triage fan-out, with the cut count logged. No keyness/weirdness/TF-IDF
+ranking is computed anywhere in this module. Evidence (sentence text,
+source ``Document``, and offsets into that document's ``normalized.txt``)
+is drawn only from the curated ~12-report set, where those offsets and
+``msr:Document`` nodes exist, even though the frequency count itself spans
+all 637 documents.
 
 Everything here is deterministic: no dict-order reliance, all returned
-collections sorted for reproducibility. Deliberately stdlib-only at
-module level (no third-party imports), mirroring ``mining_types.py`` and
-``mine_provenance.py`` -- this module reads only artifacts already on
-disk (``segments.jsonl``/``mentions.jsonl``/OCR ``*.txt``) and the graph
-via an injected :class:`~msr_extraction.graph_reader.GraphReader`, whose
-own third-party (``httpx``) dependency is deferred inside its call, not
-imported here.
+collections sorted for reproducibility (spaCy inference is deterministic at
+eval time -- no sampling). Deliberately stdlib-only at module level (no
+third-party imports, including spaCy itself -- see :func:`load_spacy_pipeline`),
+mirroring ``mining_types.py`` and ``mine_provenance.py`` -- this module reads
+only artifacts already on disk (``segments.jsonl``/``mentions.jsonl``/OCR
+``*.txt``) and the graph via an injected
+:class:`~msr_extraction.graph_reader.GraphReader`, whose own third-party
+(``httpx``) dependency is deferred inside its call, not imported here.
 """
 
 from __future__ import annotations
@@ -713,49 +727,92 @@ def score_document_frequency(terms: set[str], config: Config) -> dict[str, int]:
 
 
 def mine_candidates(
-    config: Config, reader: GraphReader, reports: list[str] = CURATED_REPORTS
+    config: Config,
+    reader: GraphReader,
+    reports: list[str] = CURATED_REPORTS,
+    *,
+    nlp: Any = None,
 ) -> list[Candidate]:
-    """Enumerate, exclude, score, and retain novelty candidates (the umbrella entry point).
+    """Enumerate, exclude, cost-bound, and retain novelty candidates (the umbrella entry point).
 
-    Pipeline: enumerate lexical terms (:func:`enumerate_lexical_terms`) and
-    read chunk-6 misses (:func:`read_miss_candidates`); drop any candidate
-    whose normalized term is in :func:`build_exclusion_set`; score the
-    surviving terms' document frequency (:func:`score_document_frequency`)
-    over the full corpus; keep only candidates at or above
-    ``config.salience_threshold``, attaching each kept candidate's
-    ``doc_frequency`` and evidence (lexical terms carry the evidence
-    collected during enumeration; miss candidates keep the evidence they
-    were built with). Returns the retained candidates sorted by ``term``
-    for determinism.
+    Pipeline (refine-mine-salience D1-D3):
+
+    1. **Enumerate.** If `nlp` is injected, use it directly; otherwise try
+       :func:`load_spacy_pipeline`. When a pipeline is available, enumerate
+       via the spaCy noun-chunk pass (:func:`enumerate_spacy_terms`);
+       otherwise log the fallback and use the prior lexical n-gram pass
+       (:func:`enumerate_lexical_terms`, design D5). Either way, also read
+       the unchanged chunk-6 salt-formula misses
+       (:func:`read_miss_candidates`).
+    2. **Harden-exclude.** Drop any candidate whose term is `in`
+       :func:`build_exclusion_set`'s :class:`ExclusionIndex` (normalization/
+       token-sequence aware, design D2).
+    3. **Cost-bound, not rank.** Score the survivors' document frequency
+       (:func:`score_document_frequency`, unchanged) over the full corpus;
+       drop anything below the ``config.salience_threshold`` floor. If more
+       than ``config.mine_max_candidates`` remain, keep only the top-N by
+       document frequency with a deterministic ``(-doc_frequency, term)``
+       tie-break (a pure runaway guard on triage fan-out -- explicitly NOT a
+       novelty ranking; no keyness/weirdness/TF-IDF is computed anywhere in
+       this module).
+    4. **Attach evidence.** Lexical/spaCy-sourced candidates carry the
+       evidence collected during enumeration (plus, for spaCy candidates,
+       the chunk's original `surface_form`); miss candidates keep the
+       evidence/`surface_form` they were built with.
+
+    Returns the retained candidates sorted by ``term`` for determinism, and
+    emits exactly one summary log line: candidates enumerated / excluded /
+    below-floor / cut-by-ceiling (never a silent truncation, design 5.2).
     """
-    lexical_evidence = enumerate_lexical_terms(reports, config)
+    if nlp is None:
+        nlp = load_spacy_pipeline(config)
+
+    surface_forms: dict[str, str] = {}
+    if nlp is not None:
+        spacy_hits = enumerate_spacy_terms(reports, config, nlp)
+        lexical_evidence: dict[str, tuple[Evidence, ...]] = {
+            term: hit.evidence for term, hit in spacy_hits.items()
+        }
+        surface_forms = {term: hit.surface_form for term, hit in spacy_hits.items()}
+    else:
+        logger.error(
+            "mine: spaCy pipeline unavailable; falling back to n-gram candidate enumeration"
+        )
+        lexical_evidence = {
+            term: tuple(evidence) for term, evidence in enumerate_lexical_terms(reports, config).items()
+        }
+
     miss_candidates = read_miss_candidates(reports, config)
     exclusion = build_exclusion_set(reader, reports, config)
+
+    enumerated_count = len(lexical_evidence) + len(miss_candidates)
 
     surviving_lexical = {
         term: evidence for term, evidence in lexical_evidence.items() if term not in exclusion
     }
     surviving_miss = [candidate for candidate in miss_candidates if candidate.term not in exclusion]
+    excluded_count = enumerated_count - (len(surviving_lexical) + len(surviving_miss))
 
     all_terms = set(surviving_lexical) | {candidate.term for candidate in surviving_miss}
     frequencies = score_document_frequency(all_terms, config)
 
-    retained: list[Candidate] = []
+    scored: list[Candidate] = []
     for term, evidence in surviving_lexical.items():
         doc_frequency = frequencies.get(term, 0)
         if doc_frequency >= config.salience_threshold:
-            retained.append(
+            scored.append(
                 Candidate(
                     term=term,
                     source="lexical",
-                    evidence=tuple(evidence),
+                    evidence=evidence,
                     doc_frequency=doc_frequency,
+                    surface_form=surface_forms.get(term, ""),
                 )
             )
     for candidate in surviving_miss:
         doc_frequency = frequencies.get(candidate.term, 0)
         if doc_frequency >= config.salience_threshold:
-            retained.append(
+            scored.append(
                 Candidate(
                     term=candidate.term,
                     source=candidate.source,
@@ -764,6 +821,22 @@ def mine_candidates(
                     surface_form=candidate.surface_form,
                 )
             )
+    below_floor_count = (len(surviving_lexical) + len(surviving_miss)) - len(scored)
 
-    retained.sort(key=lambda candidate: candidate.term)
-    return retained
+    cut_by_ceiling_count = 0
+    if len(scored) > config.mine_max_candidates:
+        scored.sort(key=lambda candidate: (-candidate.doc_frequency, candidate.term))
+        cut_by_ceiling_count = len(scored) - config.mine_max_candidates
+        scored = scored[: config.mine_max_candidates]
+
+    scored.sort(key=lambda candidate: candidate.term)
+
+    logger.info(
+        "mine: enumerated=%d excluded=%d below_floor=%d cut_by_ceiling=%d retained=%d",
+        enumerated_count,
+        excluded_count,
+        below_floor_count,
+        cut_by_ceiling_count,
+        len(scored),
+    )
+    return scored
