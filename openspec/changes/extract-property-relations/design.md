@@ -4,15 +4,17 @@
 
 Chunks 1, 2, 3, 5, 4 (`grounded-analysis-agent`), and 6 (`ner-entity-linking`) are all
 **merged to main and archived**; chunk 6's code lives in `extraction/` and is chunk 7's
-direct upstream. Since this proposal was first drafted, the **trust trilogy** also landed and
+direct upstream. Since this proposal was first drafted, the **trust quartet** also landed and
 archived on main and is now authoritative for chunk 7: `ground-demo-in-real-docs` (removed the
 hand-curated seed A-Box — the `example-flibe.ttl` salt/measurement duplicate, all
 `skos:closeMatch`, **and the entire `msr:hasRole`/`msr:usedIn` role/reactor TBox layer**,
 explicitly deferring the role/reactor layer's return to **chunk 7**), `provenance-model` (a
 PROV-O slice + the requirement that **every** pipeline-asserted individual carry both
-`prov:wasDerivedFrom` and `prov:wasGeneratedBy`), and `provenance-run-lineage` (the shared
+`prov:wasDerivedFrom` and `prov:wasGeneratedBy`), `provenance-run-lineage` (the shared
 `urn:msr:provenance` run-lineage graph and the reusable `extraction/src/msr_extraction/provenance.py`
-helper). The chunk-4 agent — now the synced `analysis-agent` main spec — is explicitly
+helper), and `shacl-validation` (RDF4J `ShaclSail` **enforcing those invariants at commit
+time** on the `msr` repo, so a non-conforming write is rejected atomically — see D13). The
+chunk-4 agent — now the synced `analysis-agent` main spec — is explicitly
 **schema-generic** ("data added by later chunks becomes answerable with no agent code change")
 and its `sql_query` reads `measurement_value` with no `source` filter, so chunk 7's
 `source='document'` rows and text-derived `PropertyMeasurement` nodes are answerable through
@@ -36,8 +38,8 @@ status:"linked"|"novel", target_iri, target_kind, layer, score}` — and the mat
   offsets into `normalized.txt`), the curated-set list, the `Document` nodes
   (`msrd:{report#}`), and the Python `SparqlClient` (UPDATE-only) plus the `cli.py`
   subcommand dispatcher.
-- **The trust trilogy** (`ground-demo-in-real-docs` → `provenance-model` →
-  `provenance-run-lineage`) reshapes three of chunk 7's obligations:
+- **The trust quartet** (`ground-demo-in-real-docs` → `provenance-model` →
+  `provenance-run-lineage` → `shacl-validation`) reshapes four of chunk 7's obligations:
   - **Generation provenance is mandatory.** The `provenance-model` main spec requires every
     pipeline-asserted individual — explicitly including `msr:PropertyMeasurement` — to carry
     **both** `prov:wasDerivedFrom` its source `prov:Entity` **and** `prov:wasGeneratedBy` a run
@@ -59,6 +61,15 @@ status:"linked"|"novel", target_iri, target_kind, layer, score}` — and the mat
     `msrd:MSRE` individual with the seed A-Box, because they were populated *only* by the
     deleted seed. The role/reactor **SKOS concepts survive in `vocab.ttl`** (for NER seeding).
     Chunk 7 re-adds the OWL layer and populates it from real extraction (D9).
+  - **SHACL enforces the invariants at commit time.** `shacl-validation` turned on RDF4J
+    `ShaclSail` on the `msr` repo, so every chunk-7 `INSERT DATA` is validated atomically:
+    `PropertyMeasurementShape` *requires* the seven properties chunk 7 emits (incl.
+    `prov:wasGeneratedBy` — so D12 is now a hard runtime gate, not just spec text),
+    `PropertyMeasurementUnitAllowlistShape` restricts `msr:hasUnit` to the same
+    `qudt-units.json` allowlist chunk 7 maps against, and `ValidTemperatureRangeShape` forbids
+    a half/inverted range. Chunk 7 conforms by construction and additionally surfaces a SHACL
+    rejection legibly on the Python write path, per the spec's "Validation reports legible to
+    writers" (which names extraction writers) — see D13.
 
 This change reads the linked mentions + segment text and the graph's known entities, has
 Flash extract relations from the sentences that carry linked mentions, validates every
@@ -239,6 +250,11 @@ a seed `msr:EquationForm` individual and places coefficients into `c0..c4`:
 - `validTempMin`/`Max` are set from an extracted validity range when present; for a
   `DiscretePoint` both equal the single measurement temperature (mirroring chunk 2's
   isotherm handling). Coefficients live **only** in SQLite; the graph carries the form.
+- **Both bounds or neither, `min ≤ max`.** The merged SHACL `ValidTemperatureRangeShape`
+  (D13) rejects a half-populated or inverted range. Chunk 7 therefore writes `validTempMin`
+  **and** `validTempMax` together or omits both — never just one — and orders them; a prose
+  correlation with no stated validity range writes neither bound (allowed), and a lone stated
+  bound is discarded (a half-range would fail validation at commit).
 
 ### D6 — Deterministic dual-store write, one shared locator
 
@@ -320,8 +336,11 @@ things ground-demo could not: it re-adds that TBox, and it populates it from rea
   mention resolving to a surviving reactor concept in `vocab.ttl` (e.g. the "MSRE" span linking
   to `voc:molten-salt-reactors`/its narrower concept). The minted individual has a deterministic
   IRI (`msrd:reactor-{slug}`, e.g. `msrd:reactor-msre`), is typed `a msr:MoltenSaltReactor`,
-  carries an `rdfs:label` and a link to its grounding vocab concept, and — as a
-  pipeline-asserted individual — carries `prov:wasDerivedFrom` the source `Document` and
+  carries an `rdfs:label` and a link to its grounding vocab concept **via a general-purpose
+  predicate, not `msr:linksTo`** (whose `rdfs:domain` is `msr:Mention`; `skos:exactMatch` or
+  `rdfs:seeAlso` fits and avoids the merged `LinksToTargetKindShape`/domain concerns entirely),
+  and — as a pipeline-asserted individual — carries `prov:wasDerivedFrom` the source `Document`
+  and
   `prov:wasGeneratedBy msrd:activity-extraction` plus a per-run generation edge (D12), so its
   identity is fully attributed to the document it came from. The salt↔reactor edge
   `msrd:{salt} msr:usedIn msrd:reactor-{slug}` is then written. Minting is deterministic (same
@@ -450,6 +469,45 @@ future chunk-13 SHACL shapes validate chunk-7 output for free.
   chunk-7-specific provenance path would duplicate a contract already tested against
   mentions/documents.
 
+### D13 — Chunk-7 writes must pass commit-time SHACL; the Python writer surfaces rejections
+
+The `msr` repo now enforces SHACL at commit (`shacl-validation`, RDF4J `ShaclSail`, inference
+off, per-transaction), so **every** chunk-7 `INSERT DATA` into `urn:msr:data` is validated
+atomically — a violating transaction is rejected wholesale and nothing persists. Chunk 7 is
+already designed to write conforming triples; the shapes make that a hard runtime guarantee
+rather than a convention:
+
+- **`PropertyMeasurementShape` requires `prov:wasDerivedFrom`, `prov:wasGeneratedBy`,
+  `msr:dataLocator`, `msr:forProperty`, `msr:ofSalt`, `msr:hasUnit`, `msr:equationForm` (each
+  minCount 1).** Chunk 7's measurement writer (D6) emits all seven, so it conforms — and D12's
+  `prov:wasGeneratedBy` is now **required**, not merely spec-compliant: omitting it would make
+  GraphDB reject the write. (`msr:citedIn` is deliberately *not* required by the shape and the
+  shape puts no `sh:maxCount` on the PROV edges, so the per-run generation edge accrual is fine.)
+- **`PropertyMeasurementUnitAllowlistShape` restricts `msr:hasUnit`** to the QUDT units in
+  `ontology/qudt-units.json` — the *same* allowlist `unit-qudt-mapping` (D4) maps against and
+  rejects misses app-side, so chunk 7's units conform by construction (defense in depth: the
+  app rejects an out-of-allowlist unit; SHACL would too).
+- **`ValidTemperatureRangeShape`** rejects a half-populated or inverted range, so chunk 7
+  writes both bounds or neither, ordered (D5).
+- **No shape targets `msr:MoltenSaltReactor` or `rdf:Statement`**, so minted reactors and
+  reification nodes are unconstrained by the current catalogue; chunk 7 still gives them full
+  generation provenance (D12) because the `provenance-model` spec requires it, and avoids
+  `msr:linksTo` on the reactor (D9) so it never trips `LinksToTargetKindShape`.
+
+**Surface SHACL rejections on the Python write path.** The `shacl-validation` "Validation
+reports legible to writers" requirement names **extraction writers** explicitly: a caller MUST
+be able to tell a validation rejection from a generic transport error. Today the Python
+`sparql.py` `SparqlClient.update()` only calls `response.raise_for_status()`, raising an opaque
+`HTTPStatusError`. Chunk 7 therefore adds Python-side classification — detecting a GraphDB SHACL
+validation rejection (the RDF4J validation-report response) and raising a typed
+`ValidationError` carrying the report, mirroring the Go loader's `ValidationError`. Because
+chunk 7 pre-validates app-side, a SHACL rejection signals a chunk-7 bug (a triple that passed
+app validation but violates a shape), so making it legible is a debugging guarantee, not an
+expected control-flow path.
+
+- _Scope note:_ this is a small additive change to the shared `sparql.py` (a helper chunk 6
+  also uses); it strictly widens error classification and does not change the success path.
+
 ### D10 — Test strategy
 
 Hermetic pytest, no live model and (for units) no GraphDB:
@@ -465,8 +523,9 @@ Hermetic pytest, no live model and (for units) no GraphDB:
 - **Equation-form/coefficient parsing** — each form maps to the right `msr:EquationForm`
   and `c0..c4`; coefficient-count-vs-form mismatch rejected.
 - **Measurement dual-store write** — a validated measurement → the exact expected
-  `INSERT DATA` triples (deterministic IRI, `msr:citedIn`, no blank nodes) against a fake
-  SPARQL client **and** the exact `measurement_value` row (`source='document'`, shared
+  `INSERT DATA` triples (deterministic IRI, `msr:citedIn`, `prov:wasDerivedFrom`,
+  `prov:wasGeneratedBy`, no blank nodes — the seven SHACL-required properties present) against
+  a fake SPARQL client **and** the exact `measurement_value` row (`source='document'`, shared
   locator, coefficients) against a temp SQLite DB; re-run leaves both unchanged
   (idempotency); no `-wal`/`-shm` sidecar after the write.
 - **Role/reactor edges** — a validated role statement → the expected `hasRole` triple to a
@@ -484,6 +543,14 @@ Hermetic pytest, no live model and (for units) no GraphDB:
   generation edge into `urn:msr:provenance`; a second wall-clock run appends a new per-run
   activity + edges while `urn:msr:data`/`measurement_value` counts are unchanged (append-only
   audit graph, stable fact stores). Reuses `provenance.py` (stub the clock/`run_ts`).
+- **SHACL conformance + rejection legibility (D13)** — a unit test asserts the emitted
+  measurement triples carry all seven `PropertyMeasurementShape`-required properties and only
+  allowlisted `msr:hasUnit` IRIs, and that a temp range is written both-bounds-or-neither
+  ordered; a Python `sparql.py` test feeds a simulated GraphDB SHACL validation-report response
+  and asserts `SparqlClient.update()` raises a typed `ValidationError` (with the report),
+  distinct from a generic transport error. The end-to-end "a real write is *accepted* by
+  SHACL" assertion lives in the guarded integration test (against a SHACL-enabled repo), not
+  the hermetic suite.
 - **Confidence + rationale + trace** — a written measurement carries queryable
   `msr:extractionConfidence`/`msr:extractionRationale` in the graph, and a written role/reactor
   edge is queryable via its `rdf:Statement` reification carrying the same properties (a NIST
@@ -493,11 +560,13 @@ Hermetic pytest, no live model and (for units) no GraphDB:
   with its reason; a multi-relation sentence yields one record per relation.
 - **Core-dataset read guard** — a salt/property present only in `urn:msr:staging` is not in
   the known-IRI set (inherited via chunk 6's reader; pinned by a test here too).
-- **Guarded integration** (opt-in env flag, mirroring chunk 1's `GRAPHDB_REQUIRED`): after
-  seed + catalog + `link` + a real `extract` run over ORNL-TM-2316, a known FLiBe viscosity
-  statement becomes a `PropertyMeasurement` with its value in `measurement_value` and
-  `msr:citedIn msrd:ORNL-TM-2316`, the chunk-4 agent (unchanged) answers a question using
-  it, and a second `extract` run leaves both stores' counts unchanged.
+- **Guarded integration** (opt-in env flag, mirroring chunk 1's `GRAPHDB_REQUIRED`): against a
+  **SHACL-enabled** `msr` repo, after seed + catalog + `link` + a real `extract` run over
+  ORNL-TM-2316, a known FLiBe viscosity statement becomes a `PropertyMeasurement` with its
+  value in `measurement_value` and `msr:citedIn msrd:ORNL-TM-2316` — its write **accepted by
+  SHACL** (proving it carries the seven required properties + an allowlisted unit) — the
+  chunk-4 agent (unchanged) answers a question using it, and a second `extract` run leaves both
+  fact stores' counts unchanged while `urn:msr:provenance` gains a second per-run activity.
 - **Manual acceptance run** — a real end-to-end `extract` over the curated docs with human
   inspection of the emitted measurements/edges (see tasks §9), so the change isn't "done"
   on green tests alone.
@@ -512,6 +581,14 @@ Hermetic pytest, no live model and (for units) no GraphDB:
 - **Go/Python SQLite runtime-contract drift** (a stray WAL sidecar would break the
   sandboxes' read-only mounts) → the Python writer pins `journal_mode=DELETE` +
   `busy_timeout` (D7) and a test asserts no `-wal`/`-shm` files appear next to the DB.
+- **A chunk-7 write is rejected by commit-time SHACL** (an incomplete measurement, a
+  half-populated temp range, an out-of-allowlist unit) → chunk 7 pre-validates every relation
+  app-side so conforming triples are written by construction (D3/D4/D5), and the shapes are a
+  defense-in-depth backstop, not the primary gate; the whole transaction is rejected atomically
+  (no partial write), and the Python `sparql.py` surfaces the rejection as a typed
+  `ValidationError` carrying the report so a mismatch is debuggable rather than an opaque 500
+  (D13). Because chunk 7 writes small per-fact transactions, they stay on GraphDB's
+  transactional-validation path (well under the configured limit).
 - **Text value conflicts with / duplicates a NIST value for the same salt+property** →
   distinct locator namespaces (`doc/{report#}/…` vs `nist-srd27/…`) keep them separate
   rows/nodes with distinct provenance; both remain answerable and the agent can cite each.
@@ -561,10 +638,15 @@ Hermetic pytest, no live model and (for units) no GraphDB:
 
 ## Migration Plan
 
-Additive on top of chunks 2 and 6 and the trust trilogy (all merged and archived). Chunk 7's
+Additive on top of chunks 2 and 6 and the trust quartet (all merged and archived). Chunk 7's
 two `ontology/msr.ttl` additions — the extraction-provenance vocabulary (D11) and the
 reintroduced role/reactor OWL layer (D9) — are committed **before** the bootstrap's initial
-`load-seed`, so they load into `urn:msr:ontology` up front. `make load-seed` now PUTs **only**
+`load-seed`, so they load into `urn:msr:ontology` up front. The SHACL shape catalogue is
+installed into the reserved shapes graph at stack bring-up (`make up`, via
+`scripts/ensure-repo.sh`), so `make extract`'s writes are validated at commit from the first
+run — chunk 7 adds **no** shape and changes **no** shape (its measurement/mention/unit
+invariants are already covered by the merged catalogue; `msr:MoltenSaltReactor` and
+`rdf:Statement` are intentionally unconstrained, D13). `make load-seed` now PUTs **only**
 the TBox and vocab (`msr.ttl` → `urn:msr:ontology`, `vocab.ttl` → `urn:msr:vocab`) and
 `CREATE SILENT`s `urn:msr:staging` — it **no longer touches `urn:msr:data`** (the seed A-Box
 `example-flibe.ttl` was removed by `ground-demo-in-real-docs`). The canonical fresh bootstrap
@@ -610,6 +692,15 @@ re-running `extract`.
   chunk 7 satisfies it by reusing the existing pipeline provenance helper for its measurements,
   minted reactors, and reification nodes, writing per-run lineage into `urn:msr:provenance`
   exactly as chunk 6 does for mentions/documents. No second provenance model is introduced.
+- **Commit-time SHACL — RESOLVED: conform by construction + surface rejections (D13).** The
+  merged `shacl-validation` `ShaclSail` validates every chunk-7 write. `PropertyMeasurementShape`
+  makes the seven measurement properties (incl. `prov:wasGeneratedBy`) a hard requirement, the
+  unit-allowlist shape shares chunk 7's `qudt-units.json` source, and the temp-range shape
+  forbids a half/inverted range — all of which chunk 7's app-side validation already guarantees,
+  so no chunk-7 write should ever be rejected in practice. Chunk 7 adds/changes no shape;
+  `msr:MoltenSaltReactor` and `rdf:Statement` nodes are left unconstrained by the catalogue.
+  Chunk 7 additionally classifies a SHACL rejection as a typed `ValidationError` on the Python
+  write path (the spec's "legible to writers" requirement names extraction writers).
 - **Uncertainty & extraction confidence — RESOLVED: capture both, in separate places,
   confidence queryable in the graph.** The source-stated _physical_ uncertainty string is
   captured into the `uncertainty` column / `msr:uncertainty` when the prose gives one (empty

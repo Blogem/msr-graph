@@ -46,9 +46,13 @@ Because `ground-demo-in-real-docs` removed all reactor individuals, the writer S
 is a chunk-6 `status:"linked"` mention resolving to a surviving reactor concept in `vocab.ttl`.
 The minted individual SHALL have a deterministic IRI (`msrd:reactor-{slug}`, e.g.
 `msrd:reactor-msre`), be typed `a msr:MoltenSaltReactor`, and carry an `rdfs:label` and a link
-to its grounding vocab concept. The writer SHALL then emit `msrd:{salt} msr:usedIn
-msrd:reactor-{slug}` into `urn:msr:data`. Minting SHALL be deterministic (the same reactor
-reference always yields the same IRI) and SHALL NOT create blank nodes.
+to its grounding vocab concept via a general-purpose predicate (e.g. `skos:exactMatch` or
+`rdfs:seeAlso`) — **not** `msr:linksTo`, whose `rdfs:domain` is `msr:Mention` and which is
+constrained by the merged SHACL `LinksToTargetKindShape`. The writer SHALL then emit
+`msrd:{salt} msr:usedIn msrd:reactor-{slug}` into `urn:msr:data`. Minting SHALL be deterministic
+(the same reactor reference always yields the same IRI) and SHALL NOT create blank nodes. No
+installed SHACL shape targets `msr:MoltenSaltReactor`, so the minted individual is unconstrained
+by the current catalogue.
 
 #### Scenario: A used-in statement mints a reactor and a usedIn edge
 - **WHEN** a validated statement asserts the loaded FLiBe salt was used in the MSRE, and the "MSRE" span is a chunk-6 `linked` mention to the reactor vocab concept

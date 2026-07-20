@@ -26,6 +26,10 @@ not the numbers.
 - **WHEN** the extractor yields a single measured value at one temperature
 - **THEN** the writer maps it to `msr:DiscretePoint` with the value in `c0` and the temperature in `c1`, and sets `validTempMin` equal to `validTempMax`
 
+#### Scenario: A validity range is written both-bounds-or-neither, ordered
+- **WHEN** a correlation is written with no stated validity range, or with only a single stated bound
+- **THEN** the writer emits neither `msr:validTempMin` nor `msr:validTempMax` (a lone bound is dropped), and whenever both are emitted `validTempMin ≤ validTempMax` — so the write satisfies the merged SHACL `ValidTemperatureRangeShape` rather than being rejected at commit
+
 #### Scenario: A coefficient-count mismatch is rejected
 - **WHEN** the extracted coefficients do not match the mapped equation form's arity
 - **THEN** the measurement is rejected and nothing is written
@@ -91,6 +95,27 @@ shared by the run.
 #### Scenario: The provenance graph is append-only across runs
 - **WHEN** the extraction runs twice at distinct wall-clock timestamps over the same corpus
 - **THEN** `urn:msr:data`'s triple count and `measurement_value`'s row count are unchanged, while `urn:msr:provenance` gains a second per-run activity node and a second set of generation edges
+
+### Requirement: Writes conform to commit-time SHACL and rejections are surfaced legibly
+The writer's `urn:msr:data` writes SHALL satisfy the installed SHACL shapes by construction,
+because the `msr` GraphDB repository enforces SHACL at commit (`shacl-validation`): every
+text-derived `msr:PropertyMeasurement` carries the seven properties `PropertyMeasurementShape`
+requires
+(`prov:wasDerivedFrom`, `prov:wasGeneratedBy`, `msr:dataLocator`, `msr:forProperty`,
+`msr:ofSalt`, `msr:hasUnit`, `msr:equationForm`), an `msr:hasUnit` in the QUDT allowlist, and a
+both-bounds-or-neither ordered temperature range. When a commit is nonetheless rejected by
+SHACL, the Python write path (`sparql.py`) SHALL surface it as a typed validation error carrying
+the RDF4J validation report — distinct from a generic transport error — so a rejected write is
+debuggable (satisfying the `shacl-validation` "reports legible to writers" requirement, which
+names extraction writers). Chunk 7 adds and changes no SHACL shape.
+
+#### Scenario: A conforming measurement is accepted by SHACL
+- **WHEN** a validated text-derived measurement carrying all seven required properties and an allowlisted unit is committed to the SHACL-enabled `msr` repo
+- **THEN** the commit succeeds and the measurement is queryable
+
+#### Scenario: A SHACL rejection is surfaced as a typed validation error
+- **WHEN** a graph write is rejected by the repository's SHACL validation
+- **THEN** the Python write path raises a typed validation error carrying the validation report (naming the failing shape/focus node), distinguishable from a generic transport failure
 
 ### Requirement: Extraction-provenance vocabulary in the seed ontology
 The change SHALL add a small, self-contained extraction-provenance vocabulary to

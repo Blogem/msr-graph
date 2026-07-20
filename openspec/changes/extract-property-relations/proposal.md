@@ -50,6 +50,15 @@ _known_ schema (novel concepts like `solubility` are chunk 8's job).
   stable `msrd:activity-extraction` in `urn:msr:data` and a per-run generation edge into the
   append-only `urn:msr:provenance` graph — identical in shape to how chunk 6 provenances its
   mentions and documents.
+- **Conforms to commit-time SHACL; rejections surfaced legibly**: with the merged
+  `shacl-validation` `ShaclSail` now validating every write on the `msr` repo,
+  `PropertyMeasurementShape` *requires* the seven properties chunk 7 emits (so
+  `prov:wasGeneratedBy` is a hard runtime gate), `PropertyMeasurementUnitAllowlistShape`
+  restricts `msr:hasUnit` to the same `qudt-units.json` chunk 7 maps against, and
+  `ValidTemperatureRangeShape` forbids a half/inverted range (chunk 7 writes both bounds or
+  neither). Chunk 7 conforms by construction, and additively extends the shared Python
+  `sparql.py` to classify a GraphDB SHACL rejection as a typed `ValidationError` (the
+  `shacl-validation` "reports legible to writers" requirement names extraction writers).
 - **Queryable extraction confidence + rationale**: each extracted relation carries an
   extraction confidence and a short rationale, persisted **queryably in the graph** via a
   small additive TBox (`msr:extractionConfidence`, `msr:extractionRationale`) — directly on a
@@ -111,10 +120,13 @@ _known_ schema (novel concepts like `solubility` are chunk 8's job).
 Otherwise additive: this change reads through the existing `core-dataset-access` contract,
 consumes the chunk-6 mentions and prompt builder and the chunk-2 salt catalog + QUDT
 allowlist, reuses the `provenance-model` pipeline provenance helper, and grows the
-`container-stack` `extraction` image additively without changing their requirements. (The
-role/reactor OWL TBox it re-adds to `ontology/msr.ttl` is the return of a layer
-`ground-demo-in-real-docs` explicitly deferred to chunk 7, not a modification of a current
-capability's requirements.)
+`container-stack` `extraction` image additively without changing their requirements. It
+**conforms to** the merged `shacl-validation` capability (its writes satisfy the installed
+shapes and it adds/changes no shape) and helps fulfill that spec's "reports legible to
+writers" requirement for extraction writers via the additive `sparql.py` change — it does not
+modify SHACL's requirements. (The role/reactor OWL TBox it re-adds to `ontology/msr.ttl` is the
+return of a layer `ground-demo-in-real-docs` explicitly deferred to chunk 7, not a modification
+of a current capability's requirements.)
 
 ## Impact
 
@@ -123,7 +135,8 @@ capability's requirements.)
   Python `measurement_value` writer honoring the SQLite runtime contract, a text-measurement
   triple writer, a salt role/reactor edge writer incl. a grounded reactor minter, and an
   `extract` CLI subcommand that also emits the run's provenance) plus a `pytest` suite under
-  `extraction/tests/`.
+  `extraction/tests/`; a small additive extension to the shared `sparql.py` to classify a
+  GraphDB SHACL rejection as a typed `ValidationError` (mirroring the Go loader).
 - **Reused (not re-derived)**: chunk 6's Python core-dataset graph reader (known-IRI set),
   its cached KG-schema prompt builder (`kg-schema-prompt`), the pipeline provenance helper
   `provenance.py` (stable + per-run generation lineage), and chunk 5's Python SPARQL-UPDATE
@@ -154,8 +167,9 @@ capability's requirements.)
 - **Depends on**: chunk 2 (`load-nist-structured-data` — the salt catalog, the
   `measurement_value` table, the QUDT allowlist, `PropertyMeasurement` triple shape), chunk 6
   (`ner-entity-linking` — `mentions.jsonl`, the `msr:Mention` triples, the graph reader, the
-  KG-schema prompt builder), and the trust trilogy (`ground-demo-in-real-docs` — the removed
+  KG-schema prompt builder), and the trust quartet (`ground-demo-in-real-docs` — the removed
   role/reactor layer chunk 7 restores; `provenance-model` + `provenance-run-lineage` — the
-  generation-provenance contract and the reused `provenance.py`). **Downstream**: nothing
-  consumes chunk 7 except the chunk-4 agent's (unchanged) answer surface and the chunk-10
-  demo — it has no dependents, so it may run alongside P5.
+  generation-provenance contract and the reused `provenance.py`; `shacl-validation` — the
+  commit-time shapes chunk 7's writes must satisfy). **Downstream**: nothing consumes chunk 7
+  except the chunk-4 agent's (unchanged) answer surface and the chunk-10 demo — it has no
+  dependents, so it may run alongside P5.
