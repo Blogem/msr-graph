@@ -36,9 +36,10 @@ func reportError(w io.Writer, err error) {
 	var ve *graph.ValidationError
 	if errors.As(err, &ve) {
 		fmt.Fprintln(w, "loader: SHACL validation rejected the write (not a transport/5xx failure):")
-		fmt.Fprintln(w, "loader:", err)
 		if len(ve.Violations) == 0 {
-			fmt.Fprintln(w, "loader:   (no individual violation detail could be parsed from the report; see above)")
+			fmt.Fprintln(w, "loader:   (no violations parsed; raw report follows)")
+			fmt.Fprintln(w, ve.Report)
+			return
 		}
 		for _, v := range ve.Violations {
 			fmt.Fprintf(w, "loader:   - focus node=%s constraint=%s shape=%s path=%s message=%s\n",
