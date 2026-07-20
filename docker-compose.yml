@@ -171,6 +171,17 @@ services:
       # keeps keyless/compatible endpoints working (see FlashClient).
       DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
       LLM_MODEL_EXTRACT: ${LLM_MODEL_EXTRACT:-deepseek-v4-flash}
+      # Layer-5 disambiguation concurrency and mention-write batch size
+      # (scale-mention-linking). Tunable via .env; defaults mirror Config.
+      # Raise MSR_DISAMBIG_CONCURRENCY to overlap more Flash calls (they are
+      # I/O-bound); the openai client retries transient 429/5xx so higher
+      # values stay safe under rate limits.
+      MSR_DISAMBIG_CONCURRENCY: ${MSR_DISAMBIG_CONCURRENCY:-24}
+      MSR_MENTION_WRITE_BATCH_SIZE: ${MSR_MENTION_WRITE_BATCH_SIZE:-500}
+      # Set MSR_DISAMBIG_REFRESH=1 to ignore the persisted disambiguation
+      # cache (data/corpus/disambiguation-cache.json) and re-resolve every
+      # layer-5 surface via the model (persist-disambiguation-cache).
+      MSR_DISAMBIG_REFRESH: ${MSR_DISAMBIG_REFRESH:-}
     volumes:
       - ./data:/data
       - ./ontology:/app/ontology:ro

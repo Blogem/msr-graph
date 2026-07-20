@@ -17,6 +17,9 @@ collaborators are faked.
 from __future__ import annotations
 
 import json
+import re
+import threading
+import time
 from types import SimpleNamespace
 
 import pytest
@@ -58,6 +61,55 @@ class _FakeSparqlClient:
 
     def update(self, sparql_update: str) -> None:
         self.updates.append(sparql_update)
+
+
+class _CountingFlashClient:
+    """Fake `Completer` recording every `complete()` call's mention surface.
+
+    Always declares the span novel, so layer 5 records it as novel without
+    linking -- this test only cares about *how many* model calls happen and
+    for which surface (parsed out of the `Mention: "..."` line the
+    disambiguation user prompt embeds).
+    """
+
+    def __init__(self) -> None:
+        self.surfaces: list[str] = []
+
+    def complete(self, system_prompt: str, user_prompt: str) -> str:
+        match = re.search(r'Mention: "([^"]*)"', user_prompt)
+        self.surfaces.append(match.group(1) if match else "")
+        return json.dumps({"novel": True})
+
+
+class _LinkingFlashClient:
+    """Fake `Completer` that always links to a fixed IRI."""
+
+    def __init__(self, target_iri: str) -> None:
+        self.target_iri = target_iri
+
+    def complete(self, system_prompt: str, user_prompt: str) -> str:
+        return json.dumps({"link": self.target_iri})
+
+
+class _ConcurrencyTrackingFlashClient:
+    """Fake `Completer` recording the peak number of concurrent `complete()`
+    calls, to prove the pre-warm pool runs more than one at a time."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self.in_flight = 0
+        self.max_in_flight = 0
+        self.calls = 0
+
+    def complete(self, system_prompt: str, user_prompt: str) -> str:
+        with self._lock:
+            self.in_flight += 1
+            self.calls += 1
+            self.max_in_flight = max(self.max_in_flight, self.in_flight)
+        time.sleep(0.1)
+        with self._lock:
+            self.in_flight -= 1
+        return json.dumps({"novel": True})
 
 
 def _known_entities() -> list[KnownEntity]:
@@ -142,6 +194,222 @@ def test_cmd_link_smoke_links_report_writes_mentions_and_graph(tmp_path, monkeyp
         "INSERT DATA {" in update and "GRAPH <urn:msr:data>" in update and "a msr:Mention" in update
         for update in fake_sparql.updates
     ), f"expected an INSERT DATA update against urn:msr:data with a msr:Mention, got: {fake_sparql.updates}"
+
+
+def test_cmd_link_memoizes_disambiguation_by_surface(tmp_path, monkeypatch) -> None:
+    """Layer-5 disambiguation is memoized per surface within a run.
+
+    A single segment mentions the unresolved salt-shaped span "NaCl-KCl"
+    twice and "KF-ZrF4" once (both separator-joined formulas, so they are
+    candidate spans, but absent from `_known_entities`, so they fall through
+    layers 2-4 to layer 5; the surrounding words are lowercase so they are
+    not themselves candidates). The counting Flash fake proves the second
+    "NaCl-KCl" was served from cache: it produces two mention records but
+    only one model call, and no surface is ever sent to the model twice.
+    """
+    monkeypatch.setenv("MSR_CORPUS_DIR", str(tmp_path))
+    monkeypatch.setattr(curated, "CURATED_REPORTS", [REPORT])
+
+    known = _known_entities()
+    monkeypatch.setattr(
+        cli,
+        "GraphReader",
+        SimpleNamespace(from_config=lambda config: _FakeGraphReader(known)),
+    )
+    monkeypatch.setattr(
+        cli,
+        "SparqlClient",
+        SimpleNamespace(from_config=lambda config: _FakeSparqlClient()),
+    )
+    fake_flash = _CountingFlashClient()
+    monkeypatch.setattr(
+        cli,
+        "FlashClient",
+        SimpleNamespace(from_config=lambda config: fake_flash),
+    )
+
+    report_dir = tmp_path / REPORT
+    report_dir.mkdir(parents=True)
+    text = "molten NaCl-KCl was tested. later NaCl-KCl again, and KF-ZrF4 too."
+    segment = {
+        "report": REPORT,
+        "index": 0,
+        "text": text,
+        "char_start": 0,
+        "char_end": len(text),
+    }
+    (report_dir / "segments.jsonl").write_text(json.dumps(segment) + "\n", encoding="utf-8")
+
+    result = cli.main(["link"])
+    assert result == 0
+
+    records = [
+        json.loads(line)
+        for line in (report_dir / "mentions.jsonl").read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    nacl_records = [r for r in records if r["surface_form"] == "NaCl-KCl"]
+    assert len(nacl_records) == 2, f"expected NaCl-KCl to be mentioned twice, got: {records}"
+
+    # ...yet Flash was called only once for NaCl-KCl (second occurrence
+    # cached), KF-ZrF4 once, and no surface was ever sent to the model twice.
+    assert fake_flash.surfaces.count("NaCl-KCl") == 1, fake_flash.surfaces
+    assert fake_flash.surfaces.count("KF-ZrF4") == 1, fake_flash.surfaces
+    assert len(fake_flash.surfaces) == len(set(fake_flash.surfaces)), (
+        f"a surface was sent to Flash more than once (cache miss): {fake_flash.surfaces}"
+    )
+
+
+def test_cmd_link_prewarm_linked_outcome_flows_into_mentions(tmp_path, monkeypatch) -> None:
+    """A disambiguation that returns a link resolves the span in the real
+    pass: the concurrent pre-warm populates the cache, and the caching
+    disambiguator applies the linked outcome to the layer-5 mention record."""
+    monkeypatch.setenv("MSR_CORPUS_DIR", str(tmp_path))
+    monkeypatch.setattr(curated, "CURATED_REPORTS", [REPORT])
+
+    known = _known_entities()
+    monkeypatch.setattr(
+        cli, "GraphReader",
+        SimpleNamespace(from_config=lambda config: _FakeGraphReader(known)),
+    )
+    monkeypatch.setattr(
+        cli, "SparqlClient",
+        SimpleNamespace(from_config=lambda config: _FakeSparqlClient()),
+    )
+    monkeypatch.setattr(
+        cli, "FlashClient",
+        SimpleNamespace(from_config=lambda config: _LinkingFlashClient(SALT_IRI)),
+    )
+
+    report_dir = tmp_path / REPORT
+    report_dir.mkdir(parents=True)
+    text = "molten NaCl-KCl was tested."
+    segment = {"report": REPORT, "index": 0, "text": text, "char_start": 0, "char_end": len(text)}
+    (report_dir / "segments.jsonl").write_text(json.dumps(segment) + "\n", encoding="utf-8")
+
+    assert cli.main(["link"]) == 0
+
+    records = [
+        json.loads(line)
+        for line in (report_dir / "mentions.jsonl").read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    nacl = [r for r in records if r["surface_form"] == "NaCl-KCl"]
+    assert nacl, f"expected a NaCl-KCl record, got: {records}"
+    assert nacl[0]["status"] == "linked"
+    assert nacl[0]["target_iri"] == SALT_IRI
+    assert nacl[0]["layer"] == 5
+
+
+def test_cmd_link_prewarm_resolves_surfaces_concurrently(tmp_path, monkeypatch) -> None:
+    """Several distinct unresolved surfaces are resolved by the pre-warm pool
+    with more than one model call in flight at once (not strictly serial)."""
+    monkeypatch.setenv("MSR_CORPUS_DIR", str(tmp_path))
+    monkeypatch.setenv("MSR_DISAMBIG_CONCURRENCY", "8")
+    monkeypatch.setattr(curated, "CURATED_REPORTS", [REPORT])
+
+    known = _known_entities()
+    monkeypatch.setattr(
+        cli, "GraphReader",
+        SimpleNamespace(from_config=lambda config: _FakeGraphReader(known)),
+    )
+    monkeypatch.setattr(
+        cli, "SparqlClient",
+        SimpleNamespace(from_config=lambda config: _FakeSparqlClient()),
+    )
+    fake = _ConcurrencyTrackingFlashClient()
+    monkeypatch.setattr(
+        cli, "FlashClient",
+        SimpleNamespace(from_config=lambda config: fake),
+    )
+
+    report_dir = tmp_path / REPORT
+    report_dir.mkdir(parents=True)
+    # Four distinct salt-shaped spans, none in _known_entities -> all reach
+    # layer 5 and are pending together in the pre-warm pool.
+    text = "melts NaCl-KCl and KF-ZrF4 and MgF2-CaF2 and RbF-CsF were compared."
+    segment = {"report": REPORT, "index": 0, "text": text, "char_start": 0, "char_end": len(text)}
+    (report_dir / "segments.jsonl").write_text(json.dumps(segment) + "\n", encoding="utf-8")
+
+    assert cli.main(["link"]) == 0
+
+    assert fake.calls == 4, f"expected one call per distinct surface, got {fake.calls}"
+    assert fake.max_in_flight >= 2, (
+        f"expected concurrent resolution, peak in-flight was {fake.max_in_flight}"
+    )
+
+
+def _setup_single_unresolved_report(tmp_path, monkeypatch, known):
+    """Wire a hermetic link run over one report whose segment holds a single
+    unresolved layer-5 surface ("NaCl-KCl"). Returns nothing; callers patch
+    FlashClient themselves per run."""
+    monkeypatch.setenv("MSR_CORPUS_DIR", str(tmp_path))
+    monkeypatch.setattr(curated, "CURATED_REPORTS", [REPORT])
+    monkeypatch.setattr(
+        cli, "GraphReader",
+        SimpleNamespace(from_config=lambda config: _FakeGraphReader(known)),
+    )
+    monkeypatch.setattr(
+        cli, "SparqlClient",
+        SimpleNamespace(from_config=lambda config: _FakeSparqlClient()),
+    )
+    report_dir = tmp_path / REPORT
+    report_dir.mkdir(parents=True)
+    text = "molten NaCl-KCl was tested."
+    segment = {"report": REPORT, "index": 0, "text": text, "char_start": 0, "char_end": len(text)}
+    (report_dir / "segments.jsonl").write_text(json.dumps(segment) + "\n", encoding="utf-8")
+
+
+def _run_link_with_counting_client(monkeypatch) -> _CountingFlashClient:
+    fake = _CountingFlashClient()
+    monkeypatch.setattr(cli, "FlashClient", SimpleNamespace(from_config=lambda config: fake))
+    assert cli.main(["link"]) == 0
+    return fake
+
+
+def test_second_run_uses_persisted_cache_and_makes_no_model_calls(tmp_path, monkeypatch) -> None:
+    """A first run persists its layer-5 outcome; a second run over the same
+    graph + corpus seeds from the cache and issues zero model calls."""
+    _setup_single_unresolved_report(tmp_path, monkeypatch, _known_entities())
+
+    first = _run_link_with_counting_client(monkeypatch)
+    assert first.surfaces == ["NaCl-KCl"], first.surfaces
+    assert (tmp_path / "disambiguation-cache.json").exists()
+
+    second = _run_link_with_counting_client(monkeypatch)
+    assert second.surfaces == [], f"second run should hit cache, got {second.surfaces}"
+
+
+def test_refresh_flag_forces_re_resolution(tmp_path, monkeypatch) -> None:
+    """MSR_DISAMBIG_REFRESH re-resolves despite a matching persisted cache."""
+    _setup_single_unresolved_report(tmp_path, monkeypatch, _known_entities())
+    _run_link_with_counting_client(monkeypatch)  # populate cache
+
+    monkeypatch.setenv("MSR_DISAMBIG_REFRESH", "1")
+    refreshed = _run_link_with_counting_client(monkeypatch)
+    assert refreshed.surfaces == ["NaCl-KCl"], refreshed.surfaces
+
+
+def test_changed_known_iris_invalidates_cache(tmp_path, monkeypatch) -> None:
+    """A different known-IRI set is a cache miss: the run re-resolves and
+    rewrites the store with the new hash."""
+    _setup_single_unresolved_report(tmp_path, monkeypatch, _known_entities())
+    _run_link_with_counting_client(monkeypatch)  # populate cache for known set 1
+
+    # Add an entity -> the known-IRI set (and its hash) changes.
+    extended = _known_entities() + [
+        KnownEntity(
+            target_iri="https://w3id.org/msr-kg/data#salt-extra",
+            labels=("Extra",),
+            kind="salt",
+        )
+    ]
+    monkeypatch.setattr(
+        cli, "GraphReader",
+        SimpleNamespace(from_config=lambda config: _FakeGraphReader(extended)),
+    )
+    after_change = _run_link_with_counting_client(monkeypatch)
+    assert after_change.surfaces == ["NaCl-KCl"], after_change.surfaces
 
 
 # --- `_resolve_link_reports` (pure helper) -----------------------------------
