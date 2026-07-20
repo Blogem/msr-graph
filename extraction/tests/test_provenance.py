@@ -26,7 +26,13 @@ from __future__ import annotations
 
 import re
 
-from msr_extraction.provenance import activity_insert_data, write_activity
+from msr_extraction.provenance import (
+    EXTRACTION_VERSION,
+    activity_insert_data,
+    stable_activity_insert_data,
+    write_activity,
+    write_stable_activity,
+)
 
 RUN_TS = "2024-01-02T03:04:05+00:00"
 OTHER_RUN_TS = "2024-06-07T08:09:10+00:00"
@@ -115,3 +121,41 @@ def test_write_activity_sends_exactly_one_update() -> None:
     assert len(client.calls) == 1
     assert "GRAPH <urn:msr:provenance>" in client.calls[0]
     assert f"urn:msr:run:extraction/{RUN_TS}" in client.calls[0]
+
+
+def test_stable_activity_insert_data_targets_the_data_graph() -> None:
+    """Covers the CRITICAL fix: the stable per-pipeline Activity
+    (msrd:activity-extraction) must be typed in GRAPH <urn:msr:data> --
+    mirrors the Go loader's buildInsertData typing of
+    msrd:activity-loader-nist (design.md D1, "The stable pipeline
+    activity is typed idempotently in the data graph" scenario)."""
+    update = _collapse_ws(stable_activity_insert_data())
+    assert "INSERT DATA" in update
+    assert "GRAPH <urn:msr:data>" in update
+    assert "msrd:activity-extraction a prov:Activity" in update
+    assert f"prov:wasAssociatedWith <agent:extraction@{EXTRACTION_VERSION}>" in update
+    assert "owl:versionInfo" in update
+
+
+def test_stable_activity_insert_data_has_no_timestamps() -> None:
+    """The stable Activity typing must carry NO timestamp literals -- no
+    prov:startedAtTime/prov:endedAtTime/xsd:dateTime -- so it re-asserts
+    as a set-semantics no-op across re-runs in urn:msr:data (design.md
+    D1/D4). Mirrors the Go TestBuildInsertData_StableActivityNoTimestamps
+    intent."""
+    update = stable_activity_insert_data()
+    assert "prov:startedAtTime" not in update
+    assert "prov:endedAtTime" not in update
+    assert "xsd:dateTime" not in update
+
+
+def test_stable_activity_insert_data_is_deterministic() -> None:
+    assert stable_activity_insert_data() == stable_activity_insert_data()
+
+
+def test_write_stable_activity_sends_exactly_one_update() -> None:
+    client = _FakeSparqlClient()
+    write_stable_activity(client)
+    assert len(client.calls) == 1
+    assert "GRAPH <urn:msr:data>" in client.calls[0]
+    assert "msrd:activity-extraction a prov:Activity" in client.calls[0]
