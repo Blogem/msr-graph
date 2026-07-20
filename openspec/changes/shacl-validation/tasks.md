@@ -7,8 +7,8 @@
 
 ## 2. Author the shape catalogue
 
-- [ ] 2.1 Create the shapes artifact (`deploy/graphdb/msr-shapes.ttl`) with the `msr:PropertyMeasurement` provenance+completeness shape (`prov:wasDerivedFrom`, `msr:dataLocator`, `msr:citedIn`, `msr:forProperty`, `msr:ofSalt`, `msr:hasUnit`, `msr:equationForm` — minCount 1 each).
-- [ ] 2.2 Add the `msr:Mention` shape (`msr:inDocument`, `msr:startOffset`, `msr:endOffset`, `msr:surfaceForm` — minCount 1 each).
+- [ ] 2.1 Create the shapes artifact (`deploy/graphdb/msr-shapes.ttl`) with the `msr:PropertyMeasurement` provenance+completeness shape (`prov:wasDerivedFrom`, `prov:wasGeneratedBy`, `msr:dataLocator`, `msr:forProperty`, `msr:ofSalt`, `msr:hasUnit`, `msr:equationForm` — minCount 1 each). Do **not** require `msr:citedIn`: no writer asserts a per-row citation yet (deferred to chunk 7 per the landed chunk 12 design D3), so requiring it would reject every real measurement.
+- [ ] 2.2 Add the `msr:Mention` shape (`msr:inDocument`, `msr:startOffset`, `msr:endOffset`, `msr:surfaceForm`, `prov:wasDerivedFrom`, `prov:wasGeneratedBy` — minCount 1 each; every mention writer already emits all six per the landed `provenance-model`).
 - [ ] 2.3 Add the valid-temperature-range shape via a `sh:sparql` constraint whose `SELECT` filters `validTempMin > validTempMax` (and flags a half-populated range) — per D4, a filter inside `sh:sparql`, not an unsupported pairwise-comparison component.
 - [ ] 2.4 Add the `msr:linksTo` target-kind shape: prefer Core `sh:class`/`sh:nodeKind` (matches explicit `rdf:type`, since inference is off — D4); use `sh:sparql` (confirmed supported) for the existence/expected-kind check where Core cannot express it.
 

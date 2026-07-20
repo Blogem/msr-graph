@@ -1,6 +1,6 @@
 ## Context
 
-The `msr` GraphDB repository (11.4.2, inference disabled per D2) accepts any well-formed RDF; the ontology's `rdfs:domain`/`rdfs:range` declarations and the provenance model are documentation, not enforcement. This change adds the write-time validation layer described in `docs/PROVENANCE_AND_TRUST_DESIGN.md` §2. It is chunk 13 of Phase P3.5 and is sequenced **after** chunk 12 `provenance-model`, which defines the PROV-O vocabulary the shapes require.
+The `msr` GraphDB repository (11.4.2, inference disabled per D2) accepts any well-formed RDF; the ontology's `rdfs:domain`/`rdfs:range` declarations and the provenance model are documentation, not enforcement. This change adds the write-time validation layer described in `docs/PROVENANCE_AND_TRUST_DESIGN.md` §2. It is chunk 13 of Phase P3.5 and is sequenced **after** chunk 12 `provenance-model` (**now landed and archived**), which added the PROV-O vocabulary and made every writer emit `prov:wasDerivedFrom` + `prov:wasGeneratedBy` — so the predicates these shapes require are already asserted on real writes.
 
 Current state:
 
@@ -21,7 +21,7 @@ Current state:
 
 **Non-Goals:**
 
-- Defining the PROV-O vocabulary or retrofitting writers to emit provenance — that is chunk 12 `provenance-model`.
+- Defining the PROV-O vocabulary or retrofitting writers to emit provenance — that is chunk 12 `provenance-model` (landed).
 - A human-in-the-loop review/promotion workflow — SHACL is the enforcement gate; the review UI is chunk 9 (demonstration).
 - Any new domain/safety schema (chunk 11, IAEA).
 - RDF-star / statement-level annotation — explicitly rejected at POC scale in the design doc.
@@ -92,14 +92,14 @@ Because provisioning is check-then-create, an existing pre-SHACL `msr` repo on a
 ## Risks / Trade-offs
 
 - **[Exact 11.4.2 sail-type string]** → The config surface is now determined (D1): `graphdb:ShaclSail` wrapper + `sail:delegate`, `sail-shacl:` params, reserved shapes graph. The one residual is confirming the sail-type literal is `graphdb:ShaclSail` (GraphDB-native, matches UI-generated config) vs. `rdf4j:ShaclSail` on 11.4.2 exactly. Mitigation: the config-apply task verifies by round-tripping the config through GraphDB's own "create then download config" and diffing — no guessing.
-- **[Chunk 12 not yet landed]** → Shapes requiring `prov:wasDerivedFrom`/`citedIn` reject _all_ writes until every writer emits them. Mitigation: sequence 12 → 13; until 12 lands, gate the provenance-requiring shapes behind that dependency (author them, but the integration suite that asserts acceptance of valid data needs chunk-12-shaped fixtures). Flag clearly if 13 is implemented first.
+- **[Chunk 12 landed — provenance present]** → Chunk 12 `provenance-model` is landed and archived, so every measurement/mention already carries `prov:wasDerivedFrom` + `prov:wasGeneratedBy`; the provenance-requiring shapes reject-if-absent without blocking valid writes. `msr:citedIn` is the one predicate no writer asserts (deferred to chunk 7), so the shapes deliberately do **not** require it — requiring it would reject every real measurement. Integration fixtures asserting acceptance of valid data must include the PROV edges the writers now emit.
 - **[Recreating the repo drops existing data]** → A developer bringing up on an old `graphdb-data` volume would get a silently pre-SHACL repo (check-then-create no-ops). Mitigation: D7 makes `ensure-repo.sh` detect and warn/fail on a non-SHACL existing repo, plus the documented volume-drop step. Acceptable data loss — POC data is disposable/replayable.
 - **[SHACL feature limits]** → GraphDB's engine omits some SHACL features (zero-or-more paths, `sh:xone`, qualified shapes, `sh:closed`, pairwise comparisons — see D4). Mitigation: none of our shapes need them; the one comparison (`validTempMin ≤ validTempMax`) is a filter inside a `sh:sparql` `SELECT`, which is supported. If a future shape needs an omitted feature, express it via `sh:sparql` or document the gap.
 - **[Test flakiness / GraphDB dependency]** → Validation behavior can only be truly exercised against a real GraphDB. Mitigation: opt-in integration tests consistent with the existing `internal/graph` pattern; do not attempt to unit-test the engine.
 
 ## Migration Plan
 
-1. Land chunk 12 `provenance-model` first (writers emit required provenance).
+1. Chunk 12 `provenance-model` is already landed (writers emit the required provenance) — no action needed; proceed directly.
 2. Update `deploy/graphdb/msr-repo-config.ttl` to enable SHACL (verified 11.4.2 surface).
 3. Add the shapes artifact and the idempotent shapes-load step to `ensure-repo.sh`.
 4. On existing developer machines: `docker compose down -v` (or drop the `graphdb-data` volume) so `make up` recreates a SHACL-enabled `msr`, then replay seed/NIST loads. No production data exists.

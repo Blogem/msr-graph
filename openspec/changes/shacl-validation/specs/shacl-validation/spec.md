@@ -27,25 +27,25 @@ The shape catalogue SHALL be authored as a versioned Turtle artifact in the repo
 - **THEN** the change is a diff to the committed Turtle artifact, and re-loading it replaces the shapes graph contents without recreating the repository
 
 ### Requirement: Measurement provenance and completeness shape
-The catalogue SHALL include a shape targeting `msr:PropertyMeasurement` that requires (minCount 1 each) `prov:wasDerivedFrom`, `msr:dataLocator`, `msr:citedIn`, `msr:forProperty`, `msr:ofSalt`, `msr:hasUnit`, and `msr:equationForm`. A measurement missing any of these MUST cause its transaction to be rejected.
+The catalogue SHALL include a shape targeting `msr:PropertyMeasurement` that requires (minCount 1 each) `prov:wasDerivedFrom`, `prov:wasGeneratedBy`, `msr:dataLocator`, `msr:forProperty`, `msr:ofSalt`, `msr:hasUnit`, and `msr:equationForm`. A measurement missing any of these MUST cause its transaction to be rejected. `msr:citedIn` is deliberately **not** required: no writer asserts a per-row citation yet (NIST SRD-27 carries none), so requiring it would reject every real measurement. Consistent with the landed `provenance-model` (chunk 12, design D3) and `docs/IMPLEMENTATION_PLAN.md` chunk 13, the citation constraint is deferred to chunk 7 (citation extraction).
 
-#### Scenario: Measurement missing citation is rejected
-- **WHEN** a `msr:PropertyMeasurement` is written without `msr:citedIn` (or any other required property)
+#### Scenario: Measurement missing provenance is rejected
+- **WHEN** a `msr:PropertyMeasurement` is written without `prov:wasDerivedFrom` (or any other required property, e.g. `prov:wasGeneratedBy` or `msr:dataLocator`)
 - **THEN** the commit is rejected with a report naming the failing constraint and focus node
 
 #### Scenario: Complete measurement is accepted
-- **WHEN** a `msr:PropertyMeasurement` carrying all required properties is written
+- **WHEN** a `msr:PropertyMeasurement` carrying all required properties — including `prov:wasDerivedFrom` and `prov:wasGeneratedBy`, and with no `msr:citedIn` — is written
 - **THEN** the commit succeeds
 
 ### Requirement: Mention provenance shape
-The catalogue SHALL include a shape targeting `msr:Mention` that requires (minCount 1 each) `msr:inDocument`, `msr:startOffset`, `msr:endOffset`, and `msr:surfaceForm`. A mention missing any of these MUST cause its transaction to be rejected.
+The catalogue SHALL include a shape targeting `msr:Mention` that requires (minCount 1 each) `msr:inDocument`, `msr:startOffset`, `msr:endOffset`, `msr:surfaceForm`, `prov:wasDerivedFrom`, and `prov:wasGeneratedBy`. A mention missing any of these MUST cause its transaction to be rejected. (Every mention writer already emits all six per the landed `provenance-model`, so requiring the PROV edges enforces the invariant without rejecting valid writes.)
 
 #### Scenario: Mention without source document is rejected
-- **WHEN** a `msr:Mention` is written without `msr:inDocument`
+- **WHEN** a `msr:Mention` is written without `msr:inDocument` (or without `prov:wasDerivedFrom` / `prov:wasGeneratedBy`)
 - **THEN** the commit is rejected with a validation report
 
 #### Scenario: Complete mention is accepted
-- **WHEN** a `msr:Mention` carrying `msr:inDocument`, `msr:startOffset`, `msr:endOffset`, and `msr:surfaceForm` is written
+- **WHEN** a `msr:Mention` carrying `msr:inDocument`, `msr:startOffset`, `msr:endOffset`, `msr:surfaceForm`, `prov:wasDerivedFrom`, and `prov:wasGeneratedBy` is written
 - **THEN** the commit succeeds
 
 ### Requirement: Unit allowlist data-quality shape
