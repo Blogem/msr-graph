@@ -8,6 +8,8 @@ implementation and never contacts a live model.
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 from msr_extraction.config import Config
 from msr_extraction.disambiguation import Disambiguation, FlashClient, disambiguate
 
@@ -124,3 +126,35 @@ def test_from_config_threads_configured_api_key_onto_client() -> None:
 
     assert client is not None
     assert client.api_key == "sk-test-secret"
+
+
+# --- openspec/changes/scale-mention-linking: pooled client + retry (D5) ----
+
+
+def test_from_config_configures_transient_retry() -> None:
+    """The client carries a retry budget so transient 429/5xx/timeout errors
+    are retried by the openai SDK rather than silently degrading to novel."""
+    client = FlashClient.from_config(Config(deepseek_base_url="https://api.deepseek.example"))
+    assert client is not None
+    assert client.max_retries >= 1
+
+
+def test_complete_reuses_one_pooled_client_across_calls() -> None:
+    """complete() drives a single shared client (pooled connections) and does
+    not rebuild it per call -- the property that makes high concurrency cheap."""
+    create_calls: list[dict] = []
+
+    def _create(**kwargs):
+        create_calls.append(kwargs)
+        return SimpleNamespace(
+            choices=[SimpleNamespace(message=SimpleNamespace(content='{"novel": true}'))]
+        )
+
+    fake = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=_create)))
+    client = FlashClient("https://api.deepseek.example", "deepseek-v4-flash")
+    client._client = fake  # pre-seed the shared client (bypasses openai import)
+
+    assert client.complete("sys", "u1") == '{"novel": true}'
+    assert client.complete("sys", "u2") == '{"novel": true}'
+    assert len(create_calls) == 2  # both calls went through the same client
+    assert client._client is fake  # never rebuilt per call

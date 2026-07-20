@@ -57,8 +57,11 @@ class Config:
     # bounded worker-pool size used to resolve a run's distinct unresolved
     # surfaces in parallel. The DeepSeek/openai client is blocking I/O, so
     # threads overlap the network round-trips that otherwise dominate the
-    # link wall-clock.
-    disambig_concurrency: int = 8
+    # link wall-clock. 24 is a safe, effective default for this workload:
+    # comfortably below DeepSeek's concurrency ceiling and any practical
+    # rate limit, while enough to overlap the per-call latency that
+    # otherwise dominates. Override with MSR_DISAMBIG_CONCURRENCY.
+    disambig_concurrency: int = 24
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> Config:
