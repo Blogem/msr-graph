@@ -59,9 +59,11 @@ mandatory (§2). Adopt a small, standard slice of [PROV-O](https://www.w3.org/TR
   run, an approval), carrying `prov:startedAtTime`/`endedAtTime`, `prov:wasAssociatedWith` a
   `prov:Agent` (`agent:loader@<version>`, `agent:extraction@<version>`, or a human reviewer),
   and the `owl:versionInfo` in effect.
-- Existing measurement links (`msr:dataLocator`, `msr:citedIn`) are retained as the
-  convenient, queryable surface the agent already uses; the gap to close is that they are
-  **complete and required**, not optional.
+- `msr:dataLocator` is retained as the convenient, queryable surface the agent already uses;
+  the gap to close is that it is **complete and required**, not optional. `msr:citedIn` is
+  **not** part of this: NIST SRD-27 carries no per-row citation, so the predicate stays
+  TBox-declared but unused until chunk-7 citation extraction can derive it truthfully (design
+  D3).
 
 Property-level is the enforced baseline because it is minimally disruptive (no graph-layout
 refactor) and demonstrates the principle directly: every node the agent touches has a
@@ -110,8 +112,9 @@ repository capability, not roll-your-own:
 
 **Provenance invariants** (enforce §1):
 - `msr:PropertyMeasurement` — `prov:wasDerivedFrom` minCount 1; `msr:dataLocator` minCount 1;
-  `msr:citedIn` minCount 1 (this shape alone would have caught the missing-`citedIn` gap);
-  `msr:forProperty`, `msr:ofSalt`, `msr:hasUnit`, `msr:equationForm` all required.
+  `msr:forProperty`, `msr:ofSalt`, `msr:hasUnit`, `msr:equationForm` all required. (No
+  `msr:citedIn` constraint — the loader never emits it; citation is deferred to chunk 7 per
+  design D3.)
 - `msr:Mention` — `msr:inDocument`, `msr:startOffset`, `msr:endOffset`, `msr:surfaceForm`
   required; `msr:linksTo` target-kind constraint.
 
@@ -164,9 +167,10 @@ named graph `urn:msr:run:<pipeline>/<ts>` (design D8).
 
 - **12 `provenance-model`** — PROV-O slice in the ontology; complete + required provenance on
   all fact-bearing individuals; per-source/run named graphs + Activity records; retrofit the
-  NIST loader (`citedIn` + self-contained dataset/DOI) and seed; **answer-time** enforcement
-  in the agent (grounded-vs-ungrounded stamp + provenance-chain SSE event, gated in the loop)
-  and **compute-time** locator linkage for `run_python`.
+  NIST loader (self-contained dataset/DOI + provenance edges — no `msr:citedIn`, deferred to
+  chunk 7 per design D3) and seed; **answer-time** enforcement in the agent
+  (grounded-vs-ungrounded stamp + provenance-chain SSE event, gated in the loop) and
+  **compute-time** locator linkage for `run_python`.
 - **13 `shacl-validation`** — enable GraphDB ShaclSail (bootstrap change to `ensure-repo.sh`);
   author the shape catalogue (§2); wire validation into the write path; bulk-load strategy.
   Depends on 12 (shapes encode the provenance model).
