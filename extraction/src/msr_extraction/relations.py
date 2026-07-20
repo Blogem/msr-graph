@@ -58,6 +58,7 @@ from __future__ import annotations
 
 import json
 import math
+from collections.abc import Iterable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Literal
@@ -254,7 +255,7 @@ def select_sentences(report: str, config: Config) -> list[SelectedSentence]:
     return selected
 
 
-def build_user_prompt(sentence: SelectedSentence) -> str:
+def build_user_prompt(sentence: SelectedSentence, role_iris: Iterable[str] = ()) -> str:
     """Build the per-sentence user prompt appended to the cached KG-schema prefix.
 
     Identifies the sentence's already-linked entities (surface form,
@@ -264,16 +265,39 @@ def build_user_prompt(sentence: SelectedSentence) -> str:
     one. Includes the literal word "json" and a shape example, mirroring
     ``disambiguation._build_user_prompt`` (a DeepSeek JSON-output-mode
     requirement).
+
+    ``role_iris`` are the seed ``msr:SaltRole`` individual IRIs. They are
+    listed explicitly here (the per-sentence prompt) rather than in the
+    cached KG-schema prefix, because that prefix is built from chunk-6's
+    byte-stable ``read_known_entities()`` (concepts/classes/salts only, no
+    role individuals) and is shared with NER seeding. Without this block the
+    model never sees the valid role IRIs and every ``role`` proposal fails
+    the closed-set ``unknown-role`` check; listing them here lets the model
+    emit an exact seed role IRI while leaving the cached prefix untouched.
+    Empty by default so callers that don't extract roles are unaffected.
     """
     mentions_block = "\n".join(
         f'  - "{m.surface_form}" -> {m.target_iri} ({m.target_kind})'
         for m in sentence.linked_mentions
+    )
+    roles_sorted = sorted(role_iris)
+    roles_block = (
+        (
+            'Valid salt-role IRIs (a "role" relation\'s "role" value MUST be '
+            "exactly one of these -- they are seed individuals, NOT in the "
+            "mention list above):\n"
+            + "\n".join(f"  - {iri}" for iri in roles_sorted)
+            + "\n\n"
+        )
+        if roles_sorted
+        else ""
     )
     return (
         "Extract property-measurement, salt-role, and salt-reactor "
         "relations from the following sentence, using only IRIs from the "
         "known entities and this sentence's already-linked mentions above "
         "-- never invent a new IRI.\n\n"
+        f"{roles_block}"
         f'Sentence: "{sentence.text}"\n\n'
         "Linked mentions in this sentence:\n"
         f"{mentions_block}\n\n"
@@ -295,16 +319,21 @@ def build_user_prompt(sentence: SelectedSentence) -> str:
 
 
 def extract_relations(
-    sentence: SelectedSentence, prompt_prefix: str, client: Completer
+    sentence: SelectedSentence,
+    prompt_prefix: str,
+    client: Completer,
+    role_iris: Iterable[str] = (),
 ) -> tuple[list[dict], bool]:
     """Call Flash for one sentence and return its proposed relations, or ([], False).
 
-    Calls ``client.complete(prompt_prefix, build_user_prompt(sentence))``,
-    parses the reply as JSON, and pulls ``obj["relations"]``. Never
+    Calls ``client.complete(prompt_prefix, build_user_prompt(sentence,
+    role_iris))``, parses the reply as JSON, and pulls ``obj["relations"]``.
+    ``role_iris`` (the seed ``msr:SaltRole`` IRIs) are surfaced to the model
+    via the user prompt so it can propose valid role relations. Never
     raises: a client exception, malformed JSON, a non-dict payload, or a
     missing/non-list ``"relations"`` all yield ``([], False)``.
     """
-    user_prompt = build_user_prompt(sentence)
+    user_prompt = build_user_prompt(sentence, role_iris)
 
     try:
         raw = client.complete(prompt_prefix, user_prompt)
@@ -786,9 +815,11 @@ def extract_report(
     reactor_record_idx: list[int] = []
     malformed_calls = 0
 
+    role_iris = tuple(sorted(known.salt_roles))
+
     def _call(sentence: SelectedSentence) -> tuple[list[dict], bool]:
         try:
-            return extract_relations(sentence, prompt_prefix, client)
+            return extract_relations(sentence, prompt_prefix, client, role_iris)
         except Exception:
             # extract_relations never raises by contract, but a worker
             # future must never crash the run either way.
