@@ -34,16 +34,16 @@
 
 ## 5. HTTP API + server wiring (`cmd/server`)
 
-- [ ] 5.1 Add JSON handlers for `GET /api/proposals` (queue, `status` filter), `GET /api/proposals/{id}` (proposal triples + evidence + one-hop ontology neighborhood), `PUT /api/proposals/{id}/graph`, `POST /api/proposals/{id}/approve`, `POST /api/proposals/{id}/reject`.
-- [ ] 5.2 Add JSON handlers for `GET /api/checkpoints`, `POST /api/checkpoints`, `POST /api/checkpoints/{label}/restore`.
-- [ ] 5.3 Register the new routes in `newMux` beside `/api/chat` and `/healthz`; enforce per-route method with 405; wire the engines in `main.go` (grant the server a writable graph client for approvals and a dedicated SQLite connection for checkpoints, without weakening the chat path's read-only SQLite).
-- [ ] 5.4 Map errors to the typed contract: 400 on malformed body, 404 on unknown id, and a SHACL `ValidationError` rendered as a structured error body.
-- [ ] 5.5 Tests: handler unit tests against a fake graph client — queue filtering, detail payload shape, 404, 405, 400, and a SHACL-rejection error body — with no live GraphDB.
+- [x] 5.1 Add JSON handlers for `GET /api/proposals` (queue, `status` filter), `GET /api/proposals/{id}` (proposal triples + evidence + one-hop ontology neighborhood), `PUT /api/proposals/{id}/graph`, `POST /api/proposals/{id}/approve`, `POST /api/proposals/{id}/reject`.
+- [x] 5.2 Add JSON handlers for `GET /api/checkpoints`, `POST /api/checkpoints`, `POST /api/checkpoints/{label}/restore`.
+- [x] 5.3 Register the new routes in `newMux` beside `/api/chat` and `/healthz`; enforce per-route method with 405; wire the engines in `main.go` (grant the server a writable graph client for approvals and a dedicated SQLite connection for checkpoints, without weakening the chat path's read-only SQLite).
+- [x] 5.4 Map errors to the typed contract: 400 on malformed body, 404 on unknown id, and a SHACL `ValidationError` rendered as a structured error body.
+- [x] 5.5 Tests: handler unit tests against a fake graph client — queue filtering, detail payload shape, 404, 405, 400, and a SHACL-rejection error body — with no live GraphDB.
 
 ## 6. Make targets & docs
 
-- [ ] 6.1 Add `make checkpoint` and `make restore` wrappers to the root `Makefile` (calling the API or the engine CLI), ordered after the pipeline targets.
-- [ ] 6.2 Update `docs/ARCHITECTURE.md` / relevant docs if the API field names or checkpoint layout differ from what is documented.
+- [x] 6.1 Add `make checkpoint` and `make restore` wrappers to the root `Makefile` (calling the API or the engine CLI), ordered after the pipeline targets.
+- [x] 6.2 Update `docs/ARCHITECTURE.md` / relevant docs if the API field names or checkpoint layout differ from what is documented.
 
 ## 7. Validation
 
