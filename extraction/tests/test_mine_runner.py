@@ -22,6 +22,9 @@ GraphDB, no live LLM -- fully hermetic, runs in normal `pytest` collection
 from __future__ import annotations
 
 import json
+import re
+import threading
+import time
 from pathlib import Path
 
 from msr_extraction import mine_runner, novelty
@@ -75,6 +78,52 @@ class StubCompleter:
 
     def complete(self, system_prompt: str, user_prompt: str) -> str:
         return self._response
+
+
+_TERM_RE = re.compile(r'Candidate term: "(.*?)"')
+
+
+def _term_from_prompt(user_prompt: str) -> str:
+    """Extract the candidate term `triage._build_user_prompt` embeds in the
+    user prompt (`Candidate term: "{candidate.term}"`), so a stub completer
+    can return a per-candidate response without needing to know call order."""
+    match = _TERM_RE.search(user_prompt)
+    assert match is not None, f"no candidate term found in prompt: {user_prompt!r}"
+    return match.group(1)
+
+
+class RecordingCompleter:
+    """A per-term stub `Completer` that proves both (a) the mine triage pool
+    actually runs candidates concurrently, and (b) `run_mine`'s Phase 2
+    routing/writes stay in original candidate order regardless of which
+    Flash call happens to finish first.
+
+    `responses` maps candidate term -> canned JSON reply. `delays` maps
+    candidate term -> a `time.sleep` duration applied *inside* `.complete`
+    before returning, deliberately set in REVERSE of candidate submission
+    order in the tests below (the first-submitted candidate sleeps
+    longest, the last-submitted returns almost immediately) -- so, under
+    real concurrency, results are ready in the OPPOSITE order from how
+    they were submitted. If `mine_runner` mistakenly used completion order
+    (e.g. appended straight from `as_completed`) instead of reassembling by
+    original index, this reversal would flip the observed write order and
+    the order-preservation assertions below would fail.
+    """
+
+    def __init__(self, responses: dict[str, str], delays: dict[str, float]) -> None:
+        self._responses = responses
+        self._delays = delays
+        self._lock = threading.Lock()
+        self.call_order: list[str] = []
+        self.thread_idents: set[int] = set()
+
+    def complete(self, system_prompt: str, user_prompt: str) -> str:
+        term = _term_from_prompt(user_prompt)
+        with self._lock:
+            self.call_order.append(term)
+            self.thread_idents.add(threading.get_ident())
+        time.sleep(self._delays.get(term, 0.0))
+        return self._responses[term]
 
 
 def _candidate(term: str, sentence: str) -> Candidate:
@@ -184,3 +233,128 @@ def test_run_mine_still_stages_legitimate_class_candidate(
         u for u in sparql.updates if "GRAPH <urn:msr:proposal/class-graphite>" in u
     )
     assert "msr:Moderator a owl:Class" in proposal_update
+
+
+def test_run_mine_triages_concurrently_via_thread_pool(tmp_path: Path, monkeypatch) -> None:
+    """Concurrency actually happens: with several candidates and Flash calls
+    that each block for a moment, `run_mine`'s triage phase must overlap
+    them across more than one thread -- not run them one at a time on the
+    caller's thread, which is what the pre-parallelization serial loop did.
+    """
+    candidates = [
+        _candidate("graphite", "Graphite was used as the moderator material."),
+        _candidate("solubility", "Solubility was reported at 12 mole % BeF2."),
+        _candidate("moderatedby", "The core was graphite-moderated."),
+        _candidate("testminesalt", "A new compound TestMineSalt was observed in the melt."),
+    ]
+    monkeypatch.setattr(novelty, "mine_candidates", lambda config, reader: candidates)
+
+    responses = {
+        "graphite": json.dumps({"kind": "class", "broaderClass": "Moderator"}),
+        "solubility": json.dumps({"kind": "property"}),
+        "moderatedby": json.dumps(
+            {"kind": "relation", "domain": "MoltenSalt", "range": "Constituent"}
+        ),
+        "testminesalt": json.dumps({"kind": "instance", "broaderClass": "msr:MoltenSalt"}),
+    }
+    # Every candidate sleeps the same modest amount inside `.complete` --
+    # long enough that, if the pool ran serially, four calls would take
+    # noticeably longer than the concurrent case, and long enough for
+    # several worker threads to be alive at once.
+    delays = {term: 0.05 for term in responses}
+    completer = RecordingCompleter(responses, delays)
+
+    reader = FakeGraphReader()
+    sparql = FakeSparqlClient()
+    config = Config(corpus_dir=tmp_path, disambig_concurrency=4)
+
+    start = time.monotonic()
+    summary = mine_runner.run_mine(
+        config, reader=reader, client=completer, sparql=sparql, qudt_path=QUDT_PATH
+    )
+    elapsed = time.monotonic() - start
+
+    # Every candidate was triaged exactly once.
+    assert sorted(completer.call_order) == sorted(responses)
+    # More than one worker thread actually ran `.complete` -- the hallmark
+    # of real concurrency, not a bounded pool of size 1 masquerading as one.
+    assert len(completer.thread_idents) > 1
+    # Four 0.05s calls run concurrently comfortably finish in well under
+    # 4 * 0.05s = 0.2s; a generous ceiling keeps this robust against slow
+    # CI without being timing-flaky.
+    assert elapsed < 0.18, f"triage calls did not appear to run concurrently: {elapsed}s"
+
+    assert summary["dropped"] == 0
+    assert summary["rejected"] == 0
+    assert summary["auto_accepted"] == 1
+    assert summary["proposals_by_kind"] == {"class": 1, "property": 1, "relation": 1}
+
+
+def test_run_mine_preserves_candidate_order_regardless_of_triage_completion_order(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Determinism: Phase 2's routing/writes/counts must reflect the ORIGINAL
+    candidate order (`novelty.mine_candidates`' output order), never the
+    order in which concurrent Flash calls happen to complete.
+
+    Delays are set in reverse of submission order (the first-submitted
+    candidate, `graphite`, sleeps longest; the last-submitted,
+    `testminesalt`, returns fastest), so under real concurrency the results
+    become ready in the OPPOSITE order from how they were submitted. If
+    `run_mine` reassembled results in completion order instead of original
+    index order, the proposal-graph writes below would come out reordered
+    and this test would fail.
+    """
+    candidates = [
+        _candidate("graphite", "Graphite was used as the moderator material."),
+        _candidate("solubility", "Solubility was reported at 12 mole % BeF2."),
+        _candidate("moderatedby", "The core was graphite-moderated."),
+        _candidate("testminesalt", "A new compound TestMineSalt was observed in the melt."),
+        _candidate("baddrop", "This candidate is triaged to an unrecognized kind."),
+    ]
+    monkeypatch.setattr(novelty, "mine_candidates", lambda config, reader: candidates)
+
+    responses = {
+        "graphite": json.dumps({"kind": "class", "broaderClass": "Moderator"}),
+        "solubility": json.dumps({"kind": "property"}),
+        "moderatedby": json.dumps(
+            {"kind": "relation", "domain": "MoltenSalt", "range": "Constituent"}
+        ),
+        "testminesalt": json.dumps({"kind": "instance", "broaderClass": "msr:MoltenSalt"}),
+        "baddrop": json.dumps({"kind": "not-a-real-kind"}),
+    }
+    # Reverse-of-submission-order delays: first submitted (graphite) sleeps
+    # longest, last submitted (baddrop) returns immediately.
+    delays = {
+        "graphite": 0.08,
+        "solubility": 0.06,
+        "moderatedby": 0.04,
+        "testminesalt": 0.02,
+        "baddrop": 0.0,
+    }
+    completer = RecordingCompleter(responses, delays)
+
+    reader = FakeGraphReader()
+    sparql = FakeSparqlClient()
+    config = Config(corpus_dir=tmp_path, disambig_concurrency=4)
+
+    summary = mine_runner.run_mine(
+        config, reader=reader, client=completer, sparql=sparql, qudt_path=QUDT_PATH
+    )
+
+    assert summary["dropped"] == 1  # baddrop: unrecognized kind
+    assert summary["rejected"] == 0
+    assert summary["auto_accepted"] == 1  # testminesalt: resolves in core (MoltenSalt)
+    assert summary["proposals_by_kind"] == {"class": 1, "property": 1, "relation": 1}
+
+    # The three proposal writes below must appear in ORIGINAL candidate
+    # order (graphite, solubility, moderatedby) in `sparql.updates`, even
+    # though `moderatedby`'s triage call finished before `graphite`'s.
+    def _first_index(needle: str) -> int:
+        return next(i for i, u in enumerate(sparql.updates) if needle in u)
+
+    class_index = _first_index("GRAPH <urn:msr:proposal/class-graphite>")
+    property_index = _first_index("GRAPH <urn:msr:proposal/property-solubility>")
+    relation_index = _first_index("GRAPH <urn:msr:proposal/relation-moderatedby>")
+
+    assert class_index < property_index < relation_index

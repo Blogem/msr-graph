@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import logging
 import os
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 from msr_extraction import auto_accept, mine_provenance as mp, novelty, proposals, triage
@@ -40,6 +41,7 @@ from msr_extraction.mining_types import (
     KIND_INSTANCE,
     KIND_PROPERTY,
     KIND_RELATION,
+    Candidate,
     TriagedCandidate,
     safe_type_ref,
     term_slug,
@@ -102,6 +104,56 @@ def _first_evidence_document_iri(triaged: TriagedCandidate) -> str | None:
 
 def _default_qudt_path() -> Path:
     return Path(os.environ.get("MSR_QUDT_UNITS_PATH", _DEFAULT_QUDT_UNITS_PATH))
+
+
+def _triage_worker(
+    candidate: Candidate, prompt_prefix: str, client: FlashClient
+) -> TriagedCandidate | None:
+    """Run :func:`triage.triage_candidate` for one candidate, defensively.
+
+    `triage.triage_candidate` already never raises for model/JSON anomalies
+    (it returns `None` for those); this wrapper additionally catches ANY
+    other unexpected exception (e.g. a transient network error the retry
+    logic in `FlashClient` didn't absorb) and treats it the same way -- the
+    candidate is dropped, never propagated to crash the thread pool or
+    `run_mine` itself.
+    """
+    try:
+        return triage.triage_candidate(candidate, prompt_prefix, client)
+    except Exception:  # noqa: BLE001 - triage anomalies must never crash the pool
+        logger.warning("mine: candidate=%r triage raised unexpectedly; dropped", candidate.term)
+        return None
+
+
+def _triage_all(
+    candidates: list[Candidate],
+    prompt_prefix: str,
+    client: FlashClient,
+    max_workers: int,
+) -> list[tuple[Candidate, TriagedCandidate | None]]:
+    """Triage every candidate concurrently, returning results in `candidates`
+    order (mirrors `_cmd_link`'s `prewarm_report` concurrency pattern:
+    `ThreadPoolExecutor` + `as_completed`, `Completer.complete` calls are
+    blocking network I/O so threads -- not processes -- are the right tool,
+    and `FlashClient` is a shared thread-safe pooled client).
+
+    Results are collected into a list pre-sized to `candidates` and written
+    back by index, so completion order (which is non-deterministic under
+    concurrency) never affects the returned order: Phase 2 in `run_mine`
+    always iterates this in the original, novelty-sorted candidate order,
+    making the whole pipeline's routing/writes/counts deterministic
+    regardless of which Flash call finishes first.
+    """
+    results: list[TriagedCandidate | None] = [None] * len(candidates)
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        future_to_index = {
+            pool.submit(_triage_worker, candidate, prompt_prefix, client): index
+            for index, candidate in enumerate(candidates)
+        }
+        for future in as_completed(future_to_index):
+            index = future_to_index[future]
+            results[index] = future.result()
+    return list(zip(candidates, results))
 
 
 def run_mine(
@@ -168,8 +220,20 @@ def run_mine(
     rejected = 0
     dropped = 0
 
-    for candidate in candidates:
-        triaged = triage.triage_candidate(candidate, prompt_prefix, client)
+    # Phase 1 (parallel, network-bound): triage every candidate concurrently
+    # via a bounded thread pool -- one blocking Flash round-trip per
+    # candidate, the same workload class `_cmd_link`'s layer-5 pre-warm
+    # already parallelizes, and `FlashClient` is now a shared thread-safe
+    # pooled client with transient-error retry. `_triage_all` returns
+    # results in the original `candidates` order regardless of completion
+    # order, so Phase 2 below stays byte-for-byte deterministic.
+    triaged_candidates = _triage_all(
+        candidates, prompt_prefix, client, config.disambig_concurrency
+    )
+
+    # Phase 2 (serial, unchanged logic): route each triage result through
+    # the existing writes/counts, strictly in original candidate order.
+    for candidate, triaged in triaged_candidates:
         if triaged is None:
             dropped += 1
             logger.info("mine: candidate=%r dropped by triage", candidate.term)
