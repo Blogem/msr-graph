@@ -2,11 +2,11 @@
 
 ## 1. Graph client: repository-level ops
 
-- [ ] 1.1 Add `ExportRepo(ctx) ([]byte, error)` to `internal/graph` — `GET /repositories/{repo}/statements` with `Accept: application/x-trig`, returning all named graphs as one TriG document.
-- [ ] 1.2 Add `ClearRepo(ctx) error` — `DELETE /repositories/{repo}/statements` (no subject/predicate/object/context) to empty the repository.
-- [ ] 1.3 Add `ImportRepo(ctx, trig []byte) error` — `POST /repositories/{repo}/statements` with `Content-Type: application/x-trig`.
-- [ ] 1.4 Add a `ProposalGraph(id)` IRI builder (`urn:msr:proposal/{id}`, `{id}` = `{kind}-{term-slug}`) and, if a single-named-graph read is not cleanly expressible via `SelectRaw` + explicit `GRAPH`, a scoped-read helper — keeping endpoint knowledge inside the `graph` package. Note the Go client has no `Proposal` graph constant (chunk 8 was Python); proposal graphs are reached via `Update`/`SelectRaw`, never the `PutGraph` allowlist.
-- [ ] 1.5 Tests: unit tests for endpoint/verb/header construction with an `httptest` server; assert `ClearRepo` sends a context-less DELETE.
+- [x] 1.1 Add `ExportRepo(ctx) ([]byte, error)` to `internal/graph` — `GET /repositories/{repo}/statements` with `Accept: application/x-trig`, returning all named graphs as one TriG document.
+- [x] 1.2 Add `ClearRepo(ctx) error` — `DELETE /repositories/{repo}/statements` (no subject/predicate/object/context) to empty the repository.
+- [x] 1.3 Add `ImportRepo(ctx, trig []byte) error` — `POST /repositories/{repo}/statements` with `Content-Type: application/x-trig`.
+- [x] 1.4 Add a `ProposalGraph(id)` IRI builder (`urn:msr:proposal/{id}`, `{id}` = `{kind}-{term-slug}`) and, if a single-named-graph read is not cleanly expressible via `SelectRaw` + explicit `GRAPH`, a scoped-read helper — keeping endpoint knowledge inside the `graph` package. Note the Go client has no `Proposal` graph constant (chunk 8 was Python); proposal graphs are reached via `Update`/`SelectRaw`, never the `PutGraph` allowlist.
+- [x] 1.5 Tests: unit tests for endpoint/verb/header construction with an `httptest` server; assert `ClearRepo` sends a context-less DELETE.
 
 ## 2. Approval typed-routing engine (`internal/proposal`)
 
