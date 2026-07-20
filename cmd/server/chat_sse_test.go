@@ -374,6 +374,7 @@ func TestSSE_AllEventTypesEmittedAndWellFormed(t *testing.T) {
 		agent.EventToolResult: false,
 		agent.EventScriptRun:  false,
 		agent.EventProvenance: false,
+		agent.EventAnswer:     false,
 		agent.EventDone:       false,
 	}
 	for _, e := range events {
@@ -400,6 +401,10 @@ func TestSSE_AllEventTypesEmittedAndWellFormed(t *testing.T) {
 		case agent.EventProvenance:
 			if e.Provenance == nil {
 				t.Errorf("provenance event missing a well-formed provenance payload: %+v", e)
+			}
+		case agent.EventAnswer:
+			if e.Answer == nil {
+				t.Errorf("answer event missing a well-formed answer payload: %+v", e)
 			}
 		case agent.EventDone, agent.EventError:
 			// no required sub-payload

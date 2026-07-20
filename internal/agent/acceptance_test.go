@@ -252,7 +252,7 @@ func TestAcceptance_LoopExecutesToolsInOrderThenReturnsScriptAnswer(t *testing.T
 	wantTypes := []agent.EventType{
 		agent.EventToolCall, agent.EventProvenance, agent.EventToolResult,
 		agent.EventToolCall, agent.EventScriptRun, agent.EventToolResult,
-		agent.EventText, agent.EventDone,
+		agent.EventText, agent.EventAnswer, agent.EventDone,
 	}
 	gotTypes := eventTypesOf(events)
 	if len(gotTypes) != len(wantTypes) {

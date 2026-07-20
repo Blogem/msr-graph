@@ -94,7 +94,7 @@ func TestRun_ExecutesToolCallsThenReturnsFinalAnswer(t *testing.T) {
 	wantTypes := []agent.EventType{
 		agent.EventToolCall, agent.EventToolResult,
 		agent.EventToolCall, agent.EventToolResult,
-		agent.EventText, agent.EventDone,
+		agent.EventText, agent.EventAnswer, agent.EventDone,
 	}
 	gotTypes := eventTypes(events)
 	if len(gotTypes) != len(wantTypes) {
