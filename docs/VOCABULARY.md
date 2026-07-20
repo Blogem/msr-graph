@@ -132,5 +132,10 @@ Extended four (in the corpus, **not** in NIST — these are the seed-ontology-ev
   (`ontology/vocab.ttl`); the self-evolution demo targets are chosen *outside* the vocab
   (`solubility` for a property, `graphite`/moderators for a class) so the demo starts from
   genuine ignorance. Consequently the seed ontology now carries all 8 vocab properties.
-- **Built (Phase C):** `ontology/vocab.ttl` — 29 SKOS concepts, `closeMatch`-aligned to
-  the ontology, rdflib-validated (248 triples; all references resolve).
+- **Built (Phase C):** `ontology/vocab.ttl` — 29 SKOS concepts, rdflib-validated (248
+  triples; all references resolve). Concepts carry their own `prefLabel`/`altLabel`
+  (the friendly names, e.g. "FLiBe") and DIAMOND-relevant terms keep `rdfs:seeAlso` where
+  applicable; a `skos:closeMatch` cross-link from the concept to its `msr:` ontology term
+  is **not** part of the model (that direction is a SKOS-range abuse — see
+  `ground-demo-in-real-docs`) — grounding instead resolves a salt mention via
+  `msr:linksTo` and a property term via `rdfs:label`.

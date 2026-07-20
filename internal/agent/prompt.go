@@ -398,8 +398,9 @@ func quotedList(items []string) string {
 
 // renderPrompt formats the fetched, pre-sorted schema sets into a
 // readable, sectioned system prompt that orients the model to write
-// grounding sparql_query calls (design D3: labels -> concept -> salt ->
-// measurement -> locator -> coefficients).
+// grounding sparql_query calls (design D2, D3: mention surfaceForm ->
+// linksTo -> salt, and rdfs:label -> property -> measurement -> locator
+// -> coefficients).
 func renderPrompt(classes []schemaClass, properties []schemaProperty, concepts []schemaConcept, salts []schemaSalt) string {
 	var b strings.Builder
 
@@ -408,9 +409,13 @@ func renderPrompt(classes []schemaClass, properties []schemaProperty, concepts [
 		"properties, the SKOS controlled vocabulary, and the salt catalog, each " +
 		"sorted deterministically by IRI. It contains no measurement coefficients, " +
 		"mentions, or evidence -- fetch those with sparql_query/sql_query as needed. " +
-		"Ground a mention via its skos:prefLabel/skos:altLabel or a salt's rdfs:label, " +
-		"follow skos:closeMatch to the msr:MoltenSalt individual, then read its " +
-		"msr:PropertyMeasurement.\n\n")
+		"Ground a salt reference by matching a real msr:Mention's msr:surfaceForm " +
+		"(tolerant of OCR noise) and following that Mention's msr:linksTo to the " +
+		"msr:MoltenSalt individual, surfacing the Mention's msr:inDocument as the " +
+		"grounding evidence. Ground a property reference by matching it directly " +
+		"against a msr:PhysicalProperty's own rdfs:label -- no concept hop. Then " +
+		"read the salt's msr:PropertyMeasurement. The sparql_query tool description " +
+		"carries a worked grounding query.\n\n")
 
 	b.WriteString("## Ontology classes\n\n")
 	for _, c := range classes {

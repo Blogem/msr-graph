@@ -94,22 +94,53 @@ LAYER_FLASH = 5
 #   and optional digits (ASCII or Unicode subscript) -- e.g. "Li", "F",
 #   "Be", "F2", "F₂".
 # - `_FORMULA_TOKEN`: 1-4 such units back to back (an optional leading
-#   stoichiometric coefficient), e.g. "LiF", "BeF2", "ZrF4".
+#   stoichiometric coefficient), e.g. "LiF", "BeF2", "ZrF4", plus an
+#   optional trailing comma/period standing in for an OCR-dropped subscript
+#   digit (e.g. "BeF," for "BeF2") -- chunk 6 task 3.1's OCR robustness: the
+#   real ORNL OCR renders subscripts as a trailing comma. Over-capturing the
+#   punctuation is safe: `normalize_salt_span` (layer 3) only links when it
+#   can compose a real, loaded salt from the span, so a token that merely
+#   *happens* to be followed by ordinary sentence punctuation simply fails
+#   to normalize and falls through to fuzzy/Flash/novel like any other
+#   unresolved span.
 # - separators: "-", the middle dot, bullet, and dot-operator characters
 #   `formula.py` already treats as salt separators.
 # - an optional trailing inline composition group, e.g. "(66-34 mol%)" or
 #   "66-34 mol%" -- mirrors `formula._INLINE_COMPOSITION_RE` loosely; the
-#   authoritative parse of it is left to `normalize_salt_span` itself.
+#   authoritative parse of it is left to `normalize_salt_span` itself. The
+#   mol-tail also accepts the "mole"/optional-period/spacing OCR variants
+#   ("mol %", "mole %", "mole%", "mol.%", "mol. %") that `formula.py`'s
+#   `_INLINE_COMPOSITION_RE` already broadens for (design.md task 2.2) --
+#   mirrored here rather than reusing that regex directly since this one
+#   matches mid-string (no trailing `$` anchor) as part of a larger span.
 _DIGITS = "0-9₀-₉"
 _ELEMENT_UNIT = rf"[A-Z][a-z]?[{_DIGITS}]*"
-_FORMULA_TOKEN = rf"\d*(?:{_ELEMENT_UNIT}){{1,4}}"
-_FORMULA_SEP = r"\s*[-·•⋅]\s*"
+_FORMULA_TOKEN = rf"\d{{0,3}}(?:{_ELEMENT_UNIT}){{1,4}}[,.]?"
+_FORMULA_SEP = r"\s{0,4}[-·•⋅]\s{0,4}"
 _COMPOSITION_TAIL = (
-    r"\(?\s*\d+(?:\.\d+)?(?:\s*-\s*\d+(?:\.\d+)?)+\s*mol\s*%\s*\)?"
+    r"\(?\s{0,4}\d+(?:\.\d+)?(?:\s{0,4}-\s{0,4}\d+(?:\.\d+)?)+\s{0,4}mol\.?\s{0,4}e?\.?\s{0,4}%\s{0,4}\)?"
 )
+# `formula` is a named group covering just the token(s), separate from the
+# optional `tail` (composition group).
 _FORMULA_CANDIDATE_RE = re.compile(
-    rf"{_FORMULA_TOKEN}(?:{_FORMULA_SEP}{_FORMULA_TOKEN})+(?:\s*{_COMPOSITION_TAIL})?"
+    rf"(?P<formula>{_FORMULA_TOKEN}(?:{_FORMULA_SEP}{_FORMULA_TOKEN})+)"
+    rf"(?:\s*(?P<tail>{_COMPOSITION_TAIL}))?"
 )
+
+# Known-compound labels (task 3.1): single-token, formula-shaped labels among
+# `known_entities` -- e.g. "LiF", "BeF2" but not "Lithium fluoride" or
+# "LiF-BeF2" (the latter has a separator, so it doesn't fullmatch). Fed to
+# `formula.normalize_salt_span` as `known_compounds` on every layer-3
+# candidate span so it can resolve a composed OCR salt span (e.g.
+# "LiF-BeF," + "(66-34 mole %)") even though the comma-for-subscript surface
+# never matches a *canonical* formula string. Over-inclusion is harmless:
+# `formula._resolve_components` only ever validates a component that itself
+# carries the comma/period subscript-dropped artifact against this set --
+# an already-clean component (e.g. "LiF", "BeF2") passes through unchanged
+# regardless of whether `known_compounds` happens to list it, so a stray
+# formula-shaped catalog entry (e.g. "MSRE") can never cause a clean formula
+# to be rejected.
+_KNOWN_COMPOUND_RE = re.compile(rf"(?:{_ELEMENT_UNIT}){{1,4}}")
 
 _WORD_RE = re.compile(r"\w+", re.UNICODE)
 
@@ -157,6 +188,25 @@ def _known_labels(known_entities: list[KnownEntity]) -> list[tuple[str, str, str
         for entity in known_entities
         for label in entity.labels
     ]
+
+
+def _build_known_compounds(known_entities: list[KnownEntity]) -> frozenset[str]:
+    """The known-compound set (see module-level comment above `_KNOWN_COMPOUND_RE`)
+    for `formula.normalize_salt_span`'s `known_compounds` param -- computed
+    once per link run (`link_report`/`link_segment` cache it, never
+    recomputing per candidate span). May be empty, and may contain stray
+    formula-shaped-but-not-actually-a-compound labels (e.g. "MSRE") -- see
+    the module-level comment above `_KNOWN_COMPOUND_RE` for why that's safe:
+    `formula._resolve_components` only validates a component that itself
+    carries the OCR subscript-dropped artifact against this set, so a
+    stray entry can never reject an already-clean component.
+    """
+    return frozenset(
+        label
+        for entity in known_entities
+        for label in entity.labels
+        if _KNOWN_COMPOUND_RE.fullmatch(label)
+    )
 
 
 def fuzzy_link(
@@ -221,8 +271,17 @@ def link_segment(
     *,
     prompt_prefix: str = "",
     disambiguator: Disambiguator | None = None,
+    known_compounds: frozenset[str] | None = None,
 ) -> list[MentionRecord]:
     """Link every span in one segment, ordered layers 2 -> 5, precision-biased.
+
+    ``known_compounds`` is `formula.normalize_salt_span`'s known-compound set
+    (see `_build_known_compounds`); defaults to `None`, in which case it is
+    computed from `known_entities` for this call. `link_report` computes it
+    once per run and passes it explicitly so a multi-segment run never
+    recomputes it per segment; existing call sites that invoke
+    `link_segment` directly (tests, the precision harness) keep working
+    unchanged since the default preserves prior behavior.
 
     Offsets on the returned records are absolute (``seg.char_start`` plus
     the local match offset), matching chunk 5's `segments.jsonl` offset
@@ -254,6 +313,9 @@ def link_segment(
     """
     resolved: list[MentionRecord] = []
 
+    if known_compounds is None:
+        known_compounds = _build_known_compounds(known_entities)
+
     def _is_free(start: int, end: int) -> bool:
         return not any(_overlaps(start, end, r.char_start, r.char_end) for r in resolved)
 
@@ -266,7 +328,12 @@ def link_segment(
         start = seg.char_start + local_start
         end = seg.char_start + local_end
         salt_target_iri: str | None = None
-        curie = formula.normalize_salt_span(surface)
+        # `known_compounds` is always passed -- `formula._resolve_components`
+        # itself only validates a component that carries the OCR
+        # subscript-dropped artifact against it; an already-clean component
+        # passes through unchanged regardless (see the comment above
+        # `_KNOWN_COMPOUND_RE`).
+        curie = formula.normalize_salt_span(surface, known_compounds=known_compounds)
         if curie is not None:
             expanded = expand_curie(curie)
             if expanded in known_iris:
@@ -333,9 +400,16 @@ def link_segment(
         if not _is_free(start, end):
             continue
 
-        # Layer 4: bounded rapidfuzz fallback.
+        # Layer 4: bounded rapidfuzz fallback. `config.fuzzy_min_token_length`
+        # defaults to the chemistry-token floor of 3 -- since every span
+        # reaching this loop is already a formula-shaped candidate span
+        # (never general prose), this makes a short 3-char token like
+        # "LiF"/"BeF" eligible (task 3.2/4.1).
         fuzzy_result = fuzzy_link(
-            surface, known_labels, config.fuzzy_threshold, config.fuzzy_min_token_length
+            surface,
+            known_labels,
+            config.fuzzy_threshold,
+            config.fuzzy_min_token_length,
         )
         if fuzzy_result is not None:
             target_iri, kind, score = fuzzy_result
@@ -426,8 +500,16 @@ def link_report(
     *,
     prompt_prefix: str = "",
     disambiguator: Disambiguator | None = None,
+    known_compounds: frozenset[str] | None = None,
 ) -> list[MentionRecord]:
-    """Link every segment of `report`'s `segments.jsonl`, report-ordered."""
+    """Link every segment of `report`'s `segments.jsonl`, report-ordered.
+
+    Computes the `known_compounds` set (see `_build_known_compounds`) once
+    for the whole report -- not per segment -- unless the caller already
+    supplies one.
+    """
+    if known_compounds is None:
+        known_compounds = _build_known_compounds(known_entities)
     records: list[MentionRecord] = []
     for seg in _read_segments(report, config):
         records.extend(
@@ -439,6 +521,7 @@ def link_report(
                 config,
                 prompt_prefix=prompt_prefix,
                 disambiguator=disambiguator,
+                known_compounds=known_compounds,
             )
         )
     return records

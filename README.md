@@ -1,10 +1,12 @@
 # MSR Knowledge-Graph POC
 
 A proof-of-concept knowledge graph for molten-salt reactor (MSR) chemistry: a
-seed ontology, SKOS vocabulary, and A-Box instances load into a local GraphDB
-store alongside a SQLite value store, accessed through the shared
-`internal/graph` core-dataset client. See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
-for the full design.
+seed ontology and SKOS vocabulary load into a local GraphDB store, and all
+instance data (salts, measurements, documents, mentions) is written only by
+the real-data pipeline — the NIST loader and the extraction pipeline — never
+by a hand-curated seed. GraphDB sits alongside a SQLite value store, both
+accessed through the shared `internal/graph` core-dataset client. See
+[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full design.
 
 ## Prerequisites
 
@@ -40,18 +42,21 @@ make up         # preflight the license, bring up GraphDB + the server scaffold,
                 # (inference disabled)
 
 make load-seed  # initialize the SQLite measurement_value schema and load the
-                # three seed graphs (graph-replace, idempotent):
+                # two seed graphs (graph-replace, idempotent):
                 #   ontology/msr.ttl          -> urn:msr:ontology
                 #   ontology/vocab.ttl        -> urn:msr:vocab
-                #   ontology/example-flibe.ttl -> urn:msr:data
-                # and ensure urn:msr:staging exists
+                # and ensure urn:msr:staging exists. There is no seed A-Box —
+                # urn:msr:data starts empty and is populated exclusively by
+                # `make load-nist` below and the extraction pipeline
+                # (`make ingest` + `make link`).
 
 make load-nist  # ingest the 4 vendored NIST SRD 27 fluoride CSVs: coefficient
                 # rows -> SQLite measurement_value (source='nist'); MoltenSalt /
                 # Constituent / PropertyMeasurement catalog triples -> urn:msr:data
-                # via additive SPARQL INSERT (idempotent; preserves the seed A-Box).
-                # Chains after load-seed — must run after seed, since seed's
-                # graph-replace PUT would otherwise drop the NIST triples.
+                # via additive SPARQL INSERT (idempotent). Chains after
+                # load-seed — must run after seed so the ontology/vocab graphs
+                # exist before data lands (the mention T-Box the linker needs
+                # lives in ontology/msr.ttl).
 
 make ingest     # one-shot Compose run of the extraction container: acquire ->
                 # manifest -> normalize/segment -> documents. Acquires the
@@ -80,6 +85,21 @@ running) stays green by **skipping** the integration tests.
 
 To tear the stack down (e.g. to reset for a clean re-bootstrap), use
 `make down` (`docker compose down -v`).
+
+### Building the demo graph
+
+There is no seed A-Box, so the graph has no salts, measurements, documents,
+or mentions until the real pipeline has run. To reproduce the density demo
+end to end on a fresh stack:
+
+```bash
+make up && make load-nist && make ingest && make link && make demo-density
+```
+
+`make link`'s Flash disambiguation layer may need `DEEPSEEK_API_KEY` set in
+the environment (the deterministic composed-salt match itself needs no LLM).
+`make demo-density` depends on that full build having populated
+`urn:msr:data` — it is not a standalone fixture.
 
 ## Corpus ingest
 
@@ -261,14 +281,17 @@ client, configured by three environment variables (`docker-compose.yml`):
 
 ### Manual smoke-test checklist
 
-With the stack up (`make up` + `make load-nist`) and `DEEPSEEK_API_KEY` set
-in the environment, exercise the agent by hand with `make chat` (an
-interactive REPL against a running `/api/chat`) or `make demo-density` (a
-canonical one-shot question). Confirm, with the full trace visible for
-each:
+With the stack up and fully built (`make up && make load-nist && make ingest
+&& make link`) and `DEEPSEEK_API_KEY` set in the environment, exercise the
+agent by hand with `make chat` (an interactive REPL against a running
+`/api/chat`) or `make demo-density` (a canonical one-shot question). Confirm,
+with the full trace visible for each:
 
 - **Density answer.** "density of FLiBe (LiF-BeF₂ 66-34 mol%) at 900 K"
-  resolves to ≈ **1.974 g·cm⁻³**, and the trace shows a `script_run` event
+  resolves to ≈ **1.974 g·cm⁻³**. Grounding resolves the salt through a real
+  `msr:Mention` from `ORNL-TM-2316` (`surfaceForm` → `msr:linksTo` →
+  `msr:MoltenSalt`, with `msr:inDocument` naming the source), not a
+  hand-curated alignment edge, and the trace shows a `script_run` event
   (a `run_python` execution) immediately preceding that number — the
   answer comes from the sandboxed script, not model arithmetic.
 - **Out-of-range refusal.** A temperature outside the measurement's valid

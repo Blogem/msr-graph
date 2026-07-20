@@ -53,7 +53,10 @@ const envSandboxImage = "MSR_SANDBOX_IMAGE"
 // container's mount namespace (design D5) -- the classic docker-socket
 // sibling-mount gotcha: getting it wrong silently mounts the wrong, or an
 // empty, directory. There is no safe default, so LoadConfig fails loudly
-// if it is unset or does not resolve to an existing directory.
+// if it is unset or empty. It deliberately does NOT stat the path: by D5
+// the value is a host path the server resolves only through the Docker
+// daemon, so it is not present in the server's own mount namespace and an
+// os.Stat here would always fail inside the container.
 const envDataHostDir = "MSR_DATA_HOST_DIR"
 
 // Config holds the sandbox pool's configuration: pool size, per-container
@@ -97,10 +100,12 @@ type Config struct {
 // LoadConfig reads MSR_DATA_HOST_DIR and MSR_SANDBOX_IMAGE from the
 // environment and fills all other fields with conservative defaults.
 //
-// MSR_DATA_HOST_DIR has no default: LoadConfig fails loudly if it is
-// unset, empty, or does not resolve (via os.Stat) to an existing
-// directory, since a silently wrong value would mount an empty or
-// incorrect directory into every sandbox (design D5).
+// MSR_DATA_HOST_DIR has no default: LoadConfig fails loudly if it is unset
+// or empty, since a silently wrong value would mount an empty or incorrect
+// directory into every sandbox (design D5). It does NOT stat the path:
+// per D5 the value is a HOST path the server resolves only via the Docker
+// daemon, so it is not present in the server's own mount namespace and a
+// local os.Stat would always fail inside the container.
 func LoadConfig() (Config, error) {
 	image := os.Getenv(envSandboxImage)
 	if image == "" {
@@ -110,13 +115,6 @@ func LoadConfig() (Config, error) {
 	dataHostDir := os.Getenv(envDataHostDir)
 	if dataHostDir == "" {
 		return Config{}, fmt.Errorf("sandbox: %s is unset; it must be set to the HOST path of the data directory (the path as resolved by the Docker daemon on the host, not a path inside this process's own container) so sandbox containers bind-mount the correct directory read-only", envDataHostDir)
-	}
-	fi, err := os.Stat(dataHostDir)
-	if err != nil {
-		return Config{}, fmt.Errorf("sandbox: %s=%q does not exist or is not accessible; it must be the HOST path of the data directory (the path as resolved by the Docker daemon on the host, not a path inside this process's own container): %w", envDataHostDir, dataHostDir, err)
-	}
-	if !fi.IsDir() {
-		return Config{}, fmt.Errorf("sandbox: %s=%q is not a directory; it must be the HOST path of the data directory (the path as resolved by the Docker daemon on the host, not a path inside this process's own container)", envDataHostDir, dataHostDir)
 	}
 
 	return Config{

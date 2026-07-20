@@ -20,17 +20,56 @@ const sparqlToolDescription = `Runs a SPARQL 1.1 SELECT query over the core data
 	`restricts the query to the core graphs and rejects any query that supplies its own ` +
 	`dataset clause.
 
-To ground a mention of a salt or property to its measurement data, match ` +
-	`skos:prefLabel/skos:altLabel (and a salt's rdfs:label) against the mention text, ` +
-	`follow skos:closeMatch from the matched vocabulary concept to the msr:MoltenSalt ` +
-	`individual, then read that salt's msr:PropertyMeasurement: msr:forProperty, ` +
-	`msr:hasUnit, msr:equationForm, msr:validTempMin/msr:validTempMax, msr:dataLocator, ` +
-	`msr:citedIn, and prov:wasDerivedFrom. msr:dataLocator is the key into the ` +
-	`measurement_value table read by sql_query/run_python.
+Grounding pattern -- to resolve a salt or property mention to its measurement data:
+- Salt: match a real msr:Mention's msr:surfaceForm against the query term, tolerant of OCR ` +
+	`noise -- a scanned surface form can render a subscript as a stray comma and otherwise ` +
+	`mangle punctuation (e.g. "LiF-BeF, (66-34 mole %)" for "LiF-BeF2 (66-34 mol%)"), so match ` +
+	`by independent CONTAINS/REGEX filters over the lowercased surface form: one filter per ` +
+	`compound-formula token (e.g. the two compound abbreviations making up the salt) and one ` +
+	`per composition digit (the mole-percent numbers), rather than requiring exact string ` +
+	`equality. Follow the matched Mention's msr:linksTo to the msr:MoltenSalt individual, and ` +
+	`surface that Mention's msr:inDocument as the grounding evidence -- this is what makes the ` +
+	`grounding itself, not just the measurement, traceable to a real document. Optionally, ` +
+	`first expand the user's query term through a skos:prefLabel/skos:altLabel synonym in the ` +
+	`vocab (e.g. a common nickname) before matching it against surface forms -- the vocab only ` +
+	`supplies labels for recognizing the term, never a grounding edge.
+- Property: match the query term directly against a msr:PhysicalProperty's own rdfs:label ` +
+	`(?prop a msr:PhysicalProperty ; rdfs:label ?l), with no concept hop.
+- Read the salt's msr:PropertyMeasurement: msr:ofSalt, msr:forProperty, msr:hasUnit, ` +
+	`msr:equationForm, msr:validTempMin/msr:validTempMax, msr:dataLocator, msr:citedIn, ` +
+	`prov:wasDerivedFrom. msr:dataLocator is the key into the measurement_value table read ` +
+	`by sql_query/run_python. A unit IRI carries an rdfs:label symbol (OPTIONAL it -- an ` +
+	`external unit may lack one, and a required join would drop every row).
 
-Prefixes: msr: <https://w3id.org/msr-kg/ontology#>, msrd: <https://w3id.org/msr-kg/data#>, ` +
-	`voc: <https://w3id.org/msr-kg/vocab#>, skos: <http://www.w3.org/2004/02/skos/core#>, ` +
-	`prov: <http://www.w3.org/ns/prov#>, rdfs: <http://www.w3.org/2000/01/rdf-schema#>.
+Declare the prefixes you use as PREFIX lines in the query itself; the tool does not inject ` +
+	`them. A ready block (prov: is only needed for prov:wasDerivedFrom; skos: only for the ` +
+	`optional synonym-expansion step above):
+  PREFIX msr:  <https://w3id.org/msr-kg/ontology#>
+  PREFIX msrd: <https://w3id.org/msr-kg/data#>
+  PREFIX voc:  <https://w3id.org/msr-kg/vocab#>
+  PREFIX skos: <http://www.w3.org/2004/02/skos/core#>
+  PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+  PREFIX prov: <http://www.w3.org/ns/prov#>
+
+Worked example -- ground a salt reference and a property term to a measurement in one query ` +
+	`(fill the bracketed placeholders in with the tokens/digits/label for whatever salt and ` +
+	`property you are grounding):
+  PREFIX msr:  <https://w3id.org/msr-kg/ontology#>
+  PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+  SELECT DISTINCT ?salt ?prop ?doc ?dataLocator ?equationForm ?validTempMin ?validTempMax ?unit ?unitLabel WHERE {
+    ?m a msr:Mention ; msr:surfaceForm ?sf ; msr:linksTo ?salt ; msr:inDocument ?doc .
+    ?salt a msr:MoltenSalt .
+    BIND(LCASE(STR(?sf)) AS ?sfNorm)
+    FILTER(CONTAINS(?sfNorm, "<compound token 1>") && CONTAINS(?sfNorm, "<compound token 2>")
+           && CONTAINS(?sf, "<composition digit 1>") && CONTAINS(?sf, "<composition digit 2>"))
+    ?prop a msr:PhysicalProperty ; rdfs:label ?pl . FILTER(LCASE(STR(?pl)) = "<property term>")
+    ?pm a msr:PropertyMeasurement ; msr:ofSalt ?salt ; msr:forProperty ?prop ;
+        msr:dataLocator ?dataLocator ; msr:equationForm ?equationForm ; msr:hasUnit ?unit .
+    OPTIONAL { ?pm msr:validTempMin ?validTempMin }
+    OPTIONAL { ?pm msr:validTempMax ?validTempMax }
+    OPTIONAL { ?unit rdfs:label ?unitLabel }
+  }
+Then look up coefficients by ?dataLocator with sql_query and compute with run_python.
 
 This tool hardcodes no salt or property identifiers; you write the grounding query.`
 

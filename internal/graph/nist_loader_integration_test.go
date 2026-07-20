@@ -13,11 +13,18 @@ package graph_test
 //     (8.7, scenario "FLiBe density measurement is queryable via the core
 //     client")
 //   - chlorides are excluded from both stores (fluoride-subset filter)
-//   - the seed's hand-curated hasRole/usedIn edges survive the additive
-//     nist load (8.7, scenario "Seed hand-curated edges survive the load")
 //   - a second `loader nist` run changes neither store (8.8, scenario
 //     "Second run changes nothing") and the anchor salts (FLiBe, FLiNaK)
 //     remain present (8.8, scenario "Anchor salts are present")
+//
+// ground-demo-in-real-docs removed the hand-curated A-Box seed
+// (ontology/example-flibe.ttl) along with the msr:hasRole/msr:usedIn/
+// msrd:MSRE TBox layer it alone populated, so the former "seed
+// hand-curated edges survive the nist load" subtest (and its
+// wantRole/wantReactor constants) no longer applies and has been removed.
+// The FLiBe measurement/coefficients below come purely from `loader nist`
+// (that was already the case -- only the seed-survival expectation is
+// gone).
 //
 // runLoaderSeed, repoRoot, graphDBBaseURL, requireGraphDB, and
 // countGraphTriples are reused from seed_integration_test.go /
@@ -38,13 +45,14 @@ import (
 )
 
 const (
-	// flibeSaltCURIE is the MSRE coolant salt IRI minted by both the seed
-	// A-Box (ontology/example-flibe.ttl) and the nist loader for the
-	// canonical BeF2-LiF | 34.0-66.0 salt -- identical IRIs are what make
-	// the additive re-assertion a set-semantics no-op.
+	// flibeSaltCURIE is the MSRE coolant salt IRI minted by the nist loader
+	// for the canonical BeF2-LiF | 34.0-66.0 salt (deterministic IRI keyed
+	// by composition, per D6 -- there is no hand-curated seed A-Box
+	// anymore, so this is the loader's own minted IRI, not a seed/loader
+	// coincidence).
 	flibeSaltCURIE = "msrd:salt-BeF2-LiF-34.0-66.0"
 	// flibeMeasurementIRI is the full IRI form of the FLiBe density
-	// measurement, matching ontology/example-flibe.ttl.
+	// measurement, minted by the nist loader.
 	flibeMeasurementIRI = "https://w3id.org/msr-kg/data#m-nist-srd27-density-BeF2-LiF-34.0-66.0"
 	// flibeLocator is the contract locator form (tasks.md / spec.md) for
 	// the FLiBe density row: nist-srd27/{property}#{canonical-salt}.
@@ -88,14 +96,15 @@ func floatsClose(a, b, tol float64) bool {
 	return math.Abs(a-b) <= tol
 }
 
-// TestNistLoadIngestsFlibePreservesSeedAndExcludesChlorides pins
-// nist-structured-loading spec.md's coefficient-storage, core-client, and
-// seed-preservation scenarios (task 8.7): after `seed` then `nist`, the
-// FLiBe density coefficients live in SQLite, the FLiBe density measurement
-// is queryable through the core client, no chloride salt/row is present in
-// either store, and the seed's hand-curated hasRole/usedIn edges survive
-// the additive load.
-func TestNistLoadIngestsFlibePreservesSeedAndExcludesChlorides(t *testing.T) {
+// TestNistLoadIngestsFlibeAndExcludesChlorides pins nist-structured-loading
+// spec.md's coefficient-storage and core-client scenarios (task 8.7): after
+// `seed` then `nist`, the FLiBe density coefficients live in SQLite, the
+// FLiBe density measurement is queryable through the core client, and no
+// chloride salt/row is present in either store. (The former "seed
+// hand-curated edges survive the load" expectation is gone -- see the file
+// header comment -- ground-demo-in-real-docs removed the seed A-Box and
+// its hasRole/usedIn/MSRE TBox layer entirely.)
+func TestNistLoadIngestsFlibeAndExcludesChlorides(t *testing.T) {
 	client := requireGraphDB(t)
 	ctx := context.Background()
 	baseURL := graphDBBaseURL()
@@ -196,33 +205,6 @@ func TestNistLoadIngestsFlibePreservesSeedAndExcludesChlorides(t *testing.T) {
 			t.Errorf("expected zero msr:MoltenSalt individuals with a chloride-containing label, got %d", len(results.Results.Bindings))
 		}
 	})
-
-	t.Run("seed hand-curated edges survive the nist load", func(t *testing.T) {
-		query := fmt.Sprintf(`
-			PREFIX msr: <https://w3id.org/msr-kg/ontology#>
-			PREFIX msrd: <https://w3id.org/msr-kg/data#>
-			SELECT ?role ?reactor WHERE {
-				%s msr:hasRole ?role ; msr:usedIn ?reactor .
-			}
-		`, flibeSaltCURIE)
-
-		results, err := client.Select(ctx, query)
-		if err != nil {
-			t.Fatalf("Select: %v", err)
-		}
-		if len(results.Results.Bindings) != 1 {
-			t.Fatalf("expected exactly one hasRole/usedIn binding for %s after the nist load, got %d -- the additive INSERT must not wipe hand-curated seed edges", flibeSaltCURIE, len(results.Results.Bindings))
-		}
-		binding := results.Results.Bindings[0]
-		const wantRole = "https://w3id.org/msr-kg/ontology#CoolantSalt"
-		const wantReactor = "https://w3id.org/msr-kg/data#MSRE"
-		if got := binding["role"].Value; got != wantRole {
-			t.Errorf("hasRole = %q, want %q", got, wantRole)
-		}
-		if got := binding["reactor"].Value; got != wantReactor {
-			t.Errorf("usedIn = %q, want %q", got, wantReactor)
-		}
-	})
 }
 
 // TestNistLoadIdempotentAcrossBothStores pins nist-structured-loading
@@ -259,6 +241,64 @@ func TestNistLoadIdempotentAcrossBothStores(t *testing.T) {
 	if got := countMeasurementRows(t, ctx, db); got != rowCountAfterFirstRun {
 		t.Errorf("measurement_value row count changed across a repeat nist load: %d -> %d", rowCountAfterFirstRun, got)
 	}
+
+	// provenance-run-lineage task 5.8: the stable msrd:activity-loader-nist
+	// typing added to urn:msr:data by buildInsertData (design D1) is
+	// deterministic and timestamp-free, so it must not perturb the
+	// "urn:msr:data triple count is unchanged across a repeat run" guarantee
+	// this test already exercises above. Re-assert that explicitly: exactly
+	// one typed msrd:activity-loader-nist individual exists in urn:msr:data
+	// (never a second copy from the second run), and it carries no
+	// timestamp facet -- if the stable-activity typing were accidentally
+	// timestamped, it would itself break the triple-count invariant just
+	// checked.
+	t.Run("stable activity typing does not perturb urn:msr:data idempotency", func(t *testing.T) {
+		query := `
+			PREFIX msrd: <https://w3id.org/msr-kg/data#>
+			PREFIX prov: <http://www.w3.org/ns/prov#>
+			SELECT ?p ?o WHERE {
+				msrd:activity-loader-nist a prov:Activity ; ?p ?o .
+			}
+		`
+		results, err := client.Select(ctx, query)
+		if err != nil {
+			t.Fatalf("Select for msrd:activity-loader-nist: %v", err)
+		}
+		if len(results.Results.Bindings) == 0 {
+			t.Fatal("expected msrd:activity-loader-nist to carry at least one attribute triple in urn:msr:data, got none")
+		}
+		for _, b := range results.Results.Bindings {
+			p := b["p"].Value
+			if p == "http://www.w3.org/ns/prov#startedAtTime" || p == "http://www.w3.org/ns/prov#endedAtTime" {
+				t.Errorf("msrd:activity-loader-nist unexpectedly carries timestamp predicate %s -- this would break urn:msr:data idempotency across repeat runs", p)
+			}
+		}
+
+		// COUNT(?activity) with a bound variable, not COUNT(*) over a fully
+		// ground (zero-variable) BGP: this GraphDB deployment's SPARQL
+		// engine returns 0 for COUNT(*) when the WHERE clause has no
+		// variables at all, even when the ground triple pattern matches
+		// (confirmed independently via ASK, which correctly returns true) --
+		// so COUNT(*) here would be a false negative, not a real assertion.
+		countQuery := `
+			PREFIX msrd: <https://w3id.org/msr-kg/data#>
+			PREFIX prov: <http://www.w3.org/ns/prov#>
+			SELECT (COUNT(?activity) AS ?count) WHERE {
+				?activity a prov:Activity .
+				FILTER(?activity = msrd:activity-loader-nist)
+			}
+		`
+		results, err = client.Select(ctx, countQuery)
+		if err != nil {
+			t.Fatalf("Select counting msrd:activity-loader-nist typing: %v", err)
+		}
+		if len(results.Results.Bindings) != 1 {
+			t.Fatalf("expected exactly one COUNT(?activity) binding, got %d", len(results.Results.Bindings))
+		}
+		if got := results.Results.Bindings[0]["count"].Value; got != "1" {
+			t.Errorf("expected exactly one `a prov:Activity` typing triple for msrd:activity-loader-nist in urn:msr:data after a repeat run, got count=%s", got)
+		}
+	})
 
 	for _, anchor := range []struct {
 		name  string

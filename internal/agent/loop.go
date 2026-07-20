@@ -108,14 +108,60 @@ func (a *Agent) Run(ctx context.Context, req RunRequest, emit Emitter) error {
 		defer cancel()
 	}
 
-	// Wrap emit so any ProvenanceEvent that a tool leaves without an
-	// OntologyVersion is stamped from the request (design D4's
+	// Per-turn grounding state, accumulated by wrappedEmit below and
+	// consumed by the answer stamp (design D4) and the compute-time
+	// locator linkage (design D5). anyProvenance/*Set track the union
+	// of every ProvenanceEvent emitted this turn; surfacedLocators is
+	// the subset (just the locator strings) retained for scanning each
+	// run_python script's source (5.1).
+	var anyProvenance bool
+	locatorSet := map[string]bool{}
+	citedSet := map[string]bool{}
+	doiSet := map[string]bool{}
+	surfacedLocators := map[string]bool{}
+
+	// Wrap emit so it can (1) stamp any ProvenanceEvent a tool leaves
+	// without an OntologyVersion from the request (design D4's
 	// per-request version check feeds req.OntologyVersion; individual
-	// tools don't need to know it).
+	// tools don't need to know it), (2) fold that event's
+	// locators/citedIn/DOIs into the turn's aggregates, and (3) when a
+	// ScriptRunEvent passes through, scan its source for any locator
+	// surfaced so far and attach the matched subset (design D5) before
+	// forwarding. Order matters: a ProvenanceEvent must be folded in
+	// before any later ScriptRunEvent is scanned, which holds here
+	// because tools emit provenance from sparql_query before the model
+	// can issue a run_python call that reads it.
 	wrappedEmit := func(e Event) {
-		if e.Type == EventProvenance && e.Provenance != nil && e.Provenance.OntologyVersion == "" {
-			e.Provenance.OntologyVersion = req.OntologyVersion
+		if e.Type == EventProvenance && e.Provenance != nil {
+			if e.Provenance.OntologyVersion == "" {
+				e.Provenance.OntologyVersion = req.OntologyVersion
+			}
+			anyProvenance = true
+			for _, l := range e.Provenance.DataLocators {
+				locatorSet[l] = true
+				surfacedLocators[l] = true
+			}
+			for _, c := range e.Provenance.CitedIn {
+				citedSet[c] = true
+			}
+			for _, d := range e.Provenance.DatasetDOIs {
+				doiSet[d] = true
+			}
 		}
+
+		if e.Type == EventScriptRun && e.ScriptRun != nil {
+			matched := map[string]bool{}
+			for locator := range surfacedLocators {
+				if scriptReferencesLocator(e.ScriptRun.Source, locator) {
+					matched[locator] = true
+					locatorSet[locator] = true
+				}
+			}
+			if len(matched) > 0 {
+				e.ScriptRun.DataLocators = sortedKeys(matched)
+			}
+		}
+
 		emit(e)
 	}
 
@@ -144,6 +190,24 @@ func (a *Agent) Run(ctx context.Context, req RunRequest, emit Emitter) error {
 
 		if len(completion.ToolCalls) == 0 {
 			msgs = append(msgs, Message{Role: "assistant", Content: completion.Content})
+
+			// The answer stamp is enforced here, in the loop, for every
+			// final-answer turn -- independent of what the model asserted
+			// in its text (design D4). An ungrounded turn (no
+			// ProvenanceEvent seen) is stamped with Provenance left nil:
+			// there is no chain to aggregate for a bare, unsourced
+			// answer.
+			answer := &AnswerEvent{Grounded: anyProvenance}
+			if anyProvenance {
+				answer.Provenance = &ProvenanceEvent{
+					DataLocators:    sortedKeys(locatorSet),
+					CitedIn:         sortedKeys(citedSet),
+					DatasetDOIs:     sortedKeys(doiSet),
+					OntologyVersion: req.OntologyVersion,
+				}
+			}
+			wrappedEmit(Event{Type: EventAnswer, Answer: answer})
+
 			wrappedEmit(Event{Type: EventDone})
 			return nil
 		}
@@ -201,4 +265,34 @@ func (a *Agent) Run(ctx context.Context, req RunRequest, emit Emitter) error {
 	wrappedEmit(Event{Type: EventError, Error: errMaxIterations.Error()})
 	wrappedEmit(Event{Type: EventDone})
 	return errMaxIterations
+}
+
+// scriptReferencesLocator reports whether source references locator as a
+// whole locator, not merely as a substring. NIST locators are disambiguated
+// by appending "@<tmin>" to break salt+property collisions (see
+// disambiguateLocators in internal/nist/process.go), which makes a base
+// locator like "nist-srd27/density#LiF-BeF2|66-34" a literal string prefix
+// of its disambiguated sibling "nist-srd27/density#LiF-BeF2|66-34@800". A
+// plain strings.Contains scan would match the base locator inside the
+// disambiguated one even when the script never referenced the base, over-
+// attributing provenance and undercutting design D5's "cannot be gamed"
+// intent. This checks every occurrence of locator in source and rejects
+// any that is immediately followed by '@': that means the real token
+// present is the longer disambiguated locator, not this one.
+func scriptReferencesLocator(source, locator string) bool {
+	if locator == "" {
+		return false
+	}
+	for start := 0; ; {
+		idx := strings.Index(source[start:], locator)
+		if idx < 0 {
+			return false
+		}
+		pos := start + idx
+		end := pos + len(locator)
+		if end >= len(source) || source[end] != '@' {
+			return true
+		}
+		start = pos + 1
+	}
 }

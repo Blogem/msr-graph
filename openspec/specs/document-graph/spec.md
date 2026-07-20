@@ -7,15 +7,15 @@ Define writing one `msr:Document` node per curated document into `urn:msr:data` 
 ## Requirements
 
 ### Requirement: Document nodes written to the data graph
-The system SHALL write one `msr:Document` node per curated document into `urn:msr:data` via SPARQL UPDATE (`INSERT DATA` naming an explicit `GRAPH <urn:msr:data>` target) over the GraphDB HTTP endpoint. Each node MUST carry its report number (`dcterms:identifier`), title (`rdfs:label`), and date (`dcterms:date`) from the parsed manifest. Writing MUST be additive (it MUST NOT replace or clobber existing `urn:msr:data` triples such as the seed A-Box).
+The system SHALL write one `msr:Document` node per curated document into `urn:msr:data` via SPARQL UPDATE (`INSERT DATA` naming an explicit `GRAPH <urn:msr:data>` target) over the GraphDB HTTP endpoint. Each node MUST carry its report number (`dcterms:identifier`), title (`rdfs:label`), and date (`dcterms:date`) from the parsed manifest. Writing MUST be additive (it MUST NOT replace or clobber existing `urn:msr:data` triples, such as the loader's catalog/dataset triples — there is no seed A-Box, which `ground-demo-in-real-docs` removed).
 
 #### Scenario: Curated documents present in the graph
-- **WHEN** the ingest completes against a seeded stack
+- **WHEN** the ingest completes against a stack with the ontology/vocab loaded (`make load-seed`) and the loader run
 - **THEN** the graph contains one `msr:Document` node per curated document (11 in the finalized curated set) with report number, title, and date metadata, queryable via the core-dataset client
 
 #### Scenario: Existing data-graph triples preserved
 - **WHEN** the Document nodes are written to `urn:msr:data`
-- **THEN** the pre-existing seed A-Box triples in `urn:msr:data` remain present afterwards
+- **THEN** the pre-existing real-data-writer triples in `urn:msr:data` (the loader's catalog salts/measurements/dataset node) remain present afterwards
 
 ### Requirement: Deterministic IRIs and idempotent writes
 Document IRIs SHALL be deterministic and keyed by report number (`msrd:{report#}`), with no blank nodes, so that re-asserting the same document triples is a set-semantics no-op. Re-running the Document-node write MUST leave `urn:msr:data` triple counts unchanged.
@@ -24,6 +24,17 @@ Document IRIs SHALL be deterministic and keyed by report number (`msrd:{report#}
 - **WHEN** the Document-node write runs twice consecutively
 - **THEN** the `urn:msr:data` triple count after the second run equals the count after the first run
 
-#### Scenario: Re-asserting a seed Document is a no-op
-- **WHEN** the ingest writes `msrd:ORNL-TM-2316` (already typed `a msr:Document` in the seed A-Box, which deliberately carries no hand-authored label/identifier/date so the manifest is the single source of Document metadata)
+#### Scenario: Re-asserting a Document is a no-op
+- **WHEN** the ingest writes `msrd:ORNL-TM-2316` from the manifest (the manifest is the single source of Document metadata; nothing hand-authors a label/identifier/date elsewhere)
 - **THEN** no duplicate node is created and no conflicting or duplicate metadata triples arise — the node ends with exactly one `rdfs:label` (the manifest's), and a repeat ingest leaves `urn:msr:data` unchanged
+
+### Requirement: Document nodes carry generation provenance
+Each written `msr:Document` node SHALL carry `prov:wasGeneratedBy` the deterministic **stable** ingest/extraction-`Activity` IRI (`msrd:activity-extraction`) in `urn:msr:data`, tying the document node to the pipeline that ingested it, in addition to its manifest-sourced metadata. The generation edge SHALL be deterministic so re-asserting a document remains a set-semantics no-op (the `urn:msr:data` triple count is unchanged on re-run). The ingest run SHALL additionally write, into `urn:msr:provenance`, one `<document> prov:wasGeneratedBy <urn:msr:run:extraction/<ts>>` per-run generation edge referencing the run's per-run `Activity` node (see mention-graph-writing / provenance-model for the per-run activity record). No `urn:msr:run:*` named graph is created.
+
+#### Scenario: Document node references the stable activity and the per-run activity
+- **WHEN** the ingest writes a `msr:Document` node into `urn:msr:data`
+- **THEN** the node carries `prov:wasGeneratedBy msrd:activity-extraction` in `urn:msr:data` alongside its report number, title, and date, and `urn:msr:provenance` carries `<document> prov:wasGeneratedBy <urn:msr:run:extraction/<ts>>`
+
+#### Scenario: Generation edge preserves idempotency
+- **WHEN** the Document-node write runs twice consecutively
+- **THEN** the `urn:msr:data` triple count after the second run equals the count after the first, because the document IRI and the referenced `msrd:activity-extraction` IRI are deterministic; `urn:msr:provenance` gains a second per-run generation edge for the document

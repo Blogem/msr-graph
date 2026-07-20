@@ -300,6 +300,26 @@
       "sentence": "Fluoride volatility processing was considered as an alternative reprocessing route.",
       "surface": "Fluoride volatility",
       "expected_target_iri": null
+    },
+    {
+      "sentence": "The reference coolant was LiF-BeF, (66-34 mol %) circulating through the primary loop.",
+      "surface": "LiF-BeF, (66-34 mol %)",
+      "expected_target_iri": "https://w3id.org/msr-kg/data#salt-BeF2-LiF-34.0-66.0"
+    },
+    {
+      "sentence": "A ternary mixture LiF-BeF,-ThF, (72-16-12 mol %) was evaluated for fuel-salt service.",
+      "surface": "LiF-BeF,-ThF, (72-16-12 mol %)",
+      "expected_target_iri": "https://w3id.org/msr-kg/data#salt-BeF2-LiF-ThF4-16.0-72.0-12.0"
+    },
+    {
+      "sentence": "The fuel salt LiF-UF, (73-27 mol %) was circulated at the design operating temperature.",
+      "surface": "LiF-UF, (73-27 mol %)",
+      "expected_target_iri": "https://w3id.org/msr-kg/data#salt-LiF-UF4-73.0-27.0"
+    },
+    {
+      "sentence": "A coolant candidate NaF-ZrF, (53-47 mol %) was tested for corrosion resistance in the loop.",
+      "surface": "NaF-ZrF, (53-47 mol %)",
+      "expected_target_iri": "https://w3id.org/msr-kg/data#salt-NaF-ZrF4-53.0-47.0"
     }
   ]
 }

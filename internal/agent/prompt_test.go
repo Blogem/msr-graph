@@ -239,6 +239,37 @@ func TestBuildSchemaPrompt_InstanceDataAbsent(t *testing.T) {
 	}
 }
 
+func TestBuildSchemaPrompt_HeaderDescribesLinksToGroundingNotCloseMatch(t *testing.T) {
+	ctx := context.Background()
+
+	f := newFakeSchemaSource()
+	seedFixture(f, "0.1.0-seed")
+
+	prompt, err := agent.BuildSchemaPrompt(ctx, f)
+	if err != nil {
+		t.Fatalf("BuildSchemaPrompt: %v", err)
+	}
+
+	// D2/D3: the header must describe grounding a salt via a real
+	// msr:Mention's surfaceForm, following msr:linksTo to the
+	// msr:MoltenSalt individual, with msr:inDocument as the traceable
+	// evidence -- the twin of sparql.go's tool-description regression
+	// guard (TestSPARQLTool_SpecDescribesGroundingAndForbidsFrom).
+	for _, want := range []string{"msr:linksTo", "msr:inDocument"} {
+		if !strings.Contains(prompt, want) {
+			t.Errorf("prompt header missing %q\nprompt:\n%s", want, prompt)
+		}
+	}
+
+	// D2/D6: skos:closeMatch is a SKOS range abuse (its domain/range is
+	// skos:Concept; neither a MoltenSalt individual nor a
+	// PhysicalProperty term is one) and must not appear anywhere in the
+	// grounding guidance.
+	if strings.Contains(strings.ToLower(prompt), "closematch") {
+		t.Errorf("prompt header reintroduced skos:closeMatch grounding; got: %s", prompt)
+	}
+}
+
 func TestPromptCache_ReusesUntilVersionBump(t *testing.T) {
 	ctx := context.Background()
 

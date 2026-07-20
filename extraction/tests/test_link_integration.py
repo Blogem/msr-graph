@@ -66,8 +66,15 @@ REPORT = "ORNL-TM-2316"
 # Anchor surface forms -> expected target IRI, mirroring design.md D10's
 # "guarded integration" bullet and specs/entity-linking/spec.md's "Anchor
 # entities link to the correct targets" scenario.
+#
+# "FLiBe" is intentionally NOT an anchor here: ground-demo-in-real-docs's
+# design work established that the bare nickname does not appear in the
+# finalized 11-doc curated corpus text (it only shows up in non-curated
+# archive files), so no real mention of it can ever resolve. The composed
+# salt mention ("LiF-BeF2"/OCR "LiF-BeF, (66-34 mole %)") IS attested and is
+# covered separately by
+# test_lif_bef2_composed_mention_links_to_loaded_salt_individual.
 _ANCHORS = {
-    "FLiBe": f"{VOC}flibe",
     "viscosity": f"{VOC}viscosity",
     "MSRE": f"{VOC}msre-reactor",
 }
@@ -156,9 +163,10 @@ def test_anchor_mentions_resolve_to_correct_targets() -> None:
 
     Pins specs/entity-linking/spec.md's "Anchor entities link to the correct
     targets" scenario against the real corpus/graph (not a fixture): for
-    each of ``LiF-BeF2``/``FLiBe``, ``viscosity``, and ``MSRE``, at least one
-    ``msr:Mention`` in ``urn:msr:data`` has that surface form and
-    ``msr:linksTo`` the expected concept/individual.
+    each of ``viscosity`` and ``MSRE``, at least one ``msr:Mention`` in
+    ``urn:msr:data`` has that surface form and ``msr:linksTo`` the expected
+    concept/individual. ``FLiBe`` is excluded (not attested in the curated
+    corpus text; see the ``_ANCHORS`` comment above).
     """
     config = Config.from_env()
 
@@ -190,6 +198,14 @@ def test_lif_bef2_composed_mention_links_to_loaded_salt_individual() -> None:
     ``msr:linksTo`` the loaded MSRE-coolant FLiBe individual
     ``msrd:salt-BeF2-LiF-34.0-66.0`` (34 mol% BeF2 / 66 mol% LiF), not merely
     a vocab concept.
+
+    ground-demo-in-real-docs (design.md D4): with no hand-curated seed
+    A-Box, this ``ASK`` for a real composed-mention ``msr:linksTo`` edge
+    into ``msrd:salt-BeF2-LiF-34.0-66.0`` (minted only by ``loader nist``)
+    is the **authoritative end-to-end grounding-edge acceptance check** for
+    that change -- there is no other path (seed or otherwise) that could
+    make this pass except the real ingest -> link pipeline actually
+    grounding a salt mention to the loaded individual.
     """
     config = Config.from_env()
 

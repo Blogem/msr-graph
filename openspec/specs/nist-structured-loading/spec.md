@@ -44,15 +44,23 @@ The loader SHALL write one `measurement_value` row per kept NIST measurement wit
 - **THEN** its numeric coefficients appear only in `measurement_value` and no coefficient value is written to `urn:msr:data`
 
 ### Requirement: Catalog triples emitted additively to the core data graph
-The loader SHALL emit `MoltenSalt`, `Constituent`, and `PropertyMeasurement` triples (with `ofSalt`, `forProperty`, `hasUnit`, `equationForm`, `validTempMin`/`Max`, `dataLocator`, and `prov:wasDerivedFrom` the NIST dataset) into `urn:msr:data` using additive SPARQL `INSERT DATA` through `internal/graph`. The loader SHALL NOT use Graph Store `PUT` on `urn:msr:data`, so the hand-curated seed A-Box (roles, reactor and citation edges) is preserved.
+The loader SHALL emit `MoltenSalt`, `Constituent`, `ChemicalCompound`, and `PropertyMeasurement` triples into `urn:msr:data` using additive SPARQL `INSERT DATA` through `internal/graph`. Every `PropertyMeasurement` SHALL carry `ofSalt`, `forProperty`, `hasUnit`, `equationForm`, `validTempMin`/`Max`, `dataLocator`, `prov:wasDerivedFrom` the NIST dataset, and `prov:wasGeneratedBy` the loader-run `Activity`. Every emitted `MoltenSalt`, `Constituent`, and `ChemicalCompound` SHALL likewise carry `prov:wasGeneratedBy` the loader-run `Activity` and `prov:wasDerivedFrom msrd:nist-srd27` (all instance data the loader asserts is provenanced, not just measurements). The derivation and generation provenance are required, not optional. The loader SHALL NOT emit `msr:citedIn`: NIST SRD-27 has no per-row citation, so a truthful measurement↔document citation is deferred to chunk-7 citation extraction. The loader SHALL NOT use Graph Store `PUT` on `urn:msr:data`, so other real-data-writer output already in the graph (e.g. extraction `Document`/`Mention` triples) is preserved.
 
 #### Scenario: FLiBe density measurement is queryable via the core client
 - **WHEN** the loader has run and a core-dataset SPARQL query asks for the FLiBe density `PropertyMeasurement`
 - **THEN** the client returns a measurement with property density, a QUDT unit, an equation form, a validity range, and a `dataLocator` that resolves to the SQLite row
 
-#### Scenario: Seed hand-curated edges survive the load
-- **WHEN** `loader nist` runs after the seed A-Box is loaded
-- **THEN** the seed's `hasRole` / `usedIn` / `citedIn` edges remain present in `urn:msr:data`
+#### Scenario: Every measurement carries required provenance
+- **WHEN** the loader emits a `PropertyMeasurement`
+- **THEN** the measurement carries `prov:wasDerivedFrom` the NIST dataset and `prov:wasGeneratedBy` the loader-run `Activity` (no `msr:citedIn`)
+
+#### Scenario: Catalog individuals carry provenance
+- **WHEN** the loader emits a `MoltenSalt`, `Constituent`, or `ChemicalCompound`
+- **THEN** each carries `prov:wasGeneratedBy msrd:activity-loader-nist` and `prov:wasDerivedFrom msrd:nist-srd27`
+
+#### Scenario: Existing real-data-writer triples survive the load
+- **WHEN** `loader nist` runs after the extraction pipeline has written `Document`/`Mention` triples into `urn:msr:data`
+- **THEN** those triples remain present (additive `INSERT DATA`, not a graph-replace `PUT`)
 
 ### Requirement: Composition-isotherm measurements
 The loader SHALL treat a row carrying an isotherm `Data type` code (`I1`–`I4`) as a composition-isotherm measurement rather than a temperature-dependent one: it SHALL mint a range-composition salt whose varying constituent carries `moleFractionMin`/`moleFractionMax` (per the `salt-canonicalization` range-salt rule), and it SHALL write a `PropertyMeasurement` whose `equationForm` is the matching `msr:Isotherm{n}` individual, whose `validTempMin` equals `validTempMax` (the single temperature the sweep was measured at), and which carries a `msr:compositionComponent` naming the varying compound.
@@ -62,15 +70,37 @@ The loader SHALL treat a row carrying an isotherm `Data type` code (`I1`–`I4`)
 - **THEN** the loader mints a salt whose `ZrF4` constituent has `moleFractionMin=0.0` and `moleFractionMax=0.333` and whose `KF` constituent has `moleFractionMin=0.667` and `moleFractionMax=1.0`, and writes a `PropertyMeasurement` with `equationForm msr:Isotherm3`, `validTempMin = validTempMax`, and `msr:compositionComponent` naming `ZrF4`
 
 ### Requirement: Idempotent re-runs across both stores
-Re-running `loader nist` SHALL leave both stores unchanged: catalog triples re-assert as a set-semantics no-op via deterministic IRIs, and SQLite rows upsert on the `locator` primary key. Per-graph triple counts and row counts MUST be identical after a second run.
+Re-running `loader nist` SHALL leave both fact stores unchanged: catalog and provenance triples in `urn:msr:data` re-assert as a set-semantics no-op via deterministic IRIs (including the deterministic `msrd:activity-loader-nist` `Activity` IRI referenced by every measurement's `prov:wasGeneratedBy`, the stable `Activity` typing, and the self-contained `Dataset`/`Document` nodes), and SQLite rows upsert on the `locator` primary key. The `urn:msr:data` triple count and the `measurement_value` row count MUST be identical after a second run. The `urn:msr:provenance` graph is explicitly **outside** this guarantee: each wall-clock run appends a new per-run `Activity` (`urn:msr:run:loader/<ts>`) plus one `prov:wasGeneratedBy` generation edge for every fact the run asserts, so `urn:msr:provenance` grows on each run.
 
-#### Scenario: Second run changes nothing
+#### Scenario: Second run leaves the fact stores unchanged
 - **WHEN** `loader nist` is run twice against the same stores
-- **THEN** the `urn:msr:data` triple count and the `measurement_value` row count are identical after the second run
+- **THEN** the `urn:msr:data` triple count and the `measurement_value` row count are identical after the second run (new per-run provenance is appended to `urn:msr:provenance`)
 
-#### Scenario: Re-asserting seed salts is a no-op
-- **WHEN** the loader emits catalog triples for a salt already present in the seed A-Box (e.g. the FLiBe coolant salt)
-- **THEN** no duplicate salt, constituent, or measurement node is created because the minted IRIs match the seed exactly
+#### Scenario: Re-asserting salts across runs is a no-op in the data graph
+- **WHEN** `loader nist` emits catalog triples for a salt it already emitted on a prior run (e.g. the FLiBe salt)
+- **THEN** no duplicate salt, constituent, or measurement node is created in `urn:msr:data` because the minted IRIs are deterministic, while `urn:msr:provenance` gains a second per-run generation edge for that salt
+
+### Requirement: Loader is the sole source of the NIST dataset node and DOI
+The loader SHALL itself emit the `msrd:nist-srd27` `msr:Dataset` node with its DOI (`dcterms:identifier "doi:10.18434/mds2-2298"`). With the hand-curated seed already removed (by `ground-demo-in-real-docs`), the loader is the **only** source of this source node — this defines the `msrd:nist-srd27` IRI that every measurement's `prov:wasDerivedFrom` already points at, closing the interim dangling reference. The emitted `Dataset` triples are deterministic, so re-runs re-assert them as a set-semantics no-op. (The loader emits no `msr:citedIn` and no citing `msr:Document`: NIST SRD-27 has no per-row citation, so that edge is deferred to chunk-7.)
+
+#### Scenario: DOI present after a NIST load
+- **WHEN** `loader nist` runs (seed already removed)
+- **THEN** `msrd:nist-srd27` is present with its DOI, so every measurement's `prov:wasDerivedFrom` resolves to a real dataset carrying a DOI
+
+#### Scenario: Dataset node re-assertion is a no-op
+- **WHEN** `loader nist` runs a second time
+- **THEN** no duplicate `Dataset` node or conflicting DOI triple is created — the emitted triples are deterministic
+
+### Requirement: Loader-run activity recorded in a named graph
+Every fact-bearing individual the loader emits (each `msr:MoltenSalt`, `msr:Constituent`, `msr:ChemicalCompound`, and `msr:PropertyMeasurement`, plus the `Dataset` node) SHALL reference the deterministic **stable** `Activity` IRI `msrd:activity-loader-nist` via `prov:wasGeneratedBy` in `urn:msr:data`, and the loader SHALL type that stable `Activity` in `urn:msr:data` — `msrd:activity-loader-nist a prov:Activity ; prov:wasAssociatedWith <agent:loader@<version>> ; owl:versionInfo "<version>"` — with **no timestamps**, so `urn:msr:data` stays idempotent. The loader SHALL additionally write, into `urn:msr:provenance`, a **per-run** `Activity` node `<urn:msr:run:loader/<ts>>` (typed `a prov:Activity`, attributed `prov:wasAssociatedWith agent:loader@<version>`, with `prov:startedAtTime`/`prov:endedAtTime` and the ontology `owl:versionInfo`) and one `<factIRI> prov:wasGeneratedBy <urn:msr:run:loader/<ts>>` edge for **every** fact IRI it asserts. All `urn:msr:provenance` writes SHALL use additive `INSERT DATA` with an explicit `GRAPH <urn:msr:provenance>` target (not `PutGraph`). The loader SHALL NOT create a `urn:msr:src:*` or `urn:msr:run:*` named graph.
+
+#### Scenario: Run activity and lineage written and referenced
+- **WHEN** `loader nist` completes
+- **THEN** every emitted fact in `urn:msr:data` carries `prov:wasGeneratedBy msrd:activity-loader-nist`, the stable `msrd:activity-loader-nist` is typed in `urn:msr:data` without timestamps, and `urn:msr:provenance` holds a per-run `<urn:msr:run:loader/<ts>>` activity (agent, timestamps, ontology version) plus one generation edge per emitted fact
+
+#### Scenario: No per-source or per-run graph is created
+- **WHEN** `loader nist` writes provenance
+- **THEN** no `urn:msr:src:nist-srd27` graph and no `urn:msr:run:loader/<ts>` graph exist; the run identifier appears only as the per-run activity node IRI inside `urn:msr:provenance`, and the `Dataset` node is present only in `urn:msr:data`
 
 ### Requirement: Ingest run summary and DATA_SCOPE verification
 On completion the loader SHALL print a summary reporting, per property file, rows read / kept / excluded-as-out-of-scope / flagged-for-review, plus the distinct canonical salts loaded and the equation forms seen. `DATA_SCOPE.md` open items 1–3 (fluoride row counts per file, FLiNaK and MSRE-coolant FLiBe presence, equation forms verified) SHALL be recorded from this real parse.

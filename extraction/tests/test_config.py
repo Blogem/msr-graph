@@ -22,7 +22,7 @@ def test_defaults_for_new_fields() -> None:
     assert config.deepseek_api_key == ""
     assert config.llm_model_extract == "deepseek-v4-flash"
     assert config.fuzzy_threshold == 90.0
-    assert config.fuzzy_min_token_length == 4
+    assert config.fuzzy_min_token_length == 3
 
 
 def test_from_env_empty_mapping_keeps_defaults() -> None:
@@ -102,3 +102,40 @@ def test_report_artifact_paths_compose_under_corpus_dir(
     config = Config(corpus_dir=Path("data/corpus"))
     path = getattr(config, method_name)("ORNL-TM-2316")
     assert path == Path("data/corpus") / "ORNL-TM-2316" / expected_name
+
+
+class TestFuzzyMinTokenLengthGovernsChemistryEligibility:
+    """ocr-robust-salt-linking design.md D5 / specs/entity-linking spec
+    "Bounded fuzzy fallback admits short chemistry tokens": the minimum
+    token length gating fuzzy eligibility MUST remain an injectable
+    configuration value, never a hardcoded constant.
+
+    These tests pin the *field itself* (construction + env override) at an
+    explicit, non-default value -- deliberately not asserting on
+    `Config.fuzzy_min_token_length`'s default, which task 4.1 leaves to the
+    coder's judgment (it may stay 4, with a 3-char knob applied only via an
+    explicit override, or move to 3 outright). The downstream behavioral
+    contract -- that this value actually governs whether a 3-char formula
+    token like `LiF`/`BeF` is eligible for the bounded fuzzy fallback -- is
+    covered in test_linker.py's `TestBoundedFuzzyShortChemistryTokens`
+    (already exercises `Config(fuzzy_min_token_length=3)` end to end via
+    `fuzzy_link`/`link_segment`, so it needs no coder change to hold)."""
+
+    def test_config_accepts_an_explicit_three_char_min_token_length(self) -> None:
+        config = Config(fuzzy_min_token_length=3)
+        assert config.fuzzy_min_token_length == 3
+        assert isinstance(config.fuzzy_min_token_length, int)
+
+    def test_env_override_can_set_min_token_length_to_three(self) -> None:
+        config = Config.from_env({"MSR_FUZZY_MIN_TOKEN_LENGTH": "3"})
+        assert config.fuzzy_min_token_length == 3
+
+    def test_a_higher_min_token_length_is_distinct_from_the_three_char_value(self) -> None:
+        # Round-tripping two distinct values through the same field/env
+        # variable proves eligibility is driven by configuration, not a
+        # hardcoded constant baked into the fuzzy fallback itself.
+        low = Config.from_env({"MSR_FUZZY_MIN_TOKEN_LENGTH": "3"})
+        high = Config.from_env({"MSR_FUZZY_MIN_TOKEN_LENGTH": "6"})
+        assert low.fuzzy_min_token_length == 3
+        assert high.fuzzy_min_token_length == 6
+        assert low.fuzzy_min_token_length != high.fuzzy_min_token_length

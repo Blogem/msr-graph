@@ -211,10 +211,29 @@ func TestSPARQLTool_SpecDescribesGroundingAndForbidsFrom(t *testing.T) {
 	}
 
 	desc := strings.ToLower(spec.Description)
-	for _, want := range []string{"skos:preflabel", "skos:closematch", "from"} {
+	for _, want := range []string{
+		// D2/D3: salts ground via a real msr:Mention's surfaceForm,
+		// following msr:linksTo to the salt, with msr:inDocument as the
+		// traceable evidence.
+		"msr:linksto", "msr:surfaceform", "msr:indocument",
+		// D2/D6: properties ground by matching the query term against a
+		// msr:PhysicalProperty's own rdfs:label -- no concept hop.
+		"rdfs:label", "msr:physicalproperty",
+		// FROM-forbidden guidance: the tool does not inject prefixes and
+		// rejects any query supplying its own FROM/FROM NAMED clause.
+		"from", "prefix",
+	} {
 		if !strings.Contains(desc, want) {
 			t.Errorf("Spec().Description missing %q; got: %s", want, spec.Description)
 		}
+	}
+
+	// D2/D6: skos:closeMatch is a SKOS range abuse (its domain/range is
+	// skos:Concept; neither a MoltenSalt individual nor a
+	// PhysicalProperty term is one) and must not appear anywhere in the
+	// grounding recipe -- neither salt<->concept nor property<->concept.
+	if strings.Contains(desc, "skos:closematch") {
+		t.Errorf("Spec().Description reintroduced skos:closeMatch grounding; got: %s", spec.Description)
 	}
 
 	var schema map[string]any

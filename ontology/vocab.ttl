@@ -8,8 +8,10 @@
 # MSR Controlled Vocabulary — seed SKOS scheme (Phase C).
 # 29 concepts sourced from the IAEA INIS thesaurus (2018) and salience-filtered against
 # the openmsr/msr-archive corpus. dct:source "minted" = no INIS descriptor exists.
-# closeMatch links resolve into ontology/msr.ttl. The self-evolution demo targets
-# (solubility, graphite/moderators) are intentionally NOT here — they live outside the seed.
+# No SKOS-to-OWL alignment links to ontology/msr.ttl: grounding resolves salts via
+# msr:linksTo from real document mentions and properties via rdfs:label match (see design.md D2/D6).
+# The self-evolution demo targets (solubility, graphite/moderators) are intentionally NOT
+# here — they live outside the seed.
 
 voc:msr-scheme a skos:ConceptScheme ;
     dct:title "MSR Controlled Vocabulary (POC seed)" ;
@@ -26,7 +28,7 @@ voc:molten-salt-reactors a skos:Concept ; skos:inScheme voc:msr-scheme ;
     skos:narrower voc:molten-salt-cooled-reactors , voc:molten-salt-fueled-reactors ;
     skos:related voc:reductive-extraction ;
     skos:scopeNote "INIS BT: reactors. INIS RT: metal transfer process, molten salt fuels."@en ;
-    dct:source "INIS" ; skos:closeMatch msr:MoltenSaltReactor .
+    dct:source "INIS" .
 
 voc:molten-salt-cooled-reactors a skos:Concept ; skos:inScheme voc:msr-scheme ;
     skos:prefLabel "molten salt cooled reactors"@en ;
@@ -52,7 +54,7 @@ voc:molten-salts a skos:Concept ; skos:inScheme voc:msr-scheme ;
     skos:altLabel "fused salts"@en , "ionic liquids"@en , "molten salt coolants"@en ;
     skos:narrower voc:flibe , voc:flinak ;
     skos:scopeNote "INIS BT: salts; INIS RT: coolants."@en ;
-    dct:source "INIS" ; skos:closeMatch msr:MoltenSalt .
+    dct:source "INIS" .
 
 voc:flibe a skos:Concept ; skos:inScheme voc:msr-scheme ;
     skos:prefLabel "FLiBe"@en ; skos:altLabel "LiF-BeF2"@en , "LiF-BeF2 eutectic"@en ;
@@ -113,59 +115,59 @@ voc:potassium-fluorides a skos:Concept ; skos:inScheme voc:msr-scheme ;
 voc:fuel-salt a skos:Concept ; skos:inScheme voc:msr-scheme ;
     skos:prefLabel "fuel salt"@en ;
     skos:related voc:molten-salt-fueled-reactors ;
-    skos:scopeNote "Fissile-bearing salt (ORNL-TM-2316 triad). INIS closeMatch: 'molten salt fuels'. Minted role concept."@en ;
-    dct:source "minted" ; skos:closeMatch msr:FuelSalt .
+    skos:scopeNote "Fissile-bearing salt (ORNL-TM-2316 triad). INIS close match: 'molten salt fuels'. Minted role concept."@en ;
+    dct:source "minted" .
 
 voc:coolant-salt a skos:Concept ; skos:inScheme voc:msr-scheme ;
     skos:prefLabel "coolant salt"@en ; skos:related voc:molten-salt-cooled-reactors ;
     skos:scopeNote "Secondary heat-transfer salt (ORNL-TM-2316 triad). Minted role concept."@en ;
-    dct:source "minted" ; skos:closeMatch msr:CoolantSalt .
+    dct:source "minted" .
 
 voc:flush-salt a skos:Concept ; skos:inScheme voc:msr-scheme ;
     skos:prefLabel "flush salt"@en ; skos:related voc:msre-reactor ;
     skos:scopeNote "Cleaning salt (ORNL-TM-2316 triad). Minted role concept."@en ;
-    dct:source "minted" ; skos:closeMatch msr:FlushSalt .
+    dct:source "minted" .
 
 ########## D. Physical properties ##########
 voc:density a skos:Concept ; skos:inScheme voc:msr-scheme ;
     skos:prefLabel "density"@en ; skos:altLabel "mass density"@en ;
     skos:scopeNote "NIST property. INIS DENSITY is density-of-states-flavored; used as closest match for mass density."@en ;
-    dct:source "INIS" ; skos:closeMatch msr:density .
+    dct:source "INIS" .
 
 voc:viscosity a skos:Concept ; skos:inScheme voc:msr-scheme ;
     skos:prefLabel "viscosity"@en ; skos:altLabel "dynamic viscosity"@en ;
-    skos:scopeNote "NIST property."@en ; dct:source "INIS" ; skos:closeMatch msr:viscosity .
+    skos:scopeNote "NIST property."@en ; dct:source "INIS" .
 
 voc:electric-conductivity a skos:Concept ; skos:inScheme voc:msr-scheme ;
     skos:prefLabel "electric conductivity"@en ;
     skos:altLabel "electrical conductivity"@en , "electrical conductance"@en , "specific conductance"@en ;
     skos:scopeNote "NIST property. INIS preferred label is ELECTRIC CONDUCTIVITY."@en ;
-    dct:source "INIS" ; skos:closeMatch msr:electricalConductivity .
+    dct:source "INIS" .
 
 voc:surface-tension a skos:Concept ; skos:inScheme voc:msr-scheme ;
     skos:prefLabel "surface tension"@en ; skos:altLabel "interfacial tension"@en ;
     skos:scopeNote "NIST property. INIS SF: interfacial tension; BT: surface properties. Aligns to DIAMOND InterfacialTension."@en ;
-    dct:source "INIS" ; skos:closeMatch msr:surfaceTension .
+    dct:source "INIS" .
 
 voc:thermal-conductivity a skos:Concept ; skos:inScheme voc:msr-scheme ;
     skos:prefLabel "thermal conductivity"@en ;
     skos:scopeNote "Document-sourced (not in NIST). INIS BT: thermodynamic properties."@en ;
-    dct:source "INIS" ; skos:closeMatch msr:thermalConductivity .
+    dct:source "INIS" .
 
 voc:specific-heat a skos:Concept ; skos:inScheme voc:msr-scheme ;
     skos:prefLabel "specific heat"@en ; skos:altLabel "heat capacity"@en ;
     skos:scopeNote "Document-sourced. INIS folds 'heat capacity' into SPECIFIC HEAT; BT: thermodynamic properties."@en ;
-    dct:source "INIS" ; skos:closeMatch msr:specificHeat .
+    dct:source "INIS" .
 
 voc:vapor-pressure a skos:Concept ; skos:inScheme voc:msr-scheme ;
     skos:prefLabel "vapor pressure"@en ; skos:altLabel "vapour pressure"@en ;
     skos:scopeNote "Document-sourced. INIS BT: thermodynamic properties."@en ;
-    dct:source "INIS" ; skos:closeMatch msr:vaporPressure .
+    dct:source "INIS" .
 
 voc:melting-point a skos:Concept ; skos:inScheme voc:msr-scheme ;
     skos:prefLabel "melting point"@en ; skos:altLabel "freezing point"@en , "liquidus"@en ;
     skos:scopeNote "Document-sourced. INIS MELTING POINTS (UF freezing points); BT: transition temperature."@en ;
-    dct:source "INIS" ; skos:closeMatch msr:meltingPoint .
+    dct:source "INIS" .
 
 ########## E. Processes & materials ##########
 voc:corrosion a skos:Concept ; skos:inScheme voc:msr-scheme ;

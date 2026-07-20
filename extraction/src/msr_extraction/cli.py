@@ -15,7 +15,16 @@ import argparse
 import logging
 import sys
 
-from msr_extraction import acquisition, curated, documents, linker, manifest, mentions, segmenter
+from msr_extraction import (
+    acquisition,
+    curated,
+    documents,
+    linker,
+    manifest,
+    mentions,
+    provenance,
+    segmenter,
+)
 from msr_extraction.config import Config
 from msr_extraction.disambiguation import FlashClient, disambiguate
 from msr_extraction.graph_reader import GraphReader
@@ -63,7 +72,10 @@ def _cmd_documents(config: Config) -> int:
     curated_records = [r for r in records if r.report_number in curated_set]
     logger.info("documents: writing %d document node(s)", len(curated_records))
     client = SparqlClient.from_config(config)
-    documents.write_documents(curated_records, client)
+    run_ts = provenance.run_timestamp()
+    provenance.write_stable_activity(client)
+    provenance.write_activity(run_ts, client)
+    documents.write_documents(curated_records, client, run_ts)
     logger.info("documents: done")
     return 0
 
@@ -85,7 +97,10 @@ def _cmd_ingest(config: Config) -> int:
     curated_set = set(curated.CURATED_REPORTS)
     curated_records = [r for r in records if r.report_number in curated_set]
     client = SparqlClient.from_config(config)
-    documents.write_documents(curated_records, client)
+    run_ts = provenance.run_timestamp()
+    provenance.write_stable_activity(client)
+    provenance.write_activity(run_ts, client)
+    documents.write_documents(curated_records, client, run_ts)
 
     logger.info("ingest: complete")
     return 0
@@ -135,6 +150,16 @@ def _cmd_link(config: Config, reports: list[str] = curated.CURATED_REPORTS) -> i
 
     Guards a missing `segments.jsonl` per report (logs a warning and skips
     it) so a partial corpus doesn't crash the whole run.
+
+    Generates a single run timestamp for this invocation
+    (provenance-run-lineage design.md D1/D3) and writes the stable
+    per-pipeline `Activity` typing plus the per-run extraction `Activity`
+    node into `urn:msr:provenance` *before* processing any report, so the
+    run node exists before the per-report `write_mentions` calls emit
+    generation edges referencing it -- closing the crash window where a
+    generation edge could point at an untyped run IRI. Every mention
+    written across the whole invocation carries a generation edge to the
+    same `urn:msr:run:extraction/<ts>` activity node.
     """
     reader = GraphReader.from_config(config)
     prompt_prefix = KGSchemaPromptCache().get(reader)
@@ -155,6 +180,9 @@ def _cmd_link(config: Config, reports: list[str] = curated.CURATED_REPORTS) -> i
         logger.warning("link: DEEPSEEK_BASE_URL not configured; layer 5 spans fall to novel")
 
     sparql = SparqlClient.from_config(config)
+    run_ts = provenance.run_timestamp()
+    provenance.write_stable_activity(sparql)
+    provenance.write_activity(run_ts, sparql)
 
     logger.info("link: %d curated report(s) to process", len(reports))
     for report in reports:
@@ -187,7 +215,7 @@ def _cmd_link(config: Config, reports: list[str] = curated.CURATED_REPORTS) -> i
             for record in records
             if record.status == "linked"
         ]
-        mentions.write_mentions(linked_mentions, sparql)
+        mentions.write_mentions(linked_mentions, sparql, run_ts)
 
         linked_count = len(linked_mentions)
         novel_count = len(records) - linked_count
