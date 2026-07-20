@@ -65,7 +65,7 @@ pytestmark = pytest.mark.skipif(
 from msr_extraction.config import Config
 from msr_extraction.graph_reader import CORE_GRAPHS
 from msr_extraction.mining_types import term_slug
-from msr_extraction.sparql import SparqlClient
+from msr_extraction.sparql import SparqlClient, ValidationError
 
 MSR = "https://w3id.org/msr-kg/ontology#"
 MSRD = "https://w3id.org/msr-kg/data#"
@@ -595,9 +595,7 @@ def test_shacl_rejects_catalog_individual_missing_required_provenance_edge() -> 
         ), "expected the provenance-complete individual to persist"
 
         # -- missing prov:wasGeneratedBy is rejected atomically --
-        import httpx
-
-        with pytest.raises(httpx.HTTPStatusError):
+        with pytest.raises(ValidationError) as excinfo_nogenby:
             client.update(
                 prefixes
                 + "INSERT DATA { GRAPH <urn:msr:data> {\n"
@@ -605,13 +603,20 @@ def test_shacl_rejects_catalog_individual_missing_required_provenance_edge() -> 
                 "        prov:wasDerivedFrom msrd:test-mine-shacl-doc .\n"
                 "} }"
             )
+        nogenby_report = excinfo_nogenby.value.report
+        assert nogenby_report, "expected the SHACL rejection to carry a non-empty validation report"
+        nogenby_lowered = nogenby_report.lower()
+        assert any(
+            marker in nogenby_lowered
+            for marker in ("wasgeneratedby", "validationreport", "conforms", "sh:result", "shacl")
+        ), f"expected SHACL-report evidence in rejection body, got: {nogenby_report!r}"
         assert not _sparql_ask(
             config,
             f"ASK {{ GRAPH <urn:msr:data> {{ <{SHACL_BAD_NO_GENBY_IRI}> ?p ?o }} }}",
         ), "the rejected INSERT DATA must leave no triples for that subject"
 
         # -- missing prov:wasDerivedFrom is rejected atomically --
-        with pytest.raises(httpx.HTTPStatusError):
+        with pytest.raises(ValidationError) as excinfo_noderived:
             client.update(
                 prefixes
                 + "INSERT DATA { GRAPH <urn:msr:data> {\n"
@@ -619,6 +624,13 @@ def test_shacl_rejects_catalog_individual_missing_required_provenance_edge() -> 
                 "        prov:wasGeneratedBy msrd:activity-mine .\n"
                 "} }"
             )
+        noderived_report = excinfo_noderived.value.report
+        assert noderived_report, "expected the SHACL rejection to carry a non-empty validation report"
+        noderived_lowered = noderived_report.lower()
+        assert any(
+            marker in noderived_lowered
+            for marker in ("wasderivedfrom", "validationreport", "conforms", "sh:result", "shacl")
+        ), f"expected SHACL-report evidence in rejection body, got: {noderived_report!r}"
         assert not _sparql_ask(
             config,
             f"ASK {{ GRAPH <urn:msr:data> {{ <{SHACL_BAD_NO_DERIVED_IRI}> ?p ?o }} }}",
