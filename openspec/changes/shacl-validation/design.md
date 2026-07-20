@@ -89,6 +89,14 @@ Two engine facts shape the implementation:
 
 Because provisioning is check-then-create, an existing pre-SHACL `msr` repo on an old `graphdb-data` volume would be silently left untouched — validation would appear "on" but never fire. So `ensure-repo.sh`, on finding the repo already present, additionally inspects its config (`GET /rest/repositories/msr` or the repository config download) for the `graphdb:ShaclSail` sail type / `sail-shacl:validationEnabled`; if absent it fails (or loudly warns) with guidance to drop the volume and recreate. This closes the "silent no-op on old volume" trap rather than leaving it to documentation.
 
+### D8: The `urn:msr:provenance` graph appends go through the validated commit path unaffected
+
+`provenance-model` was modified by `provenance-run-lineage` after this change was drafted: run provenance now lives in a single append-only `urn:msr:provenance` graph, written via additive `INSERT DATA { GRAPH <urn:msr:provenance> { … } }` (Client.Update, never PutGraph), and each fact accrues one per-run `prov:wasGeneratedBy <urn:msr:run:<pipeline>/<ts>>` edge there per run, in addition to its single stable edge in `urn:msr:data`. Three consequences for this change, none requiring a shape or config change:
+
+- **Validation fires on provenance-graph appends too, and passes.** ShaclSail validates the whole-repository union (D1 sets no data-graph restriction), so a provenance-graph commit re-validates any fact focus node its generation edges reference. Because the fact's full definition already lives in `urn:msr:data`, the union is complete and the write is accepted. The per-run `prov:Activity` nodes (`urn:msr:run:*`) are typed `prov:Activity`, which no shape targets (`undefinedTargetValidatesAllSubjects false`, D1), so they are not validated.
+- **Multiple `prov:wasGeneratedBy` edges per fact are fine.** All shapes use minCount 1 with no maxCount; the stable edge plus N per-run edges over-satisfy the constraint. Do **not** add a `sh:maxCount 1` on `prov:wasGeneratedBy` — it would reject any fact touched by a second run.
+- **No run/lineage shape is in scope.** `provenance-run-lineage`'s proposal anticipated shapes "targeting `urn:msr:provenance`", but per-run activities are audit records, not fact-bearing individuals; validating them is a non-goal here. Enforcement stays on measurements, mentions, and catalog individuals in `urn:msr:data`.
+
 ## Risks / Trade-offs
 
 - **[Exact 11.4.2 sail-type string]** → The config surface is now determined (D1): `graphdb:ShaclSail` wrapper + `sail:delegate`, `sail-shacl:` params, reserved shapes graph. The one residual is confirming the sail-type literal is `graphdb:ShaclSail` (GraphDB-native, matches UI-generated config) vs. `rdf4j:ShaclSail` on 11.4.2 exactly. Mitigation: the config-apply task verifies by round-tripping the config through GraphDB's own "create then download config" and diffing — no guessing.

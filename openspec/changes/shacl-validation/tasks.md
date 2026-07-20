@@ -30,7 +30,7 @@
 
 ## 6. Bulk-load strategy
 
-- [ ] 6.1 Confirm per-transaction (incremental) validation is used (D6): sanity-check that a full seed + NIST + extraction load stays well under `transactionalValidationLimit` (500000) so it never falls back to whole-repository validation; note the observed transaction sizes in design.md. (Load-then-validate remains a documented fallback only.)
+- [ ] 6.1 Confirm per-transaction (incremental) validation is used (D6): sanity-check that a full seed + NIST + extraction load — **including the per-run `urn:msr:provenance` appends** (per-run activity + one generation edge per asserted fact, per `provenance-run-lineage`; see D8) — stays well under `transactionalValidationLimit` (500000) so it never falls back to whole-repository validation; note the observed transaction sizes in design.md. (Load-then-validate remains a documented fallback only.)
 
 ## 7. Tests
 
