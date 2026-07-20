@@ -56,17 +56,30 @@ func TestLinksToShape_DanglingTargetIsRejected(t *testing.T) {
 }
 
 // TestLinksToShape_WellFormedLinkIsAccepted pins "Well-formed link is
-// accepted": msr:linksTo pointing at msr:MoltenSalt, an owl:Class
-// individual that always exists in urn:msr:ontology (static seed data,
-// no dependency on any other test/loader having run), which is
-// unambiguously an existing target of the "class" kind.
+// accepted": msr:linksTo pointing at an existing, explicitly-typed target
+// of one of the shape's expected kinds is accepted.
+//
+// The target is a freshly-minted skos:Concept individual inserted in the
+// SAME transaction as the Mention fixture, rather than a dependency on the
+// msr:MoltenSalt ontology seed being loaded: this keeps the test
+// self-contained and hermetic (no hidden dependency on external repo
+// state). A skos:Concept is deliberately chosen over a fresh
+// msr:MoltenSalt individual, which would ALSO be caught by the
+// catalog-provenance shape (2.5, msr:CatalogIndividualProvenanceShape
+// targets msr:MoltenSalt/Constituent/ChemicalCompound and requires
+// prov:wasGeneratedBy/wasDerivedFrom) -- a bare skos:Concept individual is
+// not subject to any provenance shape, so its acceptance can only be
+// attributed to msr:LinksToTargetKindShape.
 func TestLinksToShape_WellFormedLinkIsAccepted(t *testing.T) {
 	client := requireGraphDB(t)
 
 	id := uniqueLocal("linksto-wellformed")
-	triples := linksToTriples(id, "msr:MoltenSalt")
+	targetID := uniqueLocal("linksto-wellformed-target")
+	target := fmt.Sprintf("msrd:%s", targetID)
+	targetTriples := fmt.Sprintf("%s a skos:Concept .\n", target)
+	triples := targetTriples + linksToTriples(id, target)
 
 	err := insertData(t, client, triples)
-	assertAccepted(t, err, "linksTo pointing at the existing msr:MoltenSalt class")
+	assertAccepted(t, err, "linksTo pointing at a freshly-minted, self-contained skos:Concept target")
 	t.Cleanup(func() { deleteData(t, client, triples) })
 }
