@@ -46,12 +46,29 @@ class Config:
     # design.md D5) doesn't broaden precision risk the way lowering a
     # general-prose fuzzy floor would.
     fuzzy_min_token_length: int = 3
-    # Novelty miner's document-frequency salience cutoff (design D2/D9): the
-    # POC uses a fixed count threshold rather than tf-idf weighting (deferred).
-    # 50 is conservative — well below the demo targets `solubility` (280/637
-    # docs) and `graphite` (388/637 docs), so both clear it as salient, while
-    # still filtering out low-frequency OCR noise terms from the candidate set.
+    # Novelty miner's document-frequency FLOOR (refine-mine-salience D3): a
+    # coarse cost bound, NOT a novelty rank — the POC showed document
+    # frequency does not separate genuine targets from common/known phrases
+    # (`solubility` at df 271 is rarer than `molten salt` at df 423), so this
+    # value only drops rare OCR one-offs before the shaped candidate set
+    # reaches triage. 50 is conservative — well below the demo targets
+    # `solubility` (280/637 docs) and `graphite` (388/637 docs), so both clear
+    # it, while still filtering out low-frequency OCR noise terms.
     salience_threshold: int = 50
+    # Novelty miner's hard runaway ceiling (refine-mine-salience D3): after
+    # spaCy shaping + hardened exclusion + the `salience_threshold` floor, if
+    # more candidates remain than this, keep only the top-N by document
+    # frequency (deterministic tie-break) and log the count cut. This is
+    # purely a cost bound on LLM triage fan-out — explicitly not a novelty
+    # ranking (see `salience_threshold` above) — so it is set generously
+    # rather than tuned to surface targets. Override with
+    # MSR_MINE_MAX_CANDIDATES.
+    mine_max_candidates: int = 5000
+    # The pinned statistical spaCy model loaded for noun-chunk candidate
+    # enumeration (refine-mine-salience D5): deterministic at inference (no
+    # sampling), pinned as a wheel dependency so no runtime download occurs.
+    # Override with MSR_SPACY_MODEL (e.g. to swap models in a test double).
+    spacy_model: str = "en_core_web_sm"
     # Chunk 7 (extract-property-relations) — the SQLite measurement_value
     # store's path (D-mirrors the Go loader/server `defaultDBPath =
     # "data/msr.db"` and `MSR_DB_PATH` env), so text-derived measurements can
@@ -116,6 +133,10 @@ class Config:
             salience_threshold=int(
                 env.get("MSR_SALIENCE_THRESHOLD", cls.salience_threshold)
             ),
+            mine_max_candidates=int(
+                env.get("MSR_MINE_MAX_CANDIDATES", cls.mine_max_candidates)
+            ),
+            spacy_model=env.get("MSR_SPACY_MODEL", cls.spacy_model),
             db_path=Path(env.get("MSR_DB_PATH", str(cls.db_path))),
             confidence_threshold=float(
                 env.get(

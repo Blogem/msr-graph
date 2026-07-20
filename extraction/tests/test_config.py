@@ -34,6 +34,50 @@ def test_from_env_empty_mapping_keeps_defaults() -> None:
     assert config.fuzzy_min_token_length == Config.fuzzy_min_token_length
 
 
+class TestMineSalienceKnobs:
+    """refine-mine-salience task 2.1, design.md D3/D5: `salience_threshold`
+    is repurposed as a coarse low document-frequency FLOOR (never a novelty
+    rank), `mine_max_candidates` is the hard runaway ceiling bounding triage
+    fan-out, and `spacy_model` names the pinned noun-chunk enumeration model.
+    All three are injectable and env-overridable."""
+
+    def test_defaults(self) -> None:
+        config = Config()
+        assert config.salience_threshold == 50
+        assert config.mine_max_candidates == 5000
+        assert config.spacy_model == "en_core_web_sm"
+
+    def test_from_env_empty_mapping_keeps_defaults(self) -> None:
+        config = Config.from_env({})
+        assert config.salience_threshold == Config.salience_threshold
+        assert config.mine_max_candidates == Config.mine_max_candidates
+        assert config.spacy_model == Config.spacy_model
+
+    def test_from_env_reads_salience_threshold_as_int(self) -> None:
+        config = Config.from_env({"MSR_SALIENCE_THRESHOLD": "10"})
+        assert config.salience_threshold == 10
+        assert isinstance(config.salience_threshold, int)
+
+    def test_from_env_reads_mine_max_candidates_as_int(self) -> None:
+        config = Config.from_env({"MSR_MINE_MAX_CANDIDATES": "1234"})
+        assert config.mine_max_candidates == 1234
+        assert isinstance(config.mine_max_candidates, int)
+
+    def test_from_env_reads_spacy_model(self) -> None:
+        config = Config.from_env({"MSR_SPACY_MODEL": "en_core_web_md"})
+        assert config.spacy_model == "en_core_web_md"
+
+    def test_explicit_construction_accepts_all_three(self) -> None:
+        config = Config(
+            salience_threshold=5,
+            mine_max_candidates=100,
+            spacy_model="en_core_web_trf",
+        )
+        assert config.salience_threshold == 5
+        assert config.mine_max_candidates == 100
+        assert config.spacy_model == "en_core_web_trf"
+
+
 def test_from_env_reads_deepseek_base_url() -> None:
     config = Config.from_env({"DEEPSEEK_BASE_URL": "https://api.deepseek.example"})
     assert config.deepseek_base_url == "https://api.deepseek.example"
