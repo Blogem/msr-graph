@@ -32,7 +32,7 @@ import re
 from typing import TYPE_CHECKING
 
 from msr_extraction.disambiguation import Completer
-from msr_extraction.mining_types import VALID_KINDS, Placement, TriagedCandidate
+from msr_extraction.mining_types import KIND_REJECT, VALID_KINDS, Placement, TriagedCandidate
 
 if TYPE_CHECKING:
     from msr_extraction.mining_types import Candidate
@@ -128,7 +128,11 @@ def _build_user_prompt(candidate: Candidate, signal: str | None) -> str:
 
     Includes the literal word "json" (DeepSeek's JSON output mode requires
     it to appear somewhere in the prompt) and presents the candidate term,
-    the cheap context-signal hint, and its evidence sentences.
+    the cheap context-signal hint, and its evidence sentences. Instructs
+    the model to return the explicit ``"reject"`` kind (design.md D4,
+    refine-mine-salience) for a candidate that is NOT a genuine novel
+    ontology concept — candidate enumeration is precision-limited on noisy
+    OCR, so the classifier is the semantic filter of last resort.
     """
     sentences = "\n".join(
         f'- "{evidence.sentence_text}"' for evidence in candidate.evidence
@@ -136,12 +140,13 @@ def _build_user_prompt(candidate: Candidate, signal: str | None) -> str:
     signal_line = signal if signal is not None else "unclear"
     return (
         "Triage the following candidate term against the knowledge graph "
-        "schema above and classify it into exactly one primary kind.\n\n"
+        "schema above and classify it into exactly one primary kind, or "
+        "reject it if it is not a genuine novel ontology concept.\n\n"
         f'Candidate term: "{candidate.term}"\n'
         f"Context-signal hint: {signal_line}\n"
         f"Evidence sentences:\n{sentences}\n\n"
         "Respond with a single json object with this shape:\n"
-        '{"kind":"property|class|instance|relation",'
+        '{"kind":"property|class|instance|relation|reject",'
         '"broaderClass":"<iri-or-label>?",'
         '"quantityKind":"<qk IRI>?",'
         '"canonicalUnit":"<unit IRI>?",'
@@ -150,7 +155,12 @@ def _build_user_prompt(candidate: Candidate, signal: str | None) -> str:
         "Only fields relevant to the confirmed kind need be set; leave the "
         "rest unset. In particular, LEAVE canonicalUnit and quantityKind "
         "UNSET whenever the unit is ambiguous or not confidently known — "
-        "do not guess a unit. Return only the json object, no other text."
+        "do not guess a unit. Return \"kind\":\"reject\" (leaving every "
+        "other field unset) if the candidate term is an OCR fragment, an "
+        "acronym, a proper noun (a person, organization, or place name "
+        "that slipped candidate enumeration), or generic boilerplate — "
+        "i.e. not a real, novel ontology concept. Return only the json "
+        "object, no other text."
     )
 
 
