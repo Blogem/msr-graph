@@ -57,9 +57,11 @@ equations.parse_correlation`'s normalized shape.
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+import math
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Literal
 
+from msr_extraction.edges import slugify as _reactor_slugify
 from msr_extraction.equations import EquationParse, parse_correlation
 from msr_extraction.units import UnitMapper
 
@@ -77,6 +79,7 @@ REASON_UNKNOWN_ROLE = "unknown-role"
 REASON_EQUATION_PARSE = "equation-parse"
 REASON_REACTOR_NOT_GROUNDED = "reactor-not-grounded"
 REASON_MALFORMED_RELATION = "malformed-relation"
+REASON_DUPLICATE_LOCATOR = "duplicate-locator"
 
 
 @dataclass(frozen=True)
@@ -327,18 +330,27 @@ def _to_float(value: object) -> float | None:
 
     Guards :func:`msr_extraction.equations.parse_correlation` (whose own
     ``float(...)`` calls would raise on a non-numeric LLM-supplied string)
-    so this module never raises on a malformed proposed relation.
+    so this module never raises on a malformed proposed relation. Also
+    rejects non-finite results (``NaN``/``Infinity``/``-Infinity``) --
+    ``json.loads`` parses those bare tokens into ``float('nan')``/
+    ``float('inf')`` without raising, and a non-finite coefficient/value/
+    temperature must not silently reach :func:`msr_extraction.equations.
+    parse_correlation` or an emitted Turtle literal.
     """
     if value is None or isinstance(value, bool):
         return None
     if isinstance(value, (int, float)):
-        return float(value)
-    if isinstance(value, str):
+        f = float(value)
+    elif isinstance(value, str):
         try:
-            return float(value)
+            f = float(value)
         except ValueError:
             return None
-    return None
+    else:
+        return None
+    if not math.isfinite(f):
+        return None
+    return f
 
 
 def _to_float_list(value: object) -> list[float] | None:
@@ -421,6 +433,14 @@ def validate_relation(
         confidence = 0.0
     else:
         confidence = float(raw_confidence)
+        # A non-finite (NaN/Infinity) or out-of-range confidence must never
+        # bypass the threshold gate below -- json.loads parses the bare
+        # tokens "NaN"/"Infinity"/"-Infinity" into non-finite floats without
+        # raising, and NaN < threshold is always False while inf is never
+        # < threshold, so either would otherwise slip a relation through as
+        # "written" regardless of the configured threshold.
+        if not math.isfinite(confidence) or confidence < 0.0 or confidence > 1.0:
+            confidence = 0.0
 
     raw_rationale = raw.get("rationale")
     rationale = raw_rationale if isinstance(raw_rationale, str) else ""
@@ -746,6 +766,13 @@ def extract_report(
     roles: list[ValidatedRole] = []
     reactors: list[ValidatedReactor] = []
     records: list[RelationRecord] = []
+    # Parallel to measurements/roles/reactors: the index into ``records`` of
+    # the "written" RelationRecord each payload came from, so a payload
+    # dropped as an in-run duplicate (below) can flip its own record to
+    # "skipped"/"duplicate-locator" without disturbing any other record.
+    measurement_record_idx: list[int] = []
+    role_record_idx: list[int] = []
+    reactor_record_idx: list[int] = []
     malformed_calls = 0
 
     for sentence in sentences:
@@ -759,12 +786,50 @@ def extract_report(
                 raw, sentence, known, unit_mapper, config.confidence_threshold
             )
             records.append(record)
+            record_idx = len(records) - 1
             if isinstance(payload, ValidatedMeasurement):
                 measurements.append(payload)
+                measurement_record_idx.append(record_idx)
             elif isinstance(payload, ValidatedRole):
                 roles.append(payload)
+                role_record_idx.append(record_idx)
             elif isinstance(payload, ValidatedReactor):
                 reactors.append(payload)
+                reactor_record_idx.append(record_idx)
+
+    measurements, dropped = _dedupe_by_key(
+        measurements,
+        measurement_record_idx,
+        key_fn=lambda m: (m.report, m.property_name, m.salt_iri),
+    )
+    for idx in dropped:
+        records[idx] = replace(
+            records[idx], disposition="skipped", reason=REASON_DUPLICATE_LOCATOR
+        )
+
+    roles, dropped = _dedupe_by_key(
+        roles,
+        role_record_idx,
+        key_fn=lambda r: (r.report, r.salt_iri, r.role_iri),
+    )
+    for idx in dropped:
+        records[idx] = replace(
+            records[idx], disposition="skipped", reason=REASON_DUPLICATE_LOCATOR
+        )
+
+    reactors, dropped = _dedupe_by_key(
+        reactors,
+        reactor_record_idx,
+        key_fn=lambda r: (
+            r.report,
+            r.salt_iri,
+            _reactor_slugify(r.reactor_label).lower(),
+        ),
+    )
+    for idx in dropped:
+        records[idx] = replace(
+            records[idx], disposition="skipped", reason=REASON_DUPLICATE_LOCATOR
+        )
 
     write_relations_jsonl(report, records, config)
 
@@ -776,3 +841,43 @@ def extract_report(
         sentences_seen=len(sentences),
         malformed_calls=malformed_calls,
     )
+
+
+def _dedupe_by_key(payloads, record_indices, *, key_fn):
+    """Keep only the highest-confidence payload per :func:`key_fn` key.
+
+    Used by :func:`extract_report` to dedupe validated measurements/roles/
+    reactors that resolve to the same deterministic target subject within
+    one report (two different sentences can validate to the same
+    ``(report, property_name, salt_iri)``/``(report, salt_iri, role_iri)``/
+    ``(report, salt_iri, reactor_slug)`` locator). Ties are broken
+    deterministically by earliest ``seg_index``, then ``char_start``.
+
+    Returns ``(kept_payloads, dropped_record_indices)`` -- ``kept_payloads``
+    preserves the original relative order of the surviving items;
+    ``dropped_record_indices`` is the (arbitrary-order) list of
+    ``record_indices`` entries for every payload that lost its key's
+    contest, for the caller to flip the corresponding ``RelationRecord``.
+    """
+    groups: dict[object, list[int]] = {}
+    for i, payload in enumerate(payloads):
+        groups.setdefault(key_fn(payload), []).append(i)
+
+    keep_positions: set[int] = set()
+    dropped_record_indices: list[int] = []
+    for positions in groups.values():
+        best = min(
+            positions,
+            key=lambda i: (
+                -payloads[i].confidence,
+                payloads[i].seg_index,
+                payloads[i].char_start,
+            ),
+        )
+        keep_positions.add(best)
+        for i in positions:
+            if i != best:
+                dropped_record_indices.append(record_indices[i])
+
+    kept_payloads = [payloads[i] for i in range(len(payloads)) if i in keep_positions]
+    return kept_payloads, dropped_record_indices

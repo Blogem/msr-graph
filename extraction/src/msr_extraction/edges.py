@@ -34,6 +34,8 @@ touching the idempotent ``urn:msr:data`` block.
 
 from __future__ import annotations
 
+import math
+import re
 from dataclasses import dataclass
 
 from msr_extraction.provenance import ACTIVITY_IRI, run_activity_iri
@@ -138,9 +140,62 @@ def slugify(s: str) -> str:
     return out.strip("-")
 
 
+def _format_number(v: float) -> str:
+    """Render ``v`` as a bare Turtle decimal literal (Go loader ``formatFloat`` parity).
+
+    Shortest round-tripping decimal, never scientific notation, always
+    carrying an explicit ``.0`` for whole numbers. Mirrors
+    ``measurements.py``'s ``_format_number`` exactly.
+    """
+    s = repr(float(v))
+    if "e" in s or "E" in s:
+        s = format(float(v), "f")
+    if "." not in s:
+        s += ".0"
+    return s
+
+
+def _format_confidence(v: float) -> str:
+    """Render a confidence value as a safe, plain ``xsd:decimal`` literal.
+
+    Defense-in-depth alongside relations.py's validation-boundary guard: a
+    non-finite value (``NaN``/``Infinity``/``-Infinity``) must never be
+    interpolated into emitted Turtle/SPARQL as the bare token ``nan``/
+    ``inf`` (invalid, and not even quoted), so any non-finite input is
+    clamped to ``0.0`` here rather than passed through. Mirrors
+    ``measurements.py``'s ``_format_confidence``.
+    """
+    if not math.isfinite(v):
+        v = 0.0
+    return _format_number(v)
+
+
+def _safe_reactor_slug(slug: str) -> str:
+    """Constrain a reactor slug to a safe IRI local-name charset.
+
+    ``reactor_slug`` derives from document-linked mention text and is
+    interpolated *unquoted* into a ``msrd:reactor-{slug}`` SPARQL/Turtle
+    CURIE local name. :func:`slugify` neutralizes ``' '``/``'/'``/``'#'``/
+    ``'|'``/``'='``/``'@'`` but not SPARQL/Turtle metacharacters such as
+    ``< > " { } ;`` or control characters, so this sanitizer is applied on
+    top of it wherever the reactor slug forms an IRI: lowercases, keeps
+    only ``[a-z0-9-]``, collapses repeated ``-``, and strips leading/
+    trailing ``-``. A no-op for a legitimate input like ``"msre"``.
+    """
+    lowered = slug.lower()
+    filtered = re.sub(r"[^a-z0-9-]", "", lowered)
+    collapsed = re.sub(r"-+", "-", filtered)
+    return collapsed.strip("-")
+
+
 def reactor_iri(slug: str) -> str:
-    """Return the deterministic ``msrd:`` CURIE for a minted reactor individual."""
-    return f"msrd:reactor-{slug}"
+    """Return the deterministic ``msrd:`` CURIE for a minted reactor individual.
+
+    Passes ``slug`` through :func:`_safe_reactor_slug` first so the emitted
+    IRI can never carry a SPARQL/Turtle metacharacter regardless of
+    upstream input.
+    """
+    return f"msrd:reactor-{_safe_reactor_slug(slug)}"
 
 
 def role_statement_iri(e: RoleEdge) -> str:
@@ -160,10 +215,13 @@ def reactor_statement_iri(e: ReactorEdge) -> str:
     """Return the deterministic reification-node IRI for a ``ReactorEdge``.
 
     ``msrd:edge-{report}-{salt_local}-usedIn-reactor-{slug}``, where
-    ``salt_local`` is the slugified local name of ``e.salt_iri``.
+    ``salt_local`` is the slugified local name of ``e.salt_iri`` and
+    ``slug`` is ``e.reactor_slug`` passed through :func:`_safe_reactor_slug`
+    (same charset guarantee as :func:`reactor_iri`).
     """
     salt_local = slugify(_local(e.salt_iri))
-    return f"msrd:edge-{e.report}-{salt_local}-usedIn-reactor-{e.reactor_slug}"
+    safe_slug = _safe_reactor_slug(e.reactor_slug)
+    return f"msrd:edge-{e.report}-{salt_local}-usedIn-reactor-{safe_slug}"
 
 
 def role_edge_triples(e: RoleEdge) -> str:
@@ -186,7 +244,7 @@ def role_edge_triples(e: RoleEdge) -> str:
         f"    rdf:subject {salt} ;\n"
         f"    rdf:predicate msr:hasRole ;\n"
         f"    rdf:object {role} ;\n"
-        f'    msr:extractionConfidence "{e.confidence}"^^xsd:decimal ;\n'
+        f'    msr:extractionConfidence "{_format_confidence(e.confidence)}"^^xsd:decimal ;\n'
         f'    msr:extractionRationale "{rationale}"^^xsd:string ;\n'
         f"    msr:citedIn {document} ;\n"
         f"    prov:wasGeneratedBy {ACTIVITY_IRI} ;\n"
@@ -224,7 +282,7 @@ def reactor_edge_triples(e: ReactorEdge) -> str:
         f"    rdf:subject {salt} ;\n"
         f"    rdf:predicate msr:usedIn ;\n"
         f"    rdf:object {reactor} ;\n"
-        f'    msr:extractionConfidence "{e.confidence}"^^xsd:decimal ;\n'
+        f'    msr:extractionConfidence "{_format_confidence(e.confidence)}"^^xsd:decimal ;\n'
         f'    msr:extractionRationale "{rationale}"^^xsd:string ;\n'
         f"    msr:citedIn {document} ;\n"
         f"    prov:wasGeneratedBy {ACTIVITY_IRI} ;\n"

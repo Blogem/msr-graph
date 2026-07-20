@@ -29,6 +29,8 @@ the idempotent ``urn:msr:data`` block.
 
 from __future__ import annotations
 
+import math
+
 from msr_extraction.equations import EquationParse
 from msr_extraction.measurement_store import MeasurementRow, upsert_rows
 from msr_extraction.provenance import ACTIVITY_IRI, run_activity_iri
@@ -119,6 +121,22 @@ def _format_number(v: float) -> str:
     return s
 
 
+def _format_confidence(v: float) -> str:
+    """Render a confidence value as a safe, plain ``xsd:decimal`` literal.
+
+    Defense-in-depth alongside relations.py's validation-boundary guard: a
+    non-finite value (``NaN``/``Infinity``/``-Infinity``) must never be
+    interpolated into emitted Turtle/SPARQL as the bare token ``nan``/
+    ``inf`` (invalid, and not even quoted), so any non-finite input is
+    clamped to ``0.0`` here rather than passed through. Reuses
+    :func:`_format_number`'s plain-decimal, never-scientific-notation
+    rendering for the finite case.
+    """
+    if not math.isfinite(v):
+        v = 0.0
+    return _format_number(v)
+
+
 def salt_slug(salt_iri: str) -> str:
     """Local name of the salt IRI with a leading ``'salt-'`` stripped.
 
@@ -206,7 +224,9 @@ def measurement_triples(
         lines.append(f"    msr:validTempMax {_format_number(t_max)} ;")
     lines.append(f'    msr:dataLocator "{locator_escaped}" ;')
     lines.append(f"    msr:citedIn msrd:{report} ;")
-    lines.append(f'    msr:extractionConfidence "{confidence}"^^xsd:decimal ;')
+    lines.append(
+        f'    msr:extractionConfidence "{_format_confidence(confidence)}"^^xsd:decimal ;'
+    )
     lines.append(f'    msr:extractionRationale "{rationale_escaped}"^^xsd:string ;')
     lines.append(f"    prov:wasGeneratedBy {ACTIVITY_IRI} ;")
     lines.append(f"    prov:wasDerivedFrom msrd:{report} .")
