@@ -35,7 +35,11 @@ A concrete `unit:` or `qk:` IRI asserted in a proposal graph MUST be present in 
 `ontology/qudt-units.json` allowlist (`allowedUnits` / `allowedQuantityKinds`); otherwise the
 entire proposal SHALL be rejected — dropped from the run and not written. A proposal that
 asserts no concrete `unit:`/`qk:` IRI (e.g. a property whose unit is left as a reviewer
-decision) SHALL NOT be rejected by this guard.
+decision) SHALL NOT be rejected by this guard. This guard — not SHACL — is what protects proposal
+graphs: the landed `shacl-validation` unit shape constrains only a `msr:PropertyMeasurement`'s
+`msr:hasUnit`, and the miner writes no measurements, so a proposed property's unit is not
+otherwise validated. Both the guard and the SHACL unit shape derive from the same
+`ontology/qudt-units.json`, so they cannot drift.
 
 #### Scenario: An out-of-allowlist unit rejects the proposal
 - **WHEN** a proposal would assert a `unit:` IRI absent from the allowlist

@@ -127,7 +127,10 @@ those specs' requirements.
   the graph reader), and the merged **trust foundation** — `ground-demo-in-real-docs` (the
   hand-curated seed A-Box is gone; `urn:msr:data` is real-writer-only and additive) and
   `provenance-model` / `provenance-run-lineage` (the PROV-O TBox, the `msrd:activity-<pipeline>`
-  two-activity pattern, and the `urn:msr:provenance` graph this stage writes into). Transitively
+  two-activity pattern, and the `urn:msr:provenance` graph this stage writes into), and
+  `shacl-validation` (the commit-time gate every `mine` write to `urn:msr:data` must pass — its
+  `CatalogIndividualProvenanceShape` enforces exactly the provenance the auto-accepted individuals
+  carry, so they are born-valid). Transitively
   relies on chunk 2's salt catalog + QUDT allowlist and chunk 5's corpus, both reached through
   chunk 6. **Downstream**: produces the staging records chunk 9's governance API serves and
   promotes.

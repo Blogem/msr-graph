@@ -8,7 +8,9 @@ this change: `ground-demo-in-real-docs` **deleted the hand-curated seed A-Box**
 populated *only* by real-data writers (loader + extraction) via additive `INSERT DATA`; and
 `provenance-model` / `provenance-run-lineage` make **PROV-O provenance a required invariant** on
 every fact-bearing individual in `urn:msr:data` (two `prov:Activity` IRIs per pipeline + an
-append-only `urn:msr:provenance` graph). Chunk 1 (`bootstrap-graph-infra`) shipped the running
+append-only `urn:msr:provenance` graph); and `shacl-validation` (chunk 13, **now merged**) turns
+that invariant into a **commit-time gate** — the `msr` repo runs RDF4J `ShaclSail`, so a write of
+an under-provenanced catalog individual is rejected atomically (D9). Chunk 1 (`bootstrap-graph-infra`) shipped the running
 stores, the seed ontology/vocab (TBox + terminology only — **no A-Box**), the `internal/graph`
 core-dataset client, the `urn:msr:staging` graph, and the `extraction/` Python scaffold. Chunk 6
 (`ner-entity-linking`) lands the pieces this change builds on, verified against the merged code:
@@ -104,12 +106,14 @@ contracts_, and by `docs/IMPLEMENTATION_PLAN.md` → chunk 8. Fixed points it ho
 - **No Go changes** — this is a Python extraction stage writing the graph directly over HTTP.
 - **No new packages** — reuses chunk 6's Flash client, prompt builder, and graph reader, and
   chunk 5's SPARQL-UPDATE helper.
-- **No SHACL authoring** — the write-time validation shapes are chunk 13 (`shacl-validation`).
-  But because this stage writes its `urn:msr:data` individuals provenance-complete (D8), those
-  facts are **born SHACL-valid**: they already satisfy chunk-13's catalog-individual provenance
-  shape (`prov:wasGeneratedBy`/`prov:wasDerivedFrom` required), so chunk 8 is not retrofitted
-  later — the trust design's "chunks 7–8 are born provenance-complete and SHACL-valid" goal
-  (`docs/PROVENANCE_AND_TRUST_DESIGN.md` §5).
+- **No SHACL authoring** — the write-time validation shapes were authored by chunk 13
+  (`shacl-validation`, now merged; `deploy/graphdb/msr-shapes.ttl`). This stage authors no shapes;
+  because it writes its `urn:msr:data` individuals provenance-complete (D8), those facts are
+  **born SHACL-valid**: they already satisfy the landed `CatalogIndividualProvenanceShape`
+  (`prov:wasGeneratedBy`/`prov:wasDerivedFrom` required), so chunk 8 is not retrofitted later —
+  the trust design's "chunks 7–8 are born provenance-complete and SHACL-valid" goal
+  (`docs/PROVENANCE_AND_TRUST_DESIGN.md` §5). See D9 for how the landed shapes constrain this
+  stage's writes.
 
 ## Decisions
 
@@ -305,6 +309,41 @@ core schema.
 distinct stage of the evolution loop, so its auto-accepted facts have clean, queryable lineage;
 reusing `msrd:activity-extraction` is the alternative, rejected for lineage clarity.
 
+### D9 — SHACL validation: mined writes are born-valid, commits are atomic
+
+`shacl-validation` (chunk 13) is now merged: the `msr` repo runs RDF4J `ShaclSail` with
+commit-time validation over the **whole-repository union** (`deploy/graphdb/msr-shapes.ttl`;
+`undefinedTargetValidatesAllSubjects false`, so shapes fire only on their declared targets;
+`shacl-validation` design D8). Three consequences for this stage, none requiring a design change —
+the provenance contract (D8) already satisfies them:
+
+- **Auto-accepted individuals are born SHACL-valid.** A new salt/compound written to
+  `urn:msr:data` is typed by an existing catalog class (`msr:MoltenSalt` / `msr:ChemicalCompound`),
+  so it is targeted by `CatalogIndividualProvenanceShape`, which requires `prov:wasGeneratedBy`
+  **and** `prov:wasDerivedFrom` (minCount 1 each, no `sh:maxCount`). Both are emitted per D8, so
+  the write commits; an individual missing either PROV edge is **rejected atomically** — the whole
+  `INSERT DATA` transaction rolls back, so `msr:autoAccepted` provenance-completeness is now a
+  hard, enforced gate, not a convention. The `msr:autoAccepted` flag is harmless: GraphDB's SHACL
+  omits `sh:closed`, and no shape targets the flag.
+- **Proposal-graph triples are not targeted and commit freely.** The proposed `msr:Moderator`
+  (`owl:Class`), `msr:moderatedBy` (`owl:ObjectProperty`), and the `msrd:graphite` individual
+  (typed by the proposed `msr:Moderator`, which no shape targets) sit outside every shape's target
+  set, so the proposal write is accepted. A rides-with individual also carries the PROV edges (D8),
+  so it stays valid if chunk 9 later routes it into `urn:msr:data` under a catalog type. mine
+  writes no `msr:Mention`/`msr:PropertyMeasurement`/`msr:linksTo`, so those shapes never fire on
+  its output.
+- **The QUDT-allowlist guard (D6) is still required — SHACL does not cover proposals.** The SHACL
+  unit shape constrains only a `msr:PropertyMeasurement`'s `msr:hasUnit`; mine writes no
+  measurements, and a proposed property's `canonicalUnit` is not shape-targeted. So mine's own
+  allowlist guard on concrete asserted `qk:`/`unit:` IRIs — derived from `ontology/qudt-units.json`,
+  the same single source of truth the SHACL unit shape uses — remains the integrity check for
+  proposal graphs.
+
+The Python writer reuses chunk 5's `sparql.SparqlClient` (`raise_for_status`), so a SHACL
+rejection surfaces as a loud HTTP error, not silent data loss; unlike the Go loader's typed
+`ValidationError` (chunk 13 D5) the message is not parsed into constraint/focus-node fields —
+acceptable at POC scale (a rejection means a real provenance bug to fix, not a routine path).
+
 ### D10 — Staging invisibility via graph membership
 
 Because proposals and auto-accept-excepted individuals live only in `urn:msr:staging` /
@@ -338,11 +377,16 @@ Hermetic pytest; no live model, and (for units) no GraphDB:
   across `urn:msr:staging` and `urn:msr:proposal/{id}`; a second run yields identical triples.
 - **Staging invisibility** — a proposal is absent from a core-dataset read, present in a raw
   staging query.
-- **Guarded integration** (opt-in env flag, mirroring chunk 1's `GRAPHDB_REQUIRED`): after
-  seed + catalog + a `link` run + a real `mine` run, `solubility` and `graphite` appear as
-  proposals with the correct kinds and evidence, an instance candidate is in `urn:msr:data`
-  flagged `autoAccepted`, the proposals are invisible via the core client, and a second
-  `mine` leaves staging/proposal triple counts unchanged.
+- **Guarded integration** (opt-in env flag, mirroring chunk 1's `GRAPHDB_REQUIRED`): against a
+  **SHACL-enabled** `msr` repo, after seed + catalog + a `link` run + a real `mine` run,
+  `solubility` and `graphite` appear as proposals with the correct kinds and evidence, an instance
+  candidate is in `urn:msr:data` flagged `autoAccepted` (its commit was **accepted** by SHACL,
+  i.e. it carried both PROV edges), the proposals are invisible via the core client, and a second
+  `mine` leaves staging/proposal triple counts unchanged. A negative check: writing an
+  auto-accepted individual with its provenance stripped is **rejected** by SHACL. (Recreate a
+  SHACL-enabled `msr` in a worktree via the REST API — `DELETE /rest/repositories/msr` →
+  `scripts/ensure-repo.sh` → `loader seed` — not `docker compose down -v`, which needs the
+  license the worktree lacks.)
 - **Manual acceptance run** — a real end-to-end `mine` over the curated corpus with human
   inspection of the emitted proposals is an explicit task; the change is done only after it.
 
@@ -364,6 +408,11 @@ Hermetic pytest; no live model, and (for units) no GraphDB:
   well-formed, `docs/PROVENANCE_AND_TRUST_DESIGN.md` §3); scoped to individuals typeable by
   existing classes, flagged `msr:autoAccepted` and provenance-complete (D8) so chunk 9's
   checkpoint/restore reverts them, and excluded when they depend on proposed schema.
+- **SHACL rejects a mined write** → auto-accepted `urn:msr:data` individuals are born-valid
+  (D9: they carry both PROV edges), so a rejection signals a real provenance bug, not a routine
+  path; it surfaces loudly via the Python writer's `raise_for_status`. Proposal-graph and
+  `urn:msr:provenance` writes are outside every shape's target set (D9), so they commit
+  unaffected.
 - **Editing the seed `ontology/msr.ttl`** (D4) touches a foundational file → additive and
   self-contained (governance classes/predicates), loaded by the existing idempotent
   graph-replace `PUT`, no loader code change; follows chunk 6's precedent.
@@ -378,7 +427,11 @@ Additive on top of chunks 1 and 6 and the merged trust foundation. Bootstrap ord
 `make up` → `make load-seed` (now including the `ChangeProposal` governance TBox) →
 `make load-nist` → `make ingest` → `make link` → `make mine` → `make test`. The
 `ontology/msr.ttl` governance-TBox edit loads into `urn:msr:ontology` via `make load-seed`'s
-graph-replace `PUT` **at bootstrap, before the data pipeline runs**.
+graph-replace `PUT` **at bootstrap, before the data pipeline runs**. `make up` now provisions a
+**SHACL-enabled** `msr` repo (chunk 13's `scripts/ensure-repo.sh` + `deploy/graphdb/msr-shapes.ttl`);
+mine's writes pass those shapes by construction (D9). On an old pre-SHACL data volume, drop it and
+recreate (chunk 13 migration); in a licenseless worktree, recreate `msr` via the REST API rather
+than `down -v` (D11 guarded-integration note).
 
 - **`make load-seed` no longer touches `urn:msr:data`.** Since `ground-demo-in-real-docs`
   deleted `ontology/example-flibe.ttl`, `load-seed` loads TBox + vocab only

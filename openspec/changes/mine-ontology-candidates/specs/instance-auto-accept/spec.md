@@ -19,11 +19,19 @@ source `msr:Document` it was mined from. Such a candidate SHALL NOT create a `Ch
 and SHALL NOT be written to `urn:msr:staging` or a proposal graph — the schema is unchanged, so
 there is nothing to review. No `msr:citedIn` is asserted on the individual — that predicate is
 deferred to chunk-7 citation extraction; the derivation root is the `prov:wasDerivedFrom`
-document.
+document. Because the landed `shacl-validation` `CatalogIndividualProvenanceShape` targets
+`msr:MoltenSalt`/`msr:Constituent`/`msr:ChemicalCompound` and requires both PROV edges, this
+provenance is enforced at commit: an auto-accepted individual missing either edge is rejected
+atomically (the whole `INSERT DATA` rolls back), so provenance-completeness is a hard gate, not a
+convention.
 
 #### Scenario: A new salt under MoltenSalt is written directly to data
 - **WHEN** an `instance` candidate is a new specific salt/compound typed by the existing `msr:MoltenSalt` (or another existing) class
 - **THEN** it is written to `urn:msr:data` flagged `msr:autoAccepted true` carrying `prov:wasGeneratedBy msrd:activity-mine` and `prov:wasDerivedFrom` its source `msr:Document`, and no `ChangeProposal` is created
+
+#### Scenario: The auto-accepted write is accepted by SHACL, an under-provenanced one is rejected
+- **WHEN** the provenance-complete auto-accepted `msr:MoltenSalt`/`msr:ChemicalCompound` individual is committed to the SHACL-enabled `msr` repo
+- **THEN** the commit is accepted (it satisfies `CatalogIndividualProvenanceShape`); an otherwise-identical individual written without `prov:wasGeneratedBy` or `prov:wasDerivedFrom` is rejected atomically with a validation report and none of its triples persist
 
 ### Requirement: The mine run records provenance activities and per-run lineage
 Following the `provenance-model` two-activity pattern, the miner SHALL type the stable
