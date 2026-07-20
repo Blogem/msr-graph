@@ -59,9 +59,16 @@ REPORT = "FIX-0001"
 _NLP = spacy.load("en_core_web_sm")
 
 
-def _raise_model_unavailable(config: Config):
-    """A ``load_spacy_pipeline`` stand-in simulating the model failing to load."""
-    raise OSError("simulated: en_core_web_sm not installed")
+def _model_unavailable(config: Config):
+    """A ``load_spacy_pipeline`` stand-in simulating the model failing to load.
+
+    The real ``load_spacy_pipeline`` already swallows ``ImportError``/``OSError``
+    internally and RETURNS ``None`` as its unavailable-model sentinel (design.md
+    D5) -- it never raises out of the function. Since monkeypatching replaces
+    the whole function (not just its internals), this stand-in must mirror that
+    same return-None contract, not raise, or ``mine_candidates`` would see an
+    uncaught exception instead of the documented fallback signal."""
+    return None
 
 
 def _fixed_lexical_evidence(terms: list[str]) -> dict[str, list[Evidence]]:
@@ -109,11 +116,18 @@ class FakeKnownEntitiesReader:
     "Staging membership does not exclude a candidate").
     """
 
-    def __init__(self, entities: list[KnownEntity]) -> None:
+    def __init__(self, entities: list[KnownEntity], role_reactor_labels: set[str] | None = None) -> None:
         self._entities = entities
+        self._role_reactor_labels = role_reactor_labels if role_reactor_labels is not None else set()
 
     def read_known_entities(self) -> list[KnownEntity]:
         return self._entities
+
+    def read_role_reactor_labels(self) -> set[str]:
+        """chunk-7's msr:SaltRole label set (real GraphReader seam,
+        refine-mine-salience D2/4.1) -- empty unless a test explicitly
+        injects role/reactor labels via the constructor."""
+        return self._role_reactor_labels
 
     def read_version(self) -> str | None:
         return None
@@ -330,29 +344,40 @@ def test_score_document_frequency_counts_case_folded_matches(tmp_path) -> None:
 def test_mine_candidates_threshold_boundary(tmp_path) -> None:
     """Scenario: threshold boundary via the end-to-end mine_candidates
     pipeline -- a term at freq == threshold is KEPT, freq == threshold - 1
-    is DROPPED."""
+    is DROPPED.
+
+    Rewritten for refine-mine-salience 7.1's spaCy noun-chunk enumeration
+    (the legacy unigram "keepterm"/"dropterm" shape no longer reflects what
+    mine_candidates actually enumerates by default): each fixture sentence's
+    noun chunk survives as the two-token candidate "keepterm value" /
+    "dropterm reading" (dry-run confirmed with the real en_core_web_sm
+    pipeline -- "A" is a stopword dropped from the chunk, "keepterm"/"value"
+    and "dropterm"/"reading" both survive as content tokens). The archive
+    fixture is shaped so the bigram "keepterm value" has document frequency
+    exactly 3 (== threshold) and "dropterm reading" has exactly 2
+    (== threshold - 1), preserving the original boundary-test intent."""
     config = Config(corpus_dir=tmp_path, salience_threshold=3)
     sentences = [
-        "The keepterm value was measured across several samples.",
-        "A dropterm reading was also noted once.",
+        "A keepterm value was recorded during the test.",
+        "A dropterm reading was noted once during the test.",
     ]
     _write_curated_report(config, REPORT, sentences)
     _write_mentions(config, REPORT, [])
     _write_archive_docs(
         config,
         {
-            "doc0.txt": "keepterm dropterm",
-            "doc1.txt": "keepterm dropterm",
-            "doc2.txt": "keepterm only here",
+            "doc0.txt": "keepterm value dropterm reading",
+            "doc1.txt": "keepterm value dropterm reading",
+            "doc2.txt": "keepterm value only",
         },
     )
 
-    candidates = mine_candidates(config, _empty_reader(), reports=[REPORT])
+    candidates = mine_candidates(config, _empty_reader(), reports=[REPORT], nlp=_NLP)
     by_term = {c.term: c for c in candidates}
 
-    assert "keepterm" in by_term  # freq == 3 == threshold -> kept
-    assert by_term["keepterm"].doc_frequency == 3
-    assert "dropterm" not in by_term  # freq == 2 == threshold - 1 -> dropped
+    assert "keepterm value" in by_term  # freq == 3 == threshold -> kept
+    assert by_term["keepterm value"].doc_frequency == 3
+    assert "dropterm reading" not in by_term  # freq == 2 == threshold - 1 -> dropped
 
 
 def test_mine_candidates_excludes_known_vocab_term(tmp_path) -> None:
@@ -575,7 +600,7 @@ def test_mine_candidates_falls_back_to_ngram_pass_when_spacy_model_unavailable(
     by making ``load_spacy_pipeline`` raise -- ``mine_candidates`` must not
     propagate the exception, and the fallback n-gram pass must still
     enumerate a plain lexical term."""
-    monkeypatch.setattr(novelty, "load_spacy_pipeline", _raise_model_unavailable)
+    monkeypatch.setattr(novelty, "load_spacy_pipeline", _model_unavailable)
 
     config = Config(corpus_dir=tmp_path, salience_threshold=0)
     sentences = ["The keepterm value was measured across several samples in the study."]
@@ -712,7 +737,7 @@ def test_mine_candidates_floor_drops_rare_term(monkeypatch, tmp_path) -> None:
     is monkeypatched away entirely (fixed lexical terms + fixed document
     frequencies) so the floor comparison is exercised in isolation,
     independent of spaCy/n-gram enumeration specifics."""
-    monkeypatch.setattr(novelty, "load_spacy_pipeline", _raise_model_unavailable)
+    monkeypatch.setattr(novelty, "load_spacy_pipeline", _model_unavailable)
     monkeypatch.setattr(
         novelty,
         "enumerate_lexical_terms",
@@ -738,7 +763,7 @@ def test_mine_candidates_ceiling_caps_and_logs_cut_count(monkeypatch, tmp_path, 
     candidates survive floor+exclusion but mine_max_candidates=2, so only
     the top-2 by document frequency are kept and the cut count (3) is
     logged (never a silent truncation)."""
-    monkeypatch.setattr(novelty, "load_spacy_pipeline", _raise_model_unavailable)
+    monkeypatch.setattr(novelty, "load_spacy_pipeline", _model_unavailable)
     monkeypatch.setattr(
         novelty,
         "enumerate_lexical_terms",
@@ -769,7 +794,7 @@ def test_mine_candidates_ceiling_cut_is_deterministic_across_runs(monkeypatch, t
     identical survivor set with TIED document frequencies always produce
     the same kept subset, never e.g. a random sample (design.md D3: "a
     deterministic tie-break")."""
-    monkeypatch.setattr(novelty, "load_spacy_pipeline", _raise_model_unavailable)
+    monkeypatch.setattr(novelty, "load_spacy_pipeline", _model_unavailable)
     monkeypatch.setattr(
         novelty,
         "enumerate_lexical_terms",
@@ -801,7 +826,7 @@ def test_mine_candidates_output_ordered_by_term_not_by_frequency_rank(
     order (highest frequency on the alphabetically-last term) so a
     frequency-ranked output would be detectably different from a
     term-sorted one."""
-    monkeypatch.setattr(novelty, "load_spacy_pipeline", _raise_model_unavailable)
+    monkeypatch.setattr(novelty, "load_spacy_pipeline", _model_unavailable)
     monkeypatch.setattr(
         novelty,
         "enumerate_lexical_terms",
