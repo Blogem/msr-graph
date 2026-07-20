@@ -127,6 +127,16 @@ const repositoriesListBody = `[{"id":"msr","title":"msr","uri":"http://example.i
 // inspection endpoints design.md names. createCalls counts any POST
 // /rest/repositories the script issues, so tests can assert the
 // already-exists branch never attempts a duplicate create.
+//
+// Post-merge, ensure-repo.sh also loads the shape catalogue into the
+// reserved shapes graph via the Graph Store Protocol (PUT the
+// hand-authored shapes, then POST the generated unit fragment) against
+// /repositories/msr/rdf-graphs/service?graph=<reserved-graph-iri>,
+// regardless of which check-then-create branch was taken. This double
+// answers BOTH verbs on that path with 204 No Content (Graph Store
+// Protocol's usual "operation succeeded, no body" response) so the
+// script's shapes-load step -- unrelated to what these two tests are
+// actually pinning (D7 detection) -- doesn't 404 and abort the script.
 func newEnsureRepoDouble(t *testing.T, configBody string, createCalls *int32) *httptest.Server {
 	t.Helper()
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -140,6 +150,8 @@ func newEnsureRepoDouble(t *testing.T, configBody string, createCalls *int32) *h
 		case r.Method == http.MethodGet && (r.URL.Path == "/rest/repositories/msr" || r.URL.Path == "/repositories/msr/config"):
 			w.Header().Set("Content-Type", "text/turtle")
 			fmt.Fprint(w, configBody)
+		case (r.Method == http.MethodPut || r.Method == http.MethodPost) && r.URL.Path == "/repositories/msr/rdf-graphs/service":
+			w.WriteHeader(http.StatusNoContent)
 		default:
 			w.WriteHeader(http.StatusNotFound)
 		}
