@@ -20,14 +20,28 @@ handoff report: (1) ``Candidate.term`` is the lower-cased surface form;
 (2) an evidence item's ``start_offset``/``end_offset`` are the span's own
 offsets (not the enclosing sentence's), per the novelty-detection spec's
 "the span's start/end offsets into that document's normalized.txt".
+
+refine-mine-salience (7.1-7.3) additions below: spaCy noun-chunk
+enumeration, hardened token-sequence-aware exclusion, and the coarse
+cost-bound floor/ceiling. These use the REAL ``en_core_web_sm`` pipeline
+(installed for this change, design.md D5) injected via ``mine_candidates``'s
+``nlp=`` keyword, or monkeypatch ``novelty.load_spacy_pipeline`` to
+simulate model-unavailable. Fixture sentences below were dry-run against
+the real model to confirm their ``doc.ents``/``doc.noun_chunks`` shape
+before being pinned into assertions (see the tester handoff report).
 """
 
 from __future__ import annotations
 
 import json
+import logging
 
+import spacy
+
+from msr_extraction import novelty
 from msr_extraction.config import Config
-from msr_extraction.graph_reader import MSRD, VOC, GraphReader
+from msr_extraction.graph_reader import MSR, MSRD, VOC, GraphReader, KnownEntity
+from msr_extraction.mining_types import Evidence
 from msr_extraction.novelty import (
     build_exclusion_set,
     enumerate_lexical_terms,
@@ -37,6 +51,75 @@ from msr_extraction.novelty import (
 )
 
 REPORT = "FIX-0001"
+
+#: Real, installed spaCy model (design.md D5 pins it as a build-time wheel
+#: dependency) -- loaded once at module import time and passed explicitly
+#: via ``mine_candidates(..., nlp=_NLP)`` so enumeration is deterministic
+#: and every test avoids a per-test reload cost.
+_NLP = spacy.load("en_core_web_sm")
+
+
+def _raise_model_unavailable(config: Config):
+    """A ``load_spacy_pipeline`` stand-in simulating the model failing to load."""
+    raise OSError("simulated: en_core_web_sm not installed")
+
+
+def _fixed_lexical_evidence(terms: list[str]) -> dict[str, list[Evidence]]:
+    """A minimal, fully-controlled ``enumerate_lexical_terms``-shaped return
+    value: one candidate term -> one fabricated Evidence each. Used to
+    monkeypatch enumeration away entirely so the floor/ceiling cost-bound
+    tests (7.3) exercise only that logic, independent of spaCy/n-gram
+    enumeration specifics or real corpus text."""
+    return {
+        term: [
+            Evidence(
+                report=REPORT,
+                document_iri=f"{MSRD}{REPORT}",
+                sentence_text=term,
+                start_offset=0,
+                end_offset=len(term),
+            )
+        ]
+        for term in terms
+    }
+
+
+def _any_term_contains_subsequence(terms: list[str], label_tokens: list[str]) -> bool:
+    """Whether any ``term`` (space-joined tokens) contains ``label_tokens``
+    as a contiguous subsequence -- the novelty-detection spec's "a known
+    label's full token sequence appearing in a candidate excludes it"
+    containment rule, checked independent of how a candidate's own token
+    count/splitting is implemented."""
+    n = len(label_tokens)
+    for term in terms:
+        tokens = term.split()
+        if any(tokens[i : i + n] == label_tokens for i in range(len(tokens) - n + 1)):
+            return True
+    return False
+
+
+class FakeKnownEntitiesReader:
+    """A minimal GraphReader stand-in exposing only an injected
+    :class:`~msr_extraction.graph_reader.KnownEntity` list.
+
+    Models the "restricted to the three core FROM graphs" read guarantee
+    directly, without any SPARQL query text: a term that would exist only
+    in ``urn:msr:staging`` is simply never present in the injected list, so
+    it can never be excluded on that basis (novelty-detection spec,
+    "Staging membership does not exclude a candidate").
+    """
+
+    def __init__(self, entities: list[KnownEntity]) -> None:
+        self._entities = entities
+
+    def read_known_entities(self) -> list[KnownEntity]:
+        return self._entities
+
+    def read_version(self) -> str | None:
+        return None
+
+    def known_iris(self) -> set[str]:
+        return {entity.target_iri for entity in self._entities}
 
 
 def _write_curated_report(config: Config, report: str, sentences: list[str]) -> list[dict]:
@@ -377,3 +460,362 @@ def test_build_exclusion_set_includes_linked_mention_surface_forms(tmp_path) -> 
 
     excluded = build_exclusion_set(reader, [REPORT], config)
     assert "flibe" in excluded
+
+
+# --- refine-mine-salience 7.1: spaCy noun-chunk enumeration --------------
+
+
+def test_mine_candidates_enumerates_spacy_noun_chunk_concept_absent_from_mentions(
+    tmp_path,
+) -> None:
+    """Scenario: "A novel domain term is enumerated as a noun chunk" -- the
+    curated text contains "solubility", chunk 6 never linked it
+    (mentions.jsonl carries no record for it), yet the spaCy noun-chunk pass
+    still enumerates it as a candidate."""
+    config = Config(corpus_dir=tmp_path, salience_threshold=0)
+    sentences = [
+        "The solubility of the fuel salt was measured extensively by the laboratory team.",
+    ]
+    _write_curated_report(config, REPORT, sentences)
+    _write_mentions(config, REPORT, [])
+
+    candidates = mine_candidates(config, _empty_reader(), reports=[REPORT], nlp=_NLP)
+
+    terms = [c.term for c in candidates]
+    assert any("solubility" in term for term in terms)
+
+
+def test_mine_candidates_includes_status_novel_miss_with_spacy_enumeration_active(
+    tmp_path,
+) -> None:
+    """Scenario: "An unresolved salt-formula miss becomes a candidate" --
+    exercised end-to-end through mine_candidates with real spaCy
+    enumeration active (nlp=_NLP), proving the chunk-6 miss path is
+    untouched by the new spaCy enumeration source."""
+    config = Config(corpus_dir=tmp_path, salience_threshold=0)
+    sentences = ["A new compound LiF-ThF4-UF4 was observed forming a stable salt in the loop."]
+    segments = _write_curated_report(config, REPORT, sentences)
+    seg = segments[0]
+    _write_mentions(
+        config,
+        REPORT,
+        [
+            {
+                "report": REPORT,
+                "seg_index": seg["index"],
+                "char_start": seg["char_start"],
+                "char_end": seg["char_end"],
+                "surface_form": "LiF-ThF4-UF4",
+                "status": "novel",
+                "target_iri": None,
+                "target_kind": None,
+                "layer": 5,
+                "score": None,
+            }
+        ],
+    )
+
+    candidates = mine_candidates(config, _empty_reader(), reports=[REPORT], nlp=_NLP)
+
+    miss_candidates = [c for c in candidates if c.source == "miss"]
+    assert any(c.term == "lif-thf4-uf4" for c in miss_candidates)
+
+
+def test_mine_candidates_drops_org_entity_tokens_lab_or_org_name(tmp_path) -> None:
+    """Scenario: "A proper noun is not enumerated as a candidate" -- an ORG
+    entity (a laboratory/organization name, e.g. "Union Carbide
+    Corporation") is dropped at the spaCy enumeration stage, while the
+    co-occurring non-entity noun chunk ("graphite moderator materials")
+    from the same sentence survives. Dry-run confirmed real
+    ``en_core_web_sm`` tags all three tokens ``ent_type_=="ORG"`` for this
+    sentence."""
+    config = Config(corpus_dir=tmp_path, salience_threshold=0)
+    sentences = [
+        "Union Carbide Corporation supported the study of graphite moderator materials.",
+    ]
+    _write_curated_report(config, REPORT, sentences)
+    _write_mentions(config, REPORT, [])
+
+    candidates = mine_candidates(config, _empty_reader(), reports=[REPORT], nlp=_NLP)
+    terms = [c.term for c in candidates]
+
+    dropped_tokens = {"union", "carbide", "corporation"}
+    assert not any(dropped_tokens & set(term.split()) for term in terms)
+    assert any("graphite" in term for term in terms)
+
+
+def test_mine_candidates_drops_person_entity_tokens_author_name(tmp_path) -> None:
+    """Scenario: "A proper noun is not enumerated as a candidate" -- a
+    PERSON entity (an author name) is dropped, while the co-occurring
+    non-entity noun chunk ("graphite moderator materials") survives. Dry-run
+    confirmed real ``en_core_web_sm`` tags "Alice Johnson" PERSON and "Oak
+    Ridge National Laboratory" ORG for this sentence."""
+    config = Config(corpus_dir=tmp_path, salience_threshold=0)
+    sentences = [
+        "Dr. Alice Johnson led the study of graphite moderator materials "
+        "at Oak Ridge National Laboratory.",
+    ]
+    _write_curated_report(config, REPORT, sentences)
+    _write_mentions(config, REPORT, [])
+
+    candidates = mine_candidates(config, _empty_reader(), reports=[REPORT], nlp=_NLP)
+    terms = [c.term for c in candidates]
+
+    dropped_tokens = {"alice", "johnson", "oak", "ridge", "national", "laboratory"}
+    assert not any(dropped_tokens & set(term.split()) for term in terms)
+    assert any("graphite" in term for term in terms)
+
+
+def test_mine_candidates_falls_back_to_ngram_pass_when_spacy_model_unavailable(
+    monkeypatch, tmp_path, caplog
+) -> None:
+    """Scenario basis: "If the spaCy model cannot be loaded, the miner SHALL
+    log an error and fall back to the prior n-gram term-candidate pass
+    rather than failing" (novelty-detection spec; design.md D5). Simulated
+    by making ``load_spacy_pipeline`` raise -- ``mine_candidates`` must not
+    propagate the exception, and the fallback n-gram pass must still
+    enumerate a plain lexical term."""
+    monkeypatch.setattr(novelty, "load_spacy_pipeline", _raise_model_unavailable)
+
+    config = Config(corpus_dir=tmp_path, salience_threshold=0)
+    sentences = ["The keepterm value was measured across several samples in the study."]
+    _write_curated_report(config, REPORT, sentences)
+    _write_mentions(config, REPORT, [])
+
+    with caplog.at_level(logging.ERROR):
+        candidates = mine_candidates(config, _empty_reader(), reports=[REPORT])
+
+    terms = {c.term for c in candidates}
+    assert "keepterm" in terms
+    assert any("spacy" in rec.message.lower() for rec in caplog.records)
+
+
+# --- refine-mine-salience 7.2: hardened, token-sequence-aware exclusion --
+
+
+def test_mine_candidates_excludes_camelcase_variant_of_known_class_label(tmp_path) -> None:
+    """Scenario: "A spelling variant of a known label is excluded" -- the
+    spaCy-enumerated "molten salt" noun chunk is excluded because it
+    normalizes to the same token sequence as the core class label
+    "MoltenSalt", even though the raw strings differ (design.md D2)."""
+    config = Config(corpus_dir=tmp_path, salience_threshold=0)
+    sentences = ["The molten salt was pumped through the loop during the test."]
+    _write_curated_report(config, REPORT, sentences)
+    _write_mentions(config, REPORT, [])
+    entity = KnownEntity(target_iri=f"{MSR}MoltenSalt", labels=("MoltenSalt",), kind="class")
+    reader = FakeKnownEntitiesReader([entity])
+
+    candidates = mine_candidates(config, reader, reports=[REPORT], nlp=_NLP)
+
+    assert not _any_term_contains_subsequence(
+        [c.term for c in candidates], ["molten", "salt"]
+    )
+
+
+def test_build_exclusion_set_normalizes_camelcase_class_label(tmp_path) -> None:
+    """Direct-level companion to the mine_candidates integration test above
+    -- whatever internal representation build_exclusion_set returns, the
+    normalized ("molten", "salt") token sequence derived from the camelCase
+    class label "MoltenSalt" must be discoverable in it."""
+    config = Config(corpus_dir=tmp_path)
+    _write_curated_report(config, REPORT, ["placeholder sentence for the fixture."])
+    _write_mentions(config, REPORT, [])
+    entity = KnownEntity(target_iri=f"{MSR}MoltenSalt", labels=("MoltenSalt",), kind="class")
+    reader = FakeKnownEntitiesReader([entity])
+
+    excluded = build_exclusion_set(reader, [REPORT], config)
+
+    assert "molten salt" in excluded or ("molten", "salt") in excluded
+
+
+def test_mine_candidates_excludes_chunk7_reactor_label(tmp_path) -> None:
+    """Scenario: hardened exclusion also covers chunk-7's role/reactor
+    layer labels (design.md D2/D4.1) -- a reactor-name candidate ("MSRE")
+    is excluded because a known reactor label matches it, even though
+    "MSRE" carries no NER entity type in this fixture sentence (dry-run
+    confirmed ``doc.ents == []`` here)."""
+    config = Config(corpus_dir=tmp_path, salience_threshold=0)
+    sentences = ["The reactor core used graphite blocks for the MSRE design."]
+    _write_curated_report(config, REPORT, sentences)
+    _write_mentions(config, REPORT, [])
+    entity = KnownEntity(target_iri=f"{VOC}msre", labels=("MSRE",), kind="reactor")
+    reader = FakeKnownEntitiesReader([entity])
+
+    candidates = mine_candidates(config, reader, reports=[REPORT], nlp=_NLP)
+    terms = [c.term for c in candidates]
+
+    assert not any("msre" in term.split() for term in terms)
+    assert any("graphite" in term for term in terms)
+
+
+def test_mine_candidates_excludes_seed_property_label(tmp_path) -> None:
+    """Scenario basis: hardened exclusion covers physical-property labels
+    already modeled in the core dataset (design.md context: "density",
+    "viscosity", "corrosion" are the validated already-excluded terms)."""
+    config = Config(corpus_dir=tmp_path, salience_threshold=0)
+    sentences = ["The density of the salt was measured during the run."]
+    _write_curated_report(config, REPORT, sentences)
+    _write_mentions(config, REPORT, [])
+    entity = KnownEntity(target_iri=f"{MSR}density", labels=("density",), kind="class")
+    reader = FakeKnownEntitiesReader([entity])
+
+    candidates = mine_candidates(config, reader, reports=[REPORT], nlp=_NLP)
+    assert "density" not in {c.term for c in candidates}
+
+
+def test_mine_candidates_does_not_exclude_term_sharing_single_token_with_known_label(
+    tmp_path,
+) -> None:
+    """Scenario: "A novel term sharing one token with a known label is not
+    excluded" -- the candidate "thermal conductivity" shares only the token
+    "thermal" with the known label "thermal expansion" (not its full token
+    sequence), so it is NOT excluded on that basis."""
+    config = Config(corpus_dir=tmp_path, salience_threshold=0)
+    sentences = ["The thermal conductivity was recorded during the run."]
+    _write_curated_report(config, REPORT, sentences)
+    _write_mentions(config, REPORT, [])
+    entity = KnownEntity(
+        target_iri=f"{MSR}ThermalExpansion", labels=("thermal expansion",), kind="class"
+    )
+    reader = FakeKnownEntitiesReader([entity])
+
+    candidates = mine_candidates(config, reader, reports=[REPORT], nlp=_NLP)
+    terms = [c.term for c in candidates]
+
+    assert any("conductivity" in term for term in terms)
+
+
+def test_mine_candidates_does_not_exclude_staging_only_term_spacy_path(tmp_path) -> None:
+    """Scenario: "Staging membership does not exclude a candidate" -- the
+    injected reader models the "only the three core FROM graphs" read
+    restriction directly by exposing only an unrelated core label, so a
+    term that would exist only as a pending urn:msr:staging proposal is
+    simply never present in it and is therefore not excluded."""
+    config = Config(corpus_dir=tmp_path, salience_threshold=0)
+    sentences = ["The eutectic mixture behavior was studied during the run."]
+    _write_curated_report(config, REPORT, sentences)
+    _write_mentions(config, REPORT, [])
+    entity = KnownEntity(target_iri=f"{MSR}MoltenSalt", labels=("MoltenSalt",), kind="class")
+    reader = FakeKnownEntitiesReader([entity])  # unrelated core label only
+
+    candidates = mine_candidates(config, reader, reports=[REPORT], nlp=_NLP)
+    terms = [c.term for c in candidates]
+
+    assert any("eutectic" in term for term in terms)
+
+
+# --- refine-mine-salience 7.3: coarse cost bound (floor + ceiling) -------
+
+
+def test_mine_candidates_floor_drops_rare_term(monkeypatch, tmp_path) -> None:
+    """Scenario: "A rare OCR one-off is dropped by the floor" -- enumeration
+    is monkeypatched away entirely (fixed lexical terms + fixed document
+    frequencies) so the floor comparison is exercised in isolation,
+    independent of spaCy/n-gram enumeration specifics."""
+    monkeypatch.setattr(novelty, "load_spacy_pipeline", _raise_model_unavailable)
+    monkeypatch.setattr(
+        novelty,
+        "enumerate_lexical_terms",
+        lambda reports, cfg: _fixed_lexical_evidence(["keepterm", "dropterm"]),
+    )
+    monkeypatch.setattr(novelty, "read_miss_candidates", lambda reports, cfg: [])
+    monkeypatch.setattr(
+        novelty, "score_document_frequency", lambda terms, cfg: {"keepterm": 3, "dropterm": 2}
+    )
+
+    config = Config(corpus_dir=tmp_path, salience_threshold=3, mine_max_candidates=100)
+
+    candidates = mine_candidates(config, _empty_reader(), reports=[REPORT])
+    by_term = {c.term: c for c in candidates}
+
+    assert "keepterm" in by_term
+    assert by_term["keepterm"].doc_frequency == 3
+    assert "dropterm" not in by_term
+
+
+def test_mine_candidates_ceiling_caps_and_logs_cut_count(monkeypatch, tmp_path, caplog) -> None:
+    """Scenario: "The candidate set is bounded by the ceiling" -- five
+    candidates survive floor+exclusion but mine_max_candidates=2, so only
+    the top-2 by document frequency are kept and the cut count (3) is
+    logged (never a silent truncation)."""
+    monkeypatch.setattr(novelty, "load_spacy_pipeline", _raise_model_unavailable)
+    monkeypatch.setattr(
+        novelty,
+        "enumerate_lexical_terms",
+        lambda reports, cfg: _fixed_lexical_evidence(
+            ["alpha", "beta", "gamma", "delta", "epsilon"]
+        ),
+    )
+    monkeypatch.setattr(novelty, "read_miss_candidates", lambda reports, cfg: [])
+    frequencies = {"alpha": 10, "beta": 9, "gamma": 8, "delta": 7, "epsilon": 6}
+    monkeypatch.setattr(novelty, "score_document_frequency", lambda terms, cfg: frequencies)
+
+    config = Config(corpus_dir=tmp_path, salience_threshold=1, mine_max_candidates=2)
+
+    with caplog.at_level(logging.INFO):
+        candidates = mine_candidates(config, _empty_reader(), reports=[REPORT])
+
+    terms = {c.term for c in candidates}
+    assert len(candidates) == 2
+    assert terms == {"alpha", "beta"}  # top-2 by document frequency
+    assert any(
+        "3" in rec.message and ("cut" in rec.message.lower() or "ceiling" in rec.message.lower())
+        for rec in caplog.records
+    )
+
+
+def test_mine_candidates_ceiling_cut_is_deterministic_across_runs(monkeypatch, tmp_path) -> None:
+    """The runaway-cut tie-break is deterministic -- repeated runs over an
+    identical survivor set with TIED document frequencies always produce
+    the same kept subset, never e.g. a random sample (design.md D3: "a
+    deterministic tie-break")."""
+    monkeypatch.setattr(novelty, "load_spacy_pipeline", _raise_model_unavailable)
+    monkeypatch.setattr(
+        novelty,
+        "enumerate_lexical_terms",
+        lambda reports, cfg: _fixed_lexical_evidence(["alpha", "beta", "gamma"]),
+    )
+    monkeypatch.setattr(novelty, "read_miss_candidates", lambda reports, cfg: [])
+    monkeypatch.setattr(
+        novelty,
+        "score_document_frequency",
+        lambda terms, cfg: {"alpha": 5, "beta": 5, "gamma": 5},
+    )
+
+    config = Config(corpus_dir=tmp_path, salience_threshold=1, mine_max_candidates=2)
+
+    first = [c.term for c in mine_candidates(config, _empty_reader(), reports=[REPORT])]
+    second = [c.term for c in mine_candidates(config, _empty_reader(), reports=[REPORT])]
+
+    assert len(first) == 2
+    assert first == second
+
+
+def test_mine_candidates_output_ordered_by_term_not_by_frequency_rank(
+    monkeypatch, tmp_path
+) -> None:
+    """Scenario: "Ordering is not treated as a novelty ranking" -- candidates
+    are returned sorted by term, never reordered by document frequency; DF
+    is consulted only as the floor/ceiling cost bound, never as a rank. The
+    fixed frequencies below are deliberately anti-correlated with term
+    order (highest frequency on the alphabetically-last term) so a
+    frequency-ranked output would be detectably different from a
+    term-sorted one."""
+    monkeypatch.setattr(novelty, "load_spacy_pipeline", _raise_model_unavailable)
+    monkeypatch.setattr(
+        novelty,
+        "enumerate_lexical_terms",
+        lambda reports, cfg: _fixed_lexical_evidence(["zeta", "alpha", "mu"]),
+    )
+    monkeypatch.setattr(novelty, "read_miss_candidates", lambda reports, cfg: [])
+    monkeypatch.setattr(
+        novelty,
+        "score_document_frequency",
+        lambda terms, cfg: {"zeta": 100, "alpha": 10, "mu": 1},
+    )
+
+    config = Config(corpus_dir=tmp_path, salience_threshold=0, mine_max_candidates=100)
+
+    candidates = mine_candidates(config, _empty_reader(), reports=[REPORT])
+
+    assert [c.term for c in candidates] == ["alpha", "mu", "zeta"]
