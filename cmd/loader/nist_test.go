@@ -24,6 +24,7 @@ package main
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/blogem/msr-graph/internal/nist"
 )
@@ -204,4 +205,161 @@ func TestBuildInsertData_Empty(t *testing.T) {
 		}
 	}()
 	_ = buildInsertData(nil)
+}
+
+// --- openspec/changes/provenance-model additions (tasks 6.1/6.2) -----------
+//
+// The provenance-model change retrofits the loader so every emitted
+// catalog/measurement individual carries prov:wasGeneratedBy the
+// deterministic msrd:activity-loader-nist Activity IRI (alongside the
+// existing prov:wasDerivedFrom msrd:nist-srd27), and so the loader itself
+// emits the self-contained msrd:nist-srd27 msr:Dataset node + DOI (the
+// hand-curated seed that used to define it is already gone -- design D3/D9).
+// These tests are written against that task contract's agreed string
+// literals (msrd:nist-srd27, msrd:activity-loader-nist,
+// "doi:10.18434/mds2-2298") and are expected to fail on this isolated
+// pass-1 branch until the coder's changes to nist.go land (buildInsertData
+// does not yet emit any of this).
+//
+// Spec: openspec/changes/provenance-model/specs/nist-structured-loading/spec.md
+//   - "Catalog triples emitted additively to the core data graph" (MODIFIED)
+//   - "Loader is the sole source of the NIST dataset node and DOI" (ADDED)
+//   - "Loader-run activity recorded in a named graph" (ADDED)
+//   - "Idempotent re-runs across both stores" (MODIFIED)
+
+const (
+	loaderActivityIRI = "msrd:activity-loader-nist"
+	nistDatasetIRI    = "msrd:nist-srd27"
+	nistDatasetDOI    = `"doi:10.18434/mds2-2298"`
+)
+
+// countOccurrences reports how many non-overlapping times substr appears in
+// s, used below to check a provenance predicate appears once per emitted
+// individual rather than merely "somewhere" in the output.
+func countOccurrences(s, substr string) int {
+	return strings.Count(s, substr)
+}
+
+// TestBuildInsertData_MeasurementCarriesGenerationProvenance covers 6.1:
+// every emitted PropertyMeasurement carries both prov:wasDerivedFrom
+// msrd:nist-srd27 (already emitted pre-change) and the new
+// prov:wasGeneratedBy msrd:activity-loader-nist, and no msr:citedIn is ever
+// emitted (NIST SRD-27 has no per-row citation -- design D3; the blanket
+// "no hand-curated edges" check above already covers citedIn for both
+// fixtures, this test re-asserts it alongside the new generation edge for
+// clarity).
+func TestBuildInsertData_MeasurementCarriesGenerationProvenance(t *testing.T) {
+	out := buildInsertData([]nist.Measurement{flibeDensityMeasurement(), kfZrf4IsothermMeasurement()})
+
+	assertContains(t, out, "prov:wasDerivedFrom "+nistDatasetIRI)
+	assertContains(t, out, "prov:wasGeneratedBy "+loaderActivityIRI)
+	assertNotContains(t, out, "msr:citedIn")
+
+	wantMeasurements := countOccurrences(out, "a msr:PropertyMeasurement")
+	if wantMeasurements == 0 {
+		t.Fatal("fixture produced zero msr:PropertyMeasurement blocks -- test fixture is broken")
+	}
+	gotGenerated := countOccurrences(out, "prov:wasGeneratedBy "+loaderActivityIRI)
+	if gotGenerated < wantMeasurements {
+		t.Errorf("\"prov:wasGeneratedBy %s\" appears %d times, want at least once per PropertyMeasurement (%d)",
+			loaderActivityIRI, gotGenerated, wantMeasurements)
+	}
+}
+
+// TestBuildInsertData_DatasetNodeWithDOI covers 6.1's "self-contained
+// Dataset+DOI is present when loading into an empty data graph (no seed)":
+// the loader is now the sole source of the msrd:nist-srd27 msr:Dataset node,
+// carrying its DOI as dcterms:identifier, so every measurement's
+// prov:wasDerivedFrom resolves to a real, DOI-bearing dataset even with the
+// hand-curated seed gone (design D3/D9).
+func TestBuildInsertData_DatasetNodeWithDOI(t *testing.T) {
+	out := buildInsertData([]nist.Measurement{flibeDensityMeasurement()})
+
+	assertContains(t, out, nistDatasetIRI+" a msr:Dataset")
+	assertContains(t, out, "dcterms:identifier "+nistDatasetDOI)
+}
+
+// TestBuildInsertData_CatalogIndividualsCarryProvenance covers 6.1's
+// "Catalog individuals carry provenance" scenario: every emitted
+// MoltenSalt/Constituent/ChemicalCompound (not just PropertyMeasurement)
+// carries prov:wasGeneratedBy msrd:activity-loader-nist and
+// prov:wasDerivedFrom msrd:nist-srd27 -- design D1 scopes provenance to all
+// instance data the loader asserts, not only measurements.
+func TestBuildInsertData_CatalogIndividualsCarryProvenance(t *testing.T) {
+	out := buildInsertData([]nist.Measurement{flibeDensityMeasurement(), kfZrf4IsothermMeasurement()})
+
+	entityCount := countOccurrences(out, "a msr:MoltenSalt") +
+		countOccurrences(out, "a msr:Constituent") +
+		countOccurrences(out, "a msr:ChemicalCompound") +
+		countOccurrences(out, "a msr:PropertyMeasurement")
+	if entityCount == 0 {
+		t.Fatal("fixtures produced zero catalog/measurement individuals -- test fixture is broken")
+	}
+
+	generatedCount := countOccurrences(out, "prov:wasGeneratedBy "+loaderActivityIRI)
+	derivedCount := countOccurrences(out, "prov:wasDerivedFrom "+nistDatasetIRI)
+
+	if generatedCount < entityCount {
+		t.Errorf("\"prov:wasGeneratedBy %s\" appears %d times, want at least once per catalog/measurement individual (%d individuals)",
+			loaderActivityIRI, generatedCount, entityCount)
+	}
+	if derivedCount < entityCount {
+		t.Errorf("\"prov:wasDerivedFrom %s\" appears %d times, want at least once per catalog/measurement individual (%d individuals)",
+			nistDatasetIRI, derivedCount, entityCount)
+	}
+}
+
+// TestBuildInsertData_DeterministicAcrossCalls covers 6.2's loader
+// idempotency requirement at the pure-function level: buildInsertData over
+// the same measurements is byte-identical across calls, because every IRI
+// it mints -- salt/constituent/compound/measurement, the msrd:nist-srd27
+// Dataset node, and the msrd:activity-loader-nist reference each
+// measurement/catalog individual carries -- is deterministic. Re-running
+// the loader against unchanged input is therefore a set-semantics no-op in
+// urn:msr:data (design D8; the urn:msr:data triple count and
+// measurement_value row count are unaffected by a second run).
+func TestBuildInsertData_DeterministicAcrossCalls(t *testing.T) {
+	ms := []nist.Measurement{flibeDensityMeasurement(), kfZrf4IsothermMeasurement()}
+
+	first := buildInsertData(ms)
+	second := buildInsertData(ms)
+
+	if first != second {
+		t.Errorf("buildInsertData is not deterministic across calls with identical input:\n--- first ---\n%s\n--- second ---\n%s", first, second)
+	}
+}
+
+// TestBuildRunGraphData_DeterministicWithFixedTimestamp covers 6.2's
+// "audit-graph" carve-out from design D8: the wall-clock loader-run
+// Activity *record* (urn:msr:run:loader/<ts>) is intentionally per-run, but
+// with a FIXED injected timestamp the builder must still be a pure,
+// deterministic function of its inputs, and the msrd:activity-loader-nist
+// IRI it writes must be the exact IRI every measurement's
+// prov:wasGeneratedBy references (so "everything from this run" is
+// reachable by joining on that IRI).
+//
+// ASSUMPTION (pass-1, flagged in the tester handoff report for
+// reconciliation at merge): this pins the task contract's suggested symbol
+// buildRunGraphData(ts time.Time, version string) string in package main.
+// It is not required to compile until the coder's loader change (which
+// must expose *some* pure, timestamp-injectable builder for the run graph
+// per task 2.4) lands; if the coder chooses a different name/signature,
+// this test needs updating at merge, not the acceptance intent it encodes.
+func TestBuildRunGraphData_DeterministicWithFixedTimestamp(t *testing.T) {
+	fixedTS := time.Date(2024, 1, 2, 3, 4, 5, 0, time.UTC)
+
+	first := buildRunGraphData(fixedTS, "0.3.0")
+	second := buildRunGraphData(fixedTS, "0.3.0")
+
+	if first != second {
+		t.Errorf("buildRunGraphData is not deterministic for a fixed timestamp:\n--- first ---\n%s\n--- second ---\n%s", first, second)
+	}
+
+	assertContains(t, first, "GRAPH <urn:msr:run:loader/")
+	assertContains(t, first, "a prov:Activity")
+	assertContains(t, first, loaderActivityIRI)
+	assertContains(t, first, "prov:wasAssociatedWith agent:loader@0.3.0")
+	assertContains(t, first, "prov:startedAtTime")
+	assertContains(t, first, "prov:endedAtTime")
+	assertContains(t, first, `owl:versionInfo "0.3.0"`)
 }

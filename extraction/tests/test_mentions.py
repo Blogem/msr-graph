@@ -135,3 +135,38 @@ def test_write_mentions_orders_deterministically_regardless_of_input_order() -> 
     client_reversed = _FakeSparqlClient()
     write_mentions([mention_a, mention_b], client_reversed)
     assert client_forward.calls[0] == client_reversed.calls[0]
+
+
+# --- openspec/changes/provenance-model additions (tasks 6.6/6.7) -----------
+#
+# design D6 / spec "mention-graph-writing" ADDED requirement "Mentions
+# carry generation provenance": each written msr:Mention SHALL carry
+# prov:wasGeneratedBy the deterministic msrd:activity-extraction Activity
+# IRI, in addition to its existing msr:inDocument. These tests are written
+# against that requirement and are expected to fail on this isolated
+# pass-1 branch until the coder's task-3.2 change to mentions.py lands
+# (mention_triples does not yet emit this edge).
+
+
+def test_mention_triples_carries_generation_provenance() -> None:
+    """Covers 6.6: a written mention carries prov:wasGeneratedBy
+    msrd:activity-extraction (its msr:inDocument remains the derivation
+    source, per the "A written mention references the extraction
+    activity" scenario)."""
+    triples = mention_triples(MENTION)
+    assert "prov:wasGeneratedBy msrd:activity-extraction" in triples
+    assert f"msr:inDocument <{DOCUMENT_IRI}>" in triples
+
+
+def test_write_mentions_generation_edge_is_deterministic_across_runs() -> None:
+    """Covers 6.7: adding the generation edge keeps the mention write
+    idempotent -- the deterministic msrd:activity-extraction IRI
+    re-asserts as a set-semantics no-op, so a second run over the same
+    mentions produces byte-identical output (design D8 / spec scenario
+    "Generation edge preserves fact-store idempotency")."""
+    client = _FakeSparqlClient()
+    write_mentions([MENTION], client)
+    write_mentions([MENTION], client)
+    assert len(client.calls) == 2
+    assert client.calls[0] == client.calls[1]
+    assert "prov:wasGeneratedBy msrd:activity-extraction" in client.calls[0]
