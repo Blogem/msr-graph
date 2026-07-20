@@ -58,6 +58,7 @@ from __future__ import annotations
 
 import json
 import math
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Literal
 
@@ -743,6 +744,7 @@ def extract_report(
     client: Completer,
     known: KnownSets,
     unit_mapper: UnitMapper,
+    concurrency: int = 1,
 ) -> ReportExtraction:
     """Extract, validate, and trace every relation in one report.
 
@@ -759,6 +761,15 @@ def extract_report(
     returning ``ok=False``) -- such a sentence contributes no records at
     all (nothing to trace), consistent with "malformed output never
     produces a silent write."
+
+    ``concurrency`` bounds a thread pool that fans out only the per-sentence
+    Flash calls (:func:`extract_relations`, a blocking network call) --
+    mirroring ``cli._cmd_link``'s layer-5 disambiguation fan-out. Every
+    other step (validation, dedup, trace writing) stays on the main thread
+    and iterates the per-sentence results in the original ``seg_index``
+    order, so output is byte-identical to the sequential path regardless of
+    ``concurrency``. ``concurrency <= 1`` (the default) skips the executor
+    entirely, keeping existing callers/tests deterministic and unchanged.
     """
     sentences = select_sentences(report, config)
 
@@ -775,8 +786,23 @@ def extract_report(
     reactor_record_idx: list[int] = []
     malformed_calls = 0
 
-    for sentence in sentences:
-        raw_relations, ok = extract_relations(sentence, prompt_prefix, client)
+    def _call(sentence: SelectedSentence) -> tuple[list[dict], bool]:
+        try:
+            return extract_relations(sentence, prompt_prefix, client)
+        except Exception:
+            # extract_relations never raises by contract, but a worker
+            # future must never crash the run either way.
+            return [], False
+
+    if concurrency > 1 and sentences:
+        with ThreadPoolExecutor(max_workers=concurrency) as executor:
+            # executor.map preserves input order, so zipping it back onto
+            # ``sentences`` reproduces the exact sequential ordering below.
+            call_results = list(executor.map(_call, sentences))
+    else:
+        call_results = [_call(sentence) for sentence in sentences]
+
+    for sentence, (raw_relations, ok) in zip(sentences, call_results):
         if not ok:
             malformed_calls += 1
             continue

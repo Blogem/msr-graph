@@ -387,6 +387,7 @@ def _cmd_extract(config: Config, reports: list[str] = curated.CURATED_REPORTS) -
     provenance.write_activity(run_ts, sparql)
 
     logger.info("extract: %d curated report(s) to process", len(reports))
+    logger.info("extract: fan-out concurrency=%d", config.disambig_concurrency)
     for report in reports:
         segments_path = config.segments_path(report)
         if not segments_path.exists():
@@ -394,7 +395,13 @@ def _cmd_extract(config: Config, reports: list[str] = curated.CURATED_REPORTS) -
             continue
 
         result = relations.extract_report(
-            report, config, prompt_prefix, client, known, unit_mapper
+            report,
+            config,
+            prompt_prefix,
+            client,
+            known,
+            unit_mapper,
+            concurrency=config.disambig_concurrency,
         )
 
         for m in result.measurements:
