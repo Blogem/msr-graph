@@ -93,3 +93,35 @@ def test_write_documents_sends_zero_updates_for_empty_records() -> None:
     client = _FakeSparqlClient()
     write_documents([], client)
     assert len(client.calls) == 0
+
+
+# --- openspec/changes/provenance-model additions (task 6.6) ----------------
+#
+# spec "document-graph" ADDED requirement "Document nodes carry generation
+# provenance": each written msr:Document SHALL carry prov:wasGeneratedBy
+# the deterministic msrd:activity-extraction Activity IRI (design D6).
+# These tests are written against that requirement and are expected to
+# fail on this isolated pass-1 branch until the coder's task-3.3 change to
+# documents.py lands (document_triples does not yet emit this edge).
+
+
+def test_document_triples_carries_generation_provenance() -> None:
+    """Covers the "Document node references the ingest activity" scenario:
+    the node carries prov:wasGeneratedBy msrd:activity-extraction alongside
+    its report number, title, and date."""
+    triples = _collapse_ws(document_triples(RECORD))
+    assert "prov:wasGeneratedBy msrd:activity-extraction" in triples
+    # The manifest-sourced metadata (already pinned above) must survive
+    # alongside the new edge, not be replaced by it.
+    assert 'dcterms:identifier "ORNL-TM-2316"' in triples
+
+
+def test_document_triples_generation_edge_is_deterministic_across_calls() -> None:
+    """Covers the "Generation edge preserves idempotency" scenario: because
+    the document IRI and the referenced msrd:activity-extraction IRI are
+    both deterministic, re-emitting the same record's triples twice is
+    byte-identical (a set-semantics no-op on re-run)."""
+    first = document_triples(RECORD)
+    second = document_triples(RECORD)
+    assert first == second
+    assert "prov:wasGeneratedBy msrd:activity-extraction" in first
