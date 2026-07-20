@@ -73,6 +73,15 @@ func runNist(env func(string) string, stdout io.Writer) error {
 		return fmt.Errorf("nist: upserting measurement rows: %w", err)
 	}
 
+	// Both client.Update calls below may fail because SHACL rejected the
+	// write (design D5, task 5.1): client.Update returns a
+	// *graph.ValidationError in that case (still wrapped by %w here, so
+	// errors.As still finds it through this fmt.Errorf chain). main.go's
+	// reportError distinguishes that from a transport/5xx failure at the
+	// CLI's error-reporting boundary, for every subcommand uniformly.
+	// Note for the extraction (Python) writers: they should make the same
+	// distinction (validation rejection vs. transport/5xx) when they
+	// report their own GraphDB write failures.
 	client := graph.New(cfg.graphDBURL, cfg.graphDBRepo, nil)
 	sparql, factIRIs := buildInsertData(measurements, ontologyVersion)
 	if err := client.Update(ctx, sparql); err != nil {

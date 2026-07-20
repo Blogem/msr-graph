@@ -39,7 +39,8 @@ Run these in order on a fresh clone:
 make up         # preflight the license, bring up GraphDB + the server scaffold,
                 # build the extraction and sandbox base images, wait for GraphDB
                 # to be healthy, and ensure the `msr` repository exists
-                # (inference disabled)
+                # (inference disabled, SHACL validation enabled — see
+                # "SHACL validation" below) with the shape catalogue loaded
 
 make load-seed  # initialize the SQLite measurement_value schema and load the
                 # two seed graphs (graph-replace, idempotent):
@@ -100,6 +101,57 @@ make up && make load-nist && make ingest && make link && make demo-density
 the environment (the deterministic composed-salt match itself needs no LLM).
 `make demo-density` depends on that full build having populated
 `urn:msr:data` — it is not a standalone fixture.
+
+## SHACL validation (write-time enforcement)
+
+The `msr` GraphDB repository has native SHACL validation (RDF4J `ShaclSail`)
+enabled — **every transaction is validated against the installed shapes on
+commit**, not just documented as an ontology convention. The shape catalogue
+lives in [`deploy/graphdb/msr-shapes.ttl`](deploy/graphdb/msr-shapes.ttl)
+(provenance/completeness shapes for `msr:PropertyMeasurement`, `msr:Mention`,
+and the catalog individuals `msr:MoltenSalt`/`msr:Constituent`/
+`msr:ChemicalCompound`; data-quality shapes for the unit allowlist,
+valid-temperature-range ordering, and `msr:linksTo` target-kind) plus the
+generated companion fragment
+[`deploy/graphdb/msr-shapes-units.ttl`](deploy/graphdb/msr-shapes-units.ttl)
+(the `msr:hasUnit` QUDT allowlist, regenerated from `ontology/qudt-units.json`
+by `cmd/gen-unit-shape` so the shape and the loader's allowlist never drift
+apart). `scripts/ensure-repo.sh` loads both into the reserved RDF4J shapes
+graph (`http://rdf4j.org/schema/rdf4j#SHACLShapeGraph`) as part of `make up`,
+so a fresh stack enforces shapes with no manual step. See
+[`openspec/changes/shacl-validation/design.md`](openspec/changes/shacl-validation/design.md)
+for the full design.
+
+**Reading a rejection.** A write that would leave the store in violation of a
+shape is rejected atomically (none of that transaction's triples persist). At
+the `internal/graph` write boundary (`Client.Update`, `Client.PutGraph`) a
+rejection is returned as a `*graph.ValidationError` (see
+[`internal/graph/errors.go`](internal/graph/errors.go)), not a generic
+transport error — callers distinguish it with `errors.As(err, &ve)`. Its
+`Error()` names each violation's failing constraint (`sourceConstraintComponent`,
+e.g. `sh:MinCountConstraintComponent`), the offending `focusNode`, and, where
+present, the `resultPath` and `resultMessage` — so a rejection reads as "which
+record failed which rule," not an opaque HTTP 500. `cmd/loader` prints a
+`ValidationError` distinctly from other write failures rather than folding it
+into a generic error log line.
+
+**Upgrading an existing (pre-SHACL) volume.** SHACL is a repository capability
+fixed at creation time in GraphDB — it cannot be enabled on a repository that
+already exists. `scripts/ensure-repo.sh` therefore fails loudly, instead of
+silently no-op'ing, when it finds an already-present `msr` repository that
+predates this change (no `ShaclSail` wrapper in its config). If you hit that
+error, drop the GraphDB data volume and let `make up` recreate the repository
+from the SHACL-enabled config, then replay the seed/NIST/extraction loads:
+
+```bash
+docker compose down -v   # or: make down
+make up                  # recreates `msr` from the SHACL-enabled repo config
+                          # and loads the shape catalogue
+```
+
+POC data is disposable and fully replayable (`make load-seed`, `make
+load-nist`, `make ingest`, `make link`), so this volume drop is expected and
+safe — there is no migration path for existing data, only recreation.
 
 ## Corpus ingest
 

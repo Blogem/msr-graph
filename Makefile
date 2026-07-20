@@ -5,7 +5,15 @@
 #
 #   make up         # one-time license preflight, start the stack, build the
 #                   # extraction/sandbox images, wait for GraphDB, ensure the
-#                   # "msr" repository exists.
+#                   # "msr" repository exists (SHACL-enabled — see
+#                   # openspec/changes/shacl-validation/design.md), and load
+#                   # the SHACL shape catalogue into the reserved shapes
+#                   # graph (scripts/ensure-repo.sh; idempotent, regenerates
+#                   # the unit-allowlist fragment from
+#                   # ontology/qudt-units.json on every run). If bringing up
+#                   # on a pre-SHACL graphdb-data volume, ensure-repo.sh
+#                   # fails with guidance — run `docker compose down -v`
+#                   # first, then `make up` again.
 #   make load-seed  # one-shot loader run: init-db then seed.
 #   make load-nist  # ingest the vendored NIST SRD 27 fluoride CSVs (chains
 #                   # after load-seed; additive, must run after seed).
