@@ -11,14 +11,12 @@ package agent_test
 // pass-1 branch until the coder's events.go changes land (design D4/D5;
 // spec "chat-api" MODIFIED requirement "SSE trace-event stream").
 //
-// ASSUMPTION (pass-1, flagged in the tester handoff report for
-// reconciliation at merge): AnswerEvent.Provenance is pinned as a plain
-// (non-pointer) ProvenanceEvent value -- design D4 describes the payload
-// as "{ grounded bool, provenance ProvenanceEvent }", i.e. the aggregated
-// chain is always present (possibly empty when ungrounded), not optional.
-// If the coder instead makes it a *ProvenanceEvent, this file's
-// construction (and the loop_test.go answer-stamp tests) need updating at
-// merge.
+// RECONCILED AT MERGE (pass-2): the coder's events.go declares
+// AnswerEvent.Provenance as *ProvenanceEvent (pointer, omitempty), not the
+// plain value this file originally assumed under design D4's "{ grounded
+// bool, provenance ProvenanceEvent }" wording. Construction below uses the
+// pointer form to match, consistent with loop_test.go's answer-stamp
+// tests.
 
 import (
 	"encoding/json"
@@ -36,7 +34,7 @@ func TestEvent_AnswerJSONShape(t *testing.T) {
 		Type: agent.EventAnswer,
 		Answer: &agent.AnswerEvent{
 			Grounded: true,
-			Provenance: agent.ProvenanceEvent{
+			Provenance: &agent.ProvenanceEvent{
 				DataLocators: []string{"nist-srd27/density#BeF2-LiF|34.0-66.0"},
 				DatasetDOIs:  []string{"doi:10.18434/mds2-2298"},
 			},

@@ -69,7 +69,8 @@ def test_mention_triples_exact_shape() -> None:
         f"    msr:inDocument <{DOCUMENT_IRI}> ;\n"
         '    msr:surfaceForm "LiF-BeF2"^^xsd:string ;\n'
         '    msr:startOffset "10"^^xsd:integer ;\n'
-        '    msr:endOffset "18"^^xsd:integer .'
+        '    msr:endOffset "18"^^xsd:integer ;\n'
+        "    prov:wasGeneratedBy msrd:activity-extraction ."
     )
     assert mention_triples(MENTION) == expected
 

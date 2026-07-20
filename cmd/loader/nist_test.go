@@ -227,11 +227,9 @@ func TestBuildInsertData_Empty(t *testing.T) {
 //   - "Loader-run activity recorded in a named graph" (ADDED)
 //   - "Idempotent re-runs across both stores" (MODIFIED)
 
-const (
-	loaderActivityIRI = "msrd:activity-loader-nist"
-	nistDatasetIRI    = "msrd:nist-srd27"
-	nistDatasetDOI    = `"doi:10.18434/mds2-2298"`
-)
+// loaderActivityIRI, nistDatasetIRI, and nistDatasetDOI are already declared
+// in nist.go (same package); reuse those production constants directly
+// rather than redeclaring them here.
 
 // countOccurrences reports how many non-overlapping times substr appears in
 // s, used below to check a provenance predicate appears once per emitted
@@ -276,7 +274,7 @@ func TestBuildInsertData_DatasetNodeWithDOI(t *testing.T) {
 	out := buildInsertData([]nist.Measurement{flibeDensityMeasurement()})
 
 	assertContains(t, out, nistDatasetIRI+" a msr:Dataset")
-	assertContains(t, out, "dcterms:identifier "+nistDatasetDOI)
+	assertContains(t, out, "dcterms:identifier "+quoteLiteral(nistDatasetDOI))
 }
 
 // TestBuildInsertData_CatalogIndividualsCarryProvenance covers 6.1's
@@ -358,7 +356,7 @@ func TestBuildRunGraphData_DeterministicWithFixedTimestamp(t *testing.T) {
 	assertContains(t, first, "GRAPH <urn:msr:run:loader/")
 	assertContains(t, first, "a prov:Activity")
 	assertContains(t, first, loaderActivityIRI)
-	assertContains(t, first, "prov:wasAssociatedWith agent:loader@0.3.0")
+	assertContains(t, first, "prov:wasAssociatedWith <agent:loader@0.3.0>")
 	assertContains(t, first, "prov:startedAtTime")
 	assertContains(t, first, "prov:endedAtTime")
 	assertContains(t, first, `owl:versionInfo "0.3.0"`)

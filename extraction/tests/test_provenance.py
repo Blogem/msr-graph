@@ -59,7 +59,7 @@ def test_activity_insert_data_is_fully_attributed() -> None:
     update = _collapse_ws(activity_insert_data(RUN_TS))
     assert "a prov:Activity" in update
     assert "msrd:activity-extraction" in update
-    assert "prov:wasAssociatedWith agent:extraction@" in update
+    assert "prov:wasAssociatedWith <agent:extraction@" in update
     assert "prov:startedAtTime" in update
     assert "prov:endedAtTime" in update
     assert "owl:versionInfo" in update
