@@ -75,6 +75,11 @@ SELECT ?c ?label WHERE {
 }
 """
 
+_REACTOR_CONCEPTS_QUERY = """\
+PREFIX skos: <http://www.w3.org/2004/02/skos/core#>
+SELECT ?c WHERE { ?c skos:broader* <https://w3id.org/msr-kg/vocab#molten-salt-reactors> . }
+"""
+
 _VERSION_QUERY = """\
 PREFIX owl: <http://www.w3.org/2002/07/owl#>
 SELECT ?version WHERE {
@@ -224,4 +229,22 @@ class GraphReader:
         the closed set of salts actually loaded into the core dataset.
         """
         bindings = self._select(_MOLTEN_SALTS_QUERY)
+        return {binding["c"]["value"] for binding in bindings}
+
+    def read_reactor_concepts(self) -> set[str]:
+        """Read the reactor SKOS-concept IRIs (chunk 7's grounding gate).
+
+        Unlike :meth:`read_molten_salts`/:meth:`read_salt_roles`, this is
+        not a closed set an extracted relation's referent must belong to
+        outright — reactor *individuals* are minted, not validated against
+        a closed set (design.md D3/D9, since ``ground-demo-in-real-docs``
+        removed all reactor individuals). Instead this set is the source
+        of the reactor **grounding gate**: a reactor relation is admitted
+        only when its reactor reference is both a member of this set and a
+        chunk-6 ``linked`` mention in the same sentence. ``skos:broader*``
+        is reflexive, so the result includes
+        ``voc:molten-salt-reactors`` itself as well as every narrower
+        reactor concept.
+        """
+        bindings = self._select(_REACTOR_CONCEPTS_QUERY)
         return {binding["c"]["value"] for binding in bindings}
