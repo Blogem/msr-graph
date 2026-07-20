@@ -71,9 +71,12 @@ MIN_NO_LINK_FRACTION = 0.15
 # The fixture-scoped known-entity set: every non-null `expected_target_iri`
 # in the gold fixture, with real labels/altLabels sourced from
 # ontology/vocab.ttl (concepts) and the loaded FLiBe salt individual's
-# rdfs:label (ontology/example-flibe.ttl / design.md's stated
-# msrd:salt-BeF2-LiF-34.0-66.0). This mirrors what GraphReader.read_known_entities
-# would return from the real graph, without touching GraphDB.
+# rdfs:label (minted by the real `loader nist` run against
+# msrd:salt-BeF2-LiF-34.0-66.0 -- ground-demo-in-real-docs removed the
+# hand-curated ontology/example-flibe.ttl seed, so this IRI/label now comes
+# only from the loader, per design.md). This mirrors what
+# GraphReader.read_known_entities would return from the real graph, without
+# touching GraphDB.
 _KNOWN_ENTITIES: list[KnownEntity] = [
     KnownEntity(
         target_iri=f"{VOC}viscosity",

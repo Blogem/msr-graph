@@ -73,42 +73,38 @@ func countGraphTriples(t *testing.T, client *graph.Client, iri graph.GraphIRI) i
 	return n
 }
 
-// TestSeedLoadExposesFlibeMeasurement pins seed-graph-loading spec.md's
-// "Seed data queryable after load" scenario using the concrete FLiBe
-// example from ontology/example-flibe.ttl:
-// msrd:m-nist-srd27-density-BeF2-LiF-34.0-66.0, a msr:PropertyMeasurement
-// with msr:dataLocator "nist-srd27/density#BeF2-LiF|34.0-66.0".
-func TestSeedLoadExposesFlibeMeasurement(t *testing.T) {
+// TestSeedLoadWritesNoDataGraphTriples pins seed-graph-loading spec.md's
+// "Only TBox and vocab load, no A-Box" scenario (ground-demo-in-real-docs
+// change): `make load-seed` (`loader seed`) loads only ontology/msr.ttl ->
+// urn:msr:ontology and ontology/vocab.ttl -> urn:msr:vocab. There is no
+// hand-curated A-Box seed anymore -- ontology/example-flibe.ttl was removed
+// by ground-demo-in-real-docs -- so urn:msr:data MUST hold zero triples
+// after `loader seed` runs alone. urn:msr:data is populated exclusively by
+// the real-data writers: `loader nist` (salt + measurement) and the
+// extraction pipeline's `link` step (the msr:Mention -> msr:linksTo ->
+// salt edge). The FLiBe measurement's queryability after seed+nist is
+// covered by nist_loader_integration_test.go's "FLiBe density measurement
+// queryable via core client" subtest, not here -- this test only pins the
+// seed step's own no-A-Box contract.
+func TestSeedLoadWritesNoDataGraphTriples(t *testing.T) {
 	client := requireGraphDB(t)
 	runLoaderSeed(t, graphDBBaseURL())
 
-	const measurementIRI = "https://w3id.org/msr-kg/data#m-nist-srd27-density-BeF2-LiF-34.0-66.0"
-	const wantLocator = "nist-srd27/density#BeF2-LiF|34.0-66.0"
-
-	query := fmt.Sprintf(`
-		PREFIX msr: <https://w3id.org/msr-kg/ontology#>
-		SELECT ?locator WHERE {
-			<%s> a msr:PropertyMeasurement ;
-				msr:dataLocator ?locator .
-		}
-	`, measurementIRI)
-
-	results, err := client.Select(context.Background(), query)
-	if err != nil {
-		t.Fatalf("Select: %v", err)
-	}
-	if len(results.Results.Bindings) != 1 {
-		t.Fatalf("expected exactly one PropertyMeasurement binding for the FLiBe example, got %d", len(results.Results.Bindings))
-	}
-	if got := results.Results.Bindings[0]["locator"].Value; got != wantLocator {
-		t.Errorf("dataLocator = %q, want %q", got, wantLocator)
+	got := countGraphTriples(t, client, graph.Data)
+	if got != 0 {
+		t.Errorf("urn:msr:data triple count after `loader seed` alone = %d, want 0 (load-seed must not write any A-Box/data-graph triples -- there is no hand-curated seed anymore)", got)
 	}
 }
 
-// TestSeedLoadIsIdempotent pins seed-graph-loading spec.md's "Double load
-// changes nothing" and "Existing staging content preserved" scenarios:
-// running the seed load twice yields identical per-graph triple counts, and
-// a pre-existing urn:msr:staging triple survives both runs.
+// TestSeedLoadIsIdempotent pins seed-graph-loading spec.md's "Graph-replace
+// removes stale triples" / double-load-is-a-no-op contract and "Existing
+// staging content preserved" scenario: since ground-demo-in-real-docs,
+// `loader seed` only PUTs urn:msr:ontology and urn:msr:vocab (no A-Box
+// graph is touched), so running the seed load twice yields identical
+// per-graph triple counts across graph.CoreGraphs, and a pre-existing
+// urn:msr:staging triple (an unrelated graph the seed load never writes)
+// survives both runs untouched -- the staging-preservation probe stays
+// valid unchanged by the seed-A-Box removal.
 func TestSeedLoadIsIdempotent(t *testing.T) {
 	client := requireGraphDB(t)
 	ctx := context.Background()
