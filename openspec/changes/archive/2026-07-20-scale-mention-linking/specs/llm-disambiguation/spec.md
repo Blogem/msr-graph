@@ -5,7 +5,7 @@
 ### Requirement: Distinct unresolved surfaces are resolved concurrently
 The pipeline SHALL resolve the distinct unresolved layer-5 surface forms of a
 run concurrently, using a bounded worker pool whose size is configurable
-(default 8), rather than issuing every layer-5 model call strictly
+(default 24), rather than issuing every layer-5 model call strictly
 sequentially. Concurrency MUST NOT change which spans reach layer 5, the
 per-surface memoization semantics, or the known-IRI validation of each
 outcome: each distinct surface SHALL still be sent to the model exactly once
