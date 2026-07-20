@@ -207,13 +207,23 @@ def classify(
     Builds a user prompt from ``candidate``/``signal``, calls
     ``client.complete(prompt_prefix, user_prompt)``, and validates the
     result app-side (shape check only — the QUDT/INIS-allowlist guard
-    lives downstream in ``proposals.py``, not here):
+    lives downstream in ``proposals.py``, not here). There are exactly
+    three outcomes (design.md D4, refine-mine-salience):
 
-    - malformed JSON, a non-dict payload, or any exception raised by the
-      client -> ``None`` (drop the candidate);
-    - a missing/non-string/unrecognized ``kind`` -> ``None``;
-    - otherwise, build a :class:`Placement` from the optional fields and
-      return a :class:`TriagedCandidate`.
+    - malformed JSON, a non-dict payload, any exception raised by the
+      client, or a missing/non-string/unrecognized ``kind`` (one that is
+      neither in :data:`~msr_extraction.mining_types.VALID_KINDS` nor
+      :data:`~msr_extraction.mining_types.KIND_REJECT`) -> ``None`` (a
+      malformed drop — the caller cannot distinguish *why* it was
+      dropped, only that no proposal should be emitted);
+    - a well-formed explicit reject verdict (``kind == KIND_REJECT``) ->
+      a :class:`TriagedCandidate` with ``kind=KIND_REJECT`` and a default
+      (empty) :class:`Placement` — distinct from ``None`` so callers can
+      count/log it separately from a malformed drop, even though neither
+      outcome ever reaches a routable kind;
+    - otherwise (``kind`` in ``VALID_KINDS``), build a :class:`Placement`
+      from the optional fields and return a routable
+      :class:`TriagedCandidate`.
 
     Never raises: any anomaly drops the candidate rather than emitting a
     malformed proposal (design.md D3, mirroring
@@ -236,8 +246,11 @@ def classify(
         return None
 
     kind = parsed.get("kind")
-    if not isinstance(kind, str) or kind not in VALID_KINDS:
+    if not isinstance(kind, str) or (kind not in VALID_KINDS and kind != KIND_REJECT):
         return None
+
+    if kind == KIND_REJECT:
+        return TriagedCandidate(candidate=candidate, kind=KIND_REJECT, placement=Placement())
 
     placement = _build_placement(parsed)
     return TriagedCandidate(candidate=candidate, kind=kind, placement=placement)
@@ -250,8 +263,13 @@ def triage_candidate(
 ) -> TriagedCandidate | None:
     """Triage ``candidate`` end-to-end: cheap signal, then Flash confirmation.
 
-    Computes :func:`signal_kind` and delegates to :func:`classify`, which
-    is the sole point where the candidate can be dropped (``None``).
+    Computes :func:`signal_kind` and delegates to :func:`classify`,
+    propagating whichever of the three outcomes it returns unchanged: a
+    routable :class:`TriagedCandidate` (``kind`` in
+    :data:`~msr_extraction.mining_types.VALID_KINDS`), a reject
+    :class:`TriagedCandidate` (``kind ==``
+    :data:`~msr_extraction.mining_types.KIND_REJECT`), or ``None`` (a
+    malformed drop).
     """
     signal = signal_kind(candidate)
     return classify(candidate, signal, prompt_prefix, client)
