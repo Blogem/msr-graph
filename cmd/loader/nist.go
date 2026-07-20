@@ -10,11 +10,18 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/blogem/msr-graph/internal/graph"
 	"github.com/blogem/msr-graph/internal/nist"
 	"github.com/blogem/msr-graph/internal/store"
 )
+
+// ontologyVersion is the loader's own version, recorded via
+// owl:versionInfo on each timestamped loader-run Activity record (task
+// 2.4). Bump this alongside releases that change the loader's emitted
+// triples.
+const ontologyVersion = "0.3.0"
 
 // qudtAllowlistFile is the vendored QUDT unit/quantity-kind allowlist,
 // resolved relative to config.ontologyDir (it lives alongside the seed
@@ -68,6 +75,11 @@ func runNist(env func(string) string, stdout io.Writer) error {
 	sparql := buildInsertData(measurements)
 	if err := client.Update(ctx, sparql); err != nil {
 		return fmt.Errorf("nist: inserting catalog triples into %s: %w", graph.Data, err)
+	}
+
+	runSPARQL := buildRunGraphData(time.Now().UTC(), ontologyVersion)
+	if err := client.Update(ctx, runSPARQL); err != nil {
+		return fmt.Errorf("nist: writing loader-run activity graph: %w", err)
 	}
 
 	printNistSummary(stdout, summary)
@@ -263,6 +275,51 @@ func measurementTriples(m nist.Measurement) string {
 	}
 	fmt.Fprintf(&b, "    prov:wasGeneratedBy %s ;\n", loaderActivityIRI)
 	fmt.Fprintf(&b, "    prov:wasDerivedFrom %s .\n", nistDatasetIRI)
+	return b.String()
+}
+
+// buildRunGraphData is a pure, non-networked function (task 2.4) that
+// renders the additive SPARQL INSERT DATA statement recording this
+// loader-run's prov:Activity as a wall-clock record. Unlike buildInsertData,
+// this record is intentionally per-run, not idempotent within
+// urn:msr:data (design D8): every invocation with a distinct ts produces a
+// distinct run graph <urn:msr:run:loader/{ts}>, so re-running the loader
+// against unchanged input still leaves an audit trail of "when did this
+// run happen" rather than being collapsed away by set semantics. The
+// caller supplies ts explicitly (rather than this function calling
+// time.Now()) so it stays a pure, deterministically-testable function of
+// its inputs.
+//
+// It also re-asserts the msrd:nist-srd27 msr:Dataset node (with its DOI)
+// into the separate GRAPH <urn:msr:src:nist-srd27> source-audit graph
+// (design D2), independent of urn:msr:data, so the dataset's external
+// identity is discoverable even if urn:msr:data is ever replaced.
+func buildRunGraphData(ts time.Time, version string) string {
+	tsStr := ts.UTC().Format(time.RFC3339)
+
+	var b strings.Builder
+	b.WriteString(`PREFIX msr:  <https://w3id.org/msr-kg/ontology#>
+PREFIX msrd: <https://w3id.org/msr-kg/data#>
+PREFIX prov: <http://www.w3.org/ns/prov#>
+PREFIX owl:  <http://www.w3.org/2002/07/owl#>
+PREFIX xsd:  <http://www.w3.org/2001/XMLSchema#>
+PREFIX dcterms: <http://purl.org/dc/terms/>
+`)
+	b.WriteString("INSERT DATA {\n")
+
+	fmt.Fprintf(&b, "GRAPH <urn:msr:run:loader/%s> {\n", tsStr)
+	fmt.Fprintf(&b, "%s a prov:Activity ;\n", loaderActivityIRI)
+	fmt.Fprintf(&b, "    prov:wasAssociatedWith <agent:loader@%s> ;\n", version)
+	fmt.Fprintf(&b, "    prov:startedAtTime \"%s\"^^xsd:dateTime ;\n", tsStr)
+	fmt.Fprintf(&b, "    prov:endedAtTime   \"%s\"^^xsd:dateTime ;\n", tsStr)
+	fmt.Fprintf(&b, "    owl:versionInfo %s .\n", quoteLiteral(version))
+	b.WriteString("}\n")
+
+	fmt.Fprintf(&b, "GRAPH <urn:msr:src:nist-srd27> {\n")
+	fmt.Fprintf(&b, "%s a msr:Dataset ; dcterms:identifier %s .\n", nistDatasetIRI, quoteLiteral(nistDatasetDOI))
+	b.WriteString("}\n")
+
+	b.WriteString("}\n")
 	return b.String()
 }
 
