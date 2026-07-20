@@ -78,16 +78,33 @@ func countGraphTriples(t *testing.T, client *graph.Client, iri graph.GraphIRI) i
 // change): `make load-seed` (`loader seed`) loads only ontology/msr.ttl ->
 // urn:msr:ontology and ontology/vocab.ttl -> urn:msr:vocab. There is no
 // hand-curated A-Box seed anymore -- ontology/example-flibe.ttl was removed
-// by ground-demo-in-real-docs -- so urn:msr:data MUST hold zero triples
-// after `loader seed` runs alone. urn:msr:data is populated exclusively by
-// the real-data writers: `loader nist` (salt + measurement) and the
-// extraction pipeline's `link` step (the msr:Mention -> msr:linksTo ->
-// salt edge). The FLiBe measurement's queryability after seed+nist is
-// covered by nist_loader_integration_test.go's "FLiBe density measurement
-// queryable via core client" subtest, not here -- this test only pins the
-// seed step's own no-A-Box contract.
+// by ground-demo-in-real-docs -- so `loader seed` MUST NOT add any triples
+// to urn:msr:data. urn:msr:data is populated exclusively by the real-data
+// writers: `loader nist` (salt + measurement) and the extraction pipeline's
+// `link` step (the msr:Mention -> msr:linksTo -> salt edge) -- both of
+// which may already have run against this same live GraphDB repo before
+// this test does (e.g. nist_loader_integration_test.go, which shares the
+// store and can run in either order relative to this file), and
+// `loader seed` no longer clears urn:msr:data itself, so the graph is not
+// guaranteed to be empty when this test starts. The test therefore first
+// clears urn:msr:data explicitly (CLEAR SILENT so a missing/already-empty
+// graph is not an error) so the post-seed assertion of exactly zero
+// triples is deterministic regardless of run order or a non-fresh store,
+// while still proving the fact the scenario actually cares about:
+// `loader seed` alone writes no A-Box triples. The FLiBe measurement's
+// queryability after seed+nist is covered by
+// nist_loader_integration_test.go's "FLiBe density measurement queryable
+// via core client" subtest, not here -- this test only pins the seed
+// step's own no-A-Box contract.
 func TestSeedLoadWritesNoDataGraphTriples(t *testing.T) {
 	client := requireGraphDB(t)
+	ctx := context.Background()
+
+	clearDataGraph := fmt.Sprintf(`CLEAR SILENT GRAPH <%s>`, graph.Data)
+	if err := client.Update(ctx, clearDataGraph); err != nil {
+		t.Fatalf("clearing %s before the seed load: %v", graph.Data, err)
+	}
+
 	runLoaderSeed(t, graphDBBaseURL())
 
 	got := countGraphTriples(t, client, graph.Data)
