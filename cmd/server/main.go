@@ -1,8 +1,9 @@
 // Command server runs the msr-graph HTTP API. It wires the grounded
 // analysis agent (GraphDB-backed sparql_query, read-only-SQLite-backed
 // sql_query, sandbox-pool-backed run_python) to the stateless POST
-// /api/chat SSE endpoint; the review/checkpoint APIs and the embedded
-// frontend are added by later tasks.
+// /api/chat SSE endpoint, and the proposal review + checkpoint APIs to
+// the proposal and checkpoint engines; the embedded frontend is added by
+// a later task.
 package main
 
 import (
@@ -15,9 +16,18 @@ import (
 	_ "modernc.org/sqlite"
 
 	"github.com/blogem/msr-graph/internal/agent"
+	"github.com/blogem/msr-graph/internal/checkpoint"
 	"github.com/blogem/msr-graph/internal/graph"
+	"github.com/blogem/msr-graph/internal/proposal"
 	"github.com/blogem/msr-graph/internal/sandbox"
 )
+
+// defaultCheckpointRoot is the checkpoints base directory checkpoint.Engine
+// writes each labelled checkpoint under (data/checkpoints/{label}/). A
+// literal is sufficient for the POC; promoting it to an env-configurable
+// serverConfig field is straightforward follow-up if a deployment needs a
+// different location.
+const defaultCheckpointRoot = "data/checkpoints"
 
 func main() {
 	cfg := loadServerConfig(os.Getenv)
@@ -78,7 +88,15 @@ func main() {
 	ag := agent.New(llm, tools, agentCfg)
 	prompts := agent.NewPromptCache(gc)
 
-	mux := newMux(newChatHandler(ag, prompts))
+	// The proposal and checkpoint engines reuse gc, the same full-
+	// capability graph client the chat path's sparql_query tool reads
+	// through -- unlike db above, gc is never opened read-only, since
+	// approving a proposal and restoring a checkpoint both need to write
+	// the graph.
+	propEngine := proposal.NewEngine(gc)
+	ckptEngine := checkpoint.NewEngine(gc, cfg.dbPath, defaultCheckpointRoot)
+
+	mux := newMux(newChatHandler(ag, prompts), gc, propEngine, ckptEngine)
 
 	log.Printf("server listening on %s", cfg.addr)
 	if err := http.ListenAndServe(cfg.addr, mux); err != nil {
