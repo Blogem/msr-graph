@@ -15,7 +15,16 @@ import argparse
 import logging
 import sys
 
-from msr_extraction import acquisition, curated, documents, linker, manifest, mentions, segmenter
+from msr_extraction import (
+    acquisition,
+    curated,
+    documents,
+    linker,
+    manifest,
+    mentions,
+    provenance,
+    segmenter,
+)
 from msr_extraction.config import Config
 from msr_extraction.disambiguation import FlashClient, disambiguate
 from msr_extraction.graph_reader import GraphReader
@@ -63,7 +72,9 @@ def _cmd_documents(config: Config) -> int:
     curated_records = [r for r in records if r.report_number in curated_set]
     logger.info("documents: writing %d document node(s)", len(curated_records))
     client = SparqlClient.from_config(config)
+    run_ts = provenance.run_timestamp()
     documents.write_documents(curated_records, client)
+    provenance.write_activity(run_ts, client)
     logger.info("documents: done")
     return 0
 
@@ -85,7 +96,9 @@ def _cmd_ingest(config: Config) -> int:
     curated_set = set(curated.CURATED_REPORTS)
     curated_records = [r for r in records if r.report_number in curated_set]
     client = SparqlClient.from_config(config)
+    run_ts = provenance.run_timestamp()
     documents.write_documents(curated_records, client)
+    provenance.write_activity(run_ts, client)
 
     logger.info("ingest: complete")
     return 0
@@ -135,6 +148,11 @@ def _cmd_link(config: Config, reports: list[str] = curated.CURATED_REPORTS) -> i
 
     Guards a missing `segments.jsonl` per report (logs a warning and skips
     it) so a partial corpus doesn't crash the whole run.
+
+    Generates a single run timestamp for this invocation (design.md D2/D6)
+    and writes one timestamped extraction-run `Activity` record after all
+    reports have been linked, so every mention written across the whole
+    invocation is covered by the same `urn:msr:run:extraction/<ts>` graph.
     """
     reader = GraphReader.from_config(config)
     prompt_prefix = KGSchemaPromptCache().get(reader)
@@ -155,6 +173,7 @@ def _cmd_link(config: Config, reports: list[str] = curated.CURATED_REPORTS) -> i
         logger.warning("link: DEEPSEEK_BASE_URL not configured; layer 5 spans fall to novel")
 
     sparql = SparqlClient.from_config(config)
+    run_ts = provenance.run_timestamp()
 
     logger.info("link: %d curated report(s) to process", len(reports))
     for report in reports:
@@ -203,6 +222,7 @@ def _cmd_link(config: Config, reports: list[str] = curated.CURATED_REPORTS) -> i
         logger.info(summary)
         print(summary)
 
+    provenance.write_activity(run_ts, sparql)
     logger.info("link: complete")
     return 0
 

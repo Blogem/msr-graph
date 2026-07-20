@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from msr_extraction.provenance import ACTIVITY_IRI
 from msr_extraction.sparql import SparqlClient
 
 MSR = "https://w3id.org/msr-kg/ontology#"
@@ -20,6 +21,7 @@ XSD = "http://www.w3.org/2001/XMLSchema#"
 _PREFIXES = """\
 PREFIX msr: <https://w3id.org/msr-kg/ontology#>
 PREFIX msrd: <https://w3id.org/msr-kg/data#>
+PREFIX prov: <http://www.w3.org/ns/prov#>
 PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>"""
 
 
@@ -65,12 +67,16 @@ def mention_triples(m: Mention) -> str:
             msr:inDocument <{document_iri}> ;
             msr:surfaceForm "{surface}"^^xsd:string ;
             msr:startOffset "{start}"^^xsd:integer ;
-            msr:endOffset "{end}"^^xsd:integer .
+            msr:endOffset "{end}"^^xsd:integer ;
+            prov:wasGeneratedBy msrd:activity-extraction .
 
     The subject IRI is deterministic (:func:`mention_iri`); no blank nodes
     are used. ``linksTo``/``inDocument`` objects are full IRIs written in
     ``<...>`` form (not CURIEs) to avoid ambiguity across the
-    vocab/ontology/data namespaces.
+    vocab/ontology/data namespaces. ``prov:wasGeneratedBy`` references the
+    deterministic extraction-run Activity IRI (design.md D2/D6); the
+    mention's ``msr:inDocument`` remains its derivation source, so no
+    separate ``prov:wasDerivedFrom`` is asserted here.
     """
     subject = mention_iri(m.report, m.start, m.end)
     surface = _escape_literal(m.surface_form)
@@ -80,7 +86,8 @@ def mention_triples(m: Mention) -> str:
         f"    msr:inDocument <{m.document_iri}> ;\n"
         f'    msr:surfaceForm "{surface}"^^xsd:string ;\n'
         f'    msr:startOffset "{m.start}"^^xsd:integer ;\n'
-        f'    msr:endOffset "{m.end}"^^xsd:integer .'
+        f'    msr:endOffset "{m.end}"^^xsd:integer ;\n'
+        f"    prov:wasGeneratedBy {ACTIVITY_IRI} ."
     )
 
 
