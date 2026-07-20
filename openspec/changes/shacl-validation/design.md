@@ -95,7 +95,7 @@ Two engine facts shape the implementation:
 
 ### D7: `ensure-repo.sh` detects and warns on a non-SHACL existing repo
 
-Because provisioning is check-then-create, an existing pre-SHACL `msr` repo on an old `graphdb-data` volume would be silently left untouched — validation would appear "on" but never fire. So `ensure-repo.sh`, on finding the repo already present, additionally inspects its config (`GET /rest/repositories/msr` or the repository config download) for the `graphdb:ShaclSail` sail type / `sail-shacl:validationEnabled`; if absent it fails (or loudly warns) with guidance to drop the volume and recreate. This closes the "silent no-op on old volume" trap rather than leaving it to documentation.
+Because provisioning is check-then-create, an existing pre-SHACL `msr` repo on an old `graphdb-data` volume would be silently left untouched — validation would appear "on" but never fire. So `ensure-repo.sh`, on finding the repo already present, additionally inspects its config (`GET /rest/repositories/msr` or the repository config download) for the `rdf4j:ShaclSail` sail type / `sail-shacl:validationEnabled`; if absent it fails (or loudly warns) with guidance to drop the volume and recreate. This closes the "silent no-op on old volume" trap rather than leaving it to documentation. (Delivered: `ensure-repo.sh`'s `config_is_shacl_enabled` check greps for the vocabulary-independent substring `ShaclSail`, so it works regardless of which prefix GraphDB's config-download endpoint emits.)
 
 ### D8: The `urn:msr:provenance` graph appends go through the validated commit path unaffected
 
