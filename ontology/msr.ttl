@@ -13,7 +13,7 @@
 @prefix nuclear: <nuclear:> .   # DIAMOND opaque class IRIs — non-dereferenceable, alignment only
 
 <https://w3id.org/msr-kg/ontology> a owl:Ontology ;
-    owl:versionInfo "0.2.0" ;
+    owl:versionInfo "0.3.0" ;
     rdfs:label "MSR Seed Ontology (POC)" ;
     rdfs:comment "Seed T-Box for the MSR KG POC. Reuses DIAMOND labels via rdfs:seeAlso; adds the PropertyMeasurement pattern." .
 
@@ -109,7 +109,18 @@ msr:Isotherm2 a msr:EquationForm ; msr:formula "c0 + c1*C + c2*C^2" ; msr:indepe
 msr:Isotherm3 a msr:EquationForm ; msr:formula "c0 + c1*C + c2*C^2 + c3*C^3" ; msr:independentVariable "composition" .  # NIST 'I3'
 msr:Isotherm4 a msr:EquationForm ; msr:formula "c0 + c1*C + c2*C^2 + c3*C^3 + c4*C^4" ; msr:independentVariable "composition" .  # NIST 'I4'
 
-### Provenance layer
+### Provenance layer  (self-contained PROV-O slice — who/what/when for every fact, design.md D1/D2)
+prov:Entity  a owl:Class .
+prov:Activity a owl:Class .
+prov:Agent   a owl:Class .
+prov:wasDerivedFrom    a owl:ObjectProperty ; rdfs:comment "A fact-bearing individual to the Dataset/Document it derives from." .
+prov:wasGeneratedBy    a owl:ObjectProperty ; rdfs:range prov:Activity ;
+    rdfs:comment "A fact-bearing individual to the run Activity that produced it." .
+prov:wasAssociatedWith a owl:ObjectProperty ; rdfs:range prov:Agent ;
+    rdfs:comment "An Activity to the Agent (loader/extraction/human reviewer) that carried it out." .
+prov:startedAtTime a owl:DatatypeProperty ; rdfs:range xsd:dateTime .
+prov:endedAtTime   a owl:DatatypeProperty ; rdfs:range xsd:dateTime .
+
 msr:Document a owl:Class ; rdfs:subClassOf prov:Entity .
 msr:Dataset  a owl:Class ; rdfs:subClassOf prov:Entity .
 msr:citedIn  a owl:ObjectProperty ; rdfs:domain msr:PropertyMeasurement ; rdfs:range msr:Document .
