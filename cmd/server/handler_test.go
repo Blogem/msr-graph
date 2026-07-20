@@ -35,7 +35,12 @@ func TestHealthz(t *testing.T) {
 		},
 	}
 
-	mux := newMux(http.NotFoundHandler())
+	// newMux gained proposal/checkpoint dependencies in
+	// openspec/changes/apply-ontology-changes (chunk 9, task 5.3); the
+	// fakes here (defined in proposals_test.go / checkpoints_test.go) are
+	// unused by any request this test issues, so their zero values are
+	// enough to keep /healthz's own behavior unaffected.
+	mux := newMux(http.NotFoundHandler(), &fakeProposalReader{}, &fakeProposalService{}, &fakeCheckpointService{})
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
