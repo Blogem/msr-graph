@@ -17,6 +17,7 @@ collaborators are faked.
 from __future__ import annotations
 
 import json
+import re
 from types import SimpleNamespace
 
 import pytest
@@ -58,6 +59,24 @@ class _FakeSparqlClient:
 
     def update(self, sparql_update: str) -> None:
         self.updates.append(sparql_update)
+
+
+class _CountingFlashClient:
+    """Fake `Completer` recording every `complete()` call's mention surface.
+
+    Always declares the span novel, so layer 5 records it as novel without
+    linking -- this test only cares about *how many* model calls happen and
+    for which surface (parsed out of the `Mention: "..."` line the
+    disambiguation user prompt embeds).
+    """
+
+    def __init__(self) -> None:
+        self.surfaces: list[str] = []
+
+    def complete(self, system_prompt: str, user_prompt: str) -> str:
+        match = re.search(r'Mention: "([^"]*)"', user_prompt)
+        self.surfaces.append(match.group(1) if match else "")
+        return json.dumps({"novel": True})
 
 
 def _known_entities() -> list[KnownEntity]:
@@ -142,6 +161,70 @@ def test_cmd_link_smoke_links_report_writes_mentions_and_graph(tmp_path, monkeyp
         "INSERT DATA {" in update and "GRAPH <urn:msr:data>" in update and "a msr:Mention" in update
         for update in fake_sparql.updates
     ), f"expected an INSERT DATA update against urn:msr:data with a msr:Mention, got: {fake_sparql.updates}"
+
+
+def test_cmd_link_memoizes_disambiguation_by_surface(tmp_path, monkeypatch) -> None:
+    """Layer-5 disambiguation is memoized per surface within a run.
+
+    A single segment mentions the unresolved salt-shaped span "NaCl-KCl"
+    twice and "KF-ZrF4" once (both separator-joined formulas, so they are
+    candidate spans, but absent from `_known_entities`, so they fall through
+    layers 2-4 to layer 5; the surrounding words are lowercase so they are
+    not themselves candidates). The counting Flash fake proves the second
+    "NaCl-KCl" was served from cache: it produces two mention records but
+    only one model call, and no surface is ever sent to the model twice.
+    """
+    monkeypatch.setenv("MSR_CORPUS_DIR", str(tmp_path))
+    monkeypatch.setattr(curated, "CURATED_REPORTS", [REPORT])
+
+    known = _known_entities()
+    monkeypatch.setattr(
+        cli,
+        "GraphReader",
+        SimpleNamespace(from_config=lambda config: _FakeGraphReader(known)),
+    )
+    monkeypatch.setattr(
+        cli,
+        "SparqlClient",
+        SimpleNamespace(from_config=lambda config: _FakeSparqlClient()),
+    )
+    fake_flash = _CountingFlashClient()
+    monkeypatch.setattr(
+        cli,
+        "FlashClient",
+        SimpleNamespace(from_config=lambda config: fake_flash),
+    )
+
+    report_dir = tmp_path / REPORT
+    report_dir.mkdir(parents=True)
+    text = "molten NaCl-KCl was tested. later NaCl-KCl again, and KF-ZrF4 too."
+    segment = {
+        "report": REPORT,
+        "index": 0,
+        "text": text,
+        "char_start": 0,
+        "char_end": len(text),
+    }
+    (report_dir / "segments.jsonl").write_text(json.dumps(segment) + "\n", encoding="utf-8")
+
+    result = cli.main(["link"])
+    assert result == 0
+
+    records = [
+        json.loads(line)
+        for line in (report_dir / "mentions.jsonl").read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    nacl_records = [r for r in records if r["surface_form"] == "NaCl-KCl"]
+    assert len(nacl_records) == 2, f"expected NaCl-KCl to be mentioned twice, got: {records}"
+
+    # ...yet Flash was called only once for NaCl-KCl (second occurrence
+    # cached), KF-ZrF4 once, and no surface was ever sent to the model twice.
+    assert fake_flash.surfaces.count("NaCl-KCl") == 1, fake_flash.surfaces
+    assert fake_flash.surfaces.count("KF-ZrF4") == 1, fake_flash.surfaces
+    assert len(fake_flash.surfaces) == len(set(fake_flash.surfaces)), (
+        f"a surface was sent to Flash more than once (cache miss): {fake_flash.surfaces}"
+    )
 
 
 # --- `_resolve_link_reports` (pure helper) -----------------------------------

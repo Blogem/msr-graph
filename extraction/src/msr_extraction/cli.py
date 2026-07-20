@@ -171,10 +171,26 @@ def _cmd_link(config: Config, reports: list[str] = curated.CURATED_REPORTS) -> i
     client = FlashClient.from_config(config)
     disambiguator: linker.Disambiguator | None = None
     if client is not None:
+        # Per-run memoization keyed on the surface form
+        # (cache-disambiguation-by-surface, design D1/D2/D3): layer-5
+        # candidates are formula-shaped, so the surface determines identity
+        # and the same unresolved formula recurring across segments/reports
+        # need only be sent to Flash once. The cache is closure-local, so it
+        # covers every report in this run and is discarded when `_cmd_link`
+        # returns (no cross-run persistence). A "novel" outcome is cached too
+        # — an unresolvable surface is not re-sent. The known-IRI validation
+        # inside `disambiguate` still gates every (first) link, so a cached
+        # outcome can never be a link to an unloaded IRI.
+        _disambig_cache: dict[str, tuple[str, str | None]] = {}
 
         def disambiguator(surface: str, sentence: str) -> tuple[str, str | None]:
+            cached = _disambig_cache.get(surface)
+            if cached is not None:
+                return cached
             result = disambiguate(surface, sentence, prompt_prefix, known_iris, client)
-            return result.status, result.target_iri
+            outcome = (result.status, result.target_iri)
+            _disambig_cache[surface] = outcome
+            return outcome
 
     else:
         logger.warning("link: DEEPSEEK_BASE_URL not configured; layer 5 spans fall to novel")
