@@ -37,6 +37,14 @@ const (
 	// Staging holds unreviewed proposals; deliberately excluded from
 	// core reads (Select) and only reachable via SelectRaw.
 	Staging GraphIRI = "urn:msr:staging"
+	// Provenance holds append-only per-run activity and
+	// generation-lineage records. Like Staging, it is deliberately
+	// excluded from core reads (Select) and only reachable via an
+	// explicit GRAPH scope or SelectRaw. It is written only via
+	// additive SPARQL Update with an explicit GRAPH target — never
+	// PutGraph — so it is not part of the PutGraph known-graph
+	// allowlist either.
+	Provenance GraphIRI = "urn:msr:provenance"
 )
 
 // CoreGraphs are the three graphs a core read is restricted to, in a
