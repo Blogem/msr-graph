@@ -2,10 +2,16 @@
 
 ## Context
 
-Chunks 1, 2, 3, 5 and 6 are merged to main. Chunk 1 (`bootstrap-graph-infra`) shipped the
-running stores, the seed ontology/vocab/A-Box, the `internal/graph` core-dataset client, the
-`urn:msr:staging` graph, and the `extraction/` Python scaffold. Chunk 6 (`ner-entity-linking`)
-lands the pieces this change builds on, verified against the merged code:
+Chunks 1, 2, 3, 5 and 6 are merged to main, and so is the **trust foundation** that reshapes
+this change: `ground-demo-in-real-docs` **deleted the hand-curated seed A-Box**
+(`ontology/example-flibe.ttl`) and the role/reactor TBox layer, so `urn:msr:data` is now
+populated *only* by real-data writers (loader + extraction) via additive `INSERT DATA`; and
+`provenance-model` / `provenance-run-lineage` make **PROV-O provenance a required invariant** on
+every fact-bearing individual in `urn:msr:data` (two `prov:Activity` IRIs per pipeline + an
+append-only `urn:msr:provenance` graph). Chunk 1 (`bootstrap-graph-infra`) shipped the running
+stores, the seed ontology/vocab (TBox + terminology only — **no A-Box**), the `internal/graph`
+core-dataset client, the `urn:msr:staging` graph, and the `extraction/` Python scaffold. Chunk 6
+(`ner-entity-linking`) lands the pieces this change builds on, verified against the merged code:
 
 - the per-run mention/miss artifact `data/corpus/{report#}/mentions.jsonl`
   (`linker.write_mentions_jsonl`), one record per recognized span with fields
@@ -51,6 +57,11 @@ contracts_, and by `docs/IMPLEMENTATION_PLAN.md` → chunk 8. Fixed points it ho
 - **Staging by graph membership** — proposals sit in `urn:msr:staging` +
   `urn:msr:proposal/{id}`, one `FROM` clause away from the core dataset; no status-flag
   filtering is needed for the agent to not see them.
+- **Born provenance-complete and real** — every individual this stage writes to `urn:msr:data`
+  carries the `provenance-model` edges (`prov:wasGeneratedBy` the mine activity +
+  `prov:wasDerivedFrom` its source `msr:Document`), with per-run lineage appended to
+  `urn:msr:provenance`; no fact is hand-provenanced and every derivation root is a real document
+  (Principle 3 — only real data).
 - **Deterministic IRIs, no blank nodes, idempotent re-runs**; **LLM = DeepSeek V4 Flash only**,
   injected and **stubbed in every test**; the reused KG-schema prompt is byte-stable.
 
@@ -70,8 +81,9 @@ contracts_, and by `docs/IMPLEMENTATION_PLAN.md` → chunk 8. Fixed points it ho
 - Emit TBox-affecting candidates as proposals with deterministic IRIs (idempotent); surface
   `solubility` (property) and `graphite` (class + relation bundle) correctly; validate any
   asserted `qk:`/`unit:` IRI against the vendored QUDT allowlist (reject on miss).
-- Write instance-kind candidates directly to `urn:msr:data` flagged `msr:autoAccepted`, with
-  the rides-with-proposal exception for individuals depending on proposed schema.
+- Write instance-kind candidates directly to `urn:msr:data` flagged `msr:autoAccepted` and
+  **provenance-complete** (`prov:wasGeneratedBy`/`prov:wasDerivedFrom` + `urn:msr:provenance`
+  lineage), with the rides-with-proposal exception for individuals depending on proposed schema.
 - Keep everything in staging invisible to the core dataset (pinned by test).
 
 **Non-Goals:**
@@ -92,6 +104,12 @@ contracts_, and by `docs/IMPLEMENTATION_PLAN.md` → chunk 8. Fixed points it ho
 - **No Go changes** — this is a Python extraction stage writing the graph directly over HTTP.
 - **No new packages** — reuses chunk 6's Flash client, prompt builder, and graph reader, and
   chunk 5's SPARQL-UPDATE helper.
+- **No SHACL authoring** — the write-time validation shapes are chunk 13 (`shacl-validation`).
+  But because this stage writes its `urn:msr:data` individuals provenance-complete (D8), those
+  facts are **born SHACL-valid**: they already satisfy chunk-13's catalog-individual provenance
+  shape (`prov:wasGeneratedBy`/`prov:wasDerivedFrom` required), so chunk 8 is not retrofitted
+  later — the trust design's "chunks 7–8 are born provenance-complete and SHACL-valid" goal
+  (`docs/PROVENANCE_AND_TRUST_DESIGN.md` §5).
 
 ## Decisions
 
@@ -190,6 +208,7 @@ msr:Evidence         a owl:Class .
 msr:evidenceText     a owl:DatatypeProperty ; rdfs:domain msr:Evidence ; rdfs:range xsd:string .
 # msr:citedIn (chunk 1), msr:startOffset / msr:endOffset (chunk 6) reused for evidence provenance
 msr:autoAccepted     a owl:DatatypeProperty ; rdfs:range xsd:boolean . # flags directly-written instances in urn:msr:data
+# prov:wasGeneratedBy / prov:wasDerivedFrom / prov:Activity / prov:Agent reused from the provenance-model PROV-O slice (already in the seed ontology) — not re-declared here
 ```
 
 - **Two graphs per proposal**: the `msr:ChangeProposal` resource (status, kind, term,
@@ -246,23 +265,47 @@ the bundle correctly, not to pre-sort by destination graph.
   (unit unset per D6) + the `voc:solubility` SKOS concept. No instances (parked mentions
   back-populate in chunk 9).
 - **`graphite`** → `kind=class`: proposal graph carries the `msr:Moderator` class, the
-  `msr:moderatedBy` object property (`MoltenSaltReactor → Moderator`), the `msrd:graphite`
-  individual, **and** the `msrd:MSRE msr:moderatedBy msrd:graphite` edge — a mixed TBox +
-  instance bundle. The `graphite` individual and its edge depend on the proposed schema, so
-  they ride this bundle (D8) instead of auto-accepting to data.
+  `msr:moderatedBy` object property (`rdfs:range msr:Moderator`; **domain left open** — see
+  below), and the `msrd:graphite` individual typed by the proposed `msr:Moderator` — a mixed
+  TBox + instance bundle. The `graphite` individual depends on the proposed `Moderator` class,
+  so it rides this bundle (D8) instead of auto-accepting to data, carrying the same
+  `prov:wasGeneratedBy`/`prov:wasDerivedFrom` edges in the proposal graph so chunk 9 routes it
+  provenance-complete on approval.
+  - **Reconciled with the seed removal (`ground-demo-in-real-docs`):** `msr:MoltenSaltReactor`
+    and the `msrd:MSRE` individual were removed with the hand-curated seed and are unbuilt
+    chunk-7 relation-extraction work. So the bundle does **not** hand-assert `msrd:MSRE` or the
+    `msrd:MSRE msr:moderatedBy msrd:graphite` instance edge — that would fabricate an individual
+    the corpus attests but no writer has yet extracted, a Principle-3 violation. `moderatedBy` is
+    proposed with its range only; the reviewer (chunk 9) or chunk-7 supplies the reactor domain
+    and the concrete reactor→moderator edge from real text. The bundle stays a genuine mixed
+    TBox + instance proposal via the `graphite` individual riding with the class.
 
 ### D8 — Instance auto-accept, with the rides-with-proposal exception
 
-An `instance`-kind candidate — a new specific salt/compound/reactor typed by an **existing**
-class — is written **directly to `urn:msr:data`** with a deterministic IRI, flagged
-`msr:autoAccepted true`, provenance kept; it never enters staging (the schema is unchanged, so
-there is nothing to review). The exception: an individual that can only be typed by **proposed**
-schema (`msrd:graphite` needs the proposed `msr:Moderator`) cannot be auto-accepted — it is
-placed **inside that proposal's graph** and reaches `urn:msr:data` only when chunk 9 approves
-the bundle. The miner decides auto-accept-vs-ride by whether the individual's type/edges
-resolve entirely within the current core schema.
+An `instance`-kind candidate — a new specific salt/compound typed by an **existing** class —
+is written **directly to `urn:msr:data`** with a deterministic IRI, flagged
+`msr:autoAccepted true`, and **provenance-complete** per the merged `provenance-model` contract:
+each individual carries `prov:wasGeneratedBy msrd:activity-mine` and `prov:wasDerivedFrom` the
+source `msr:Document` it was mined from, in `urn:msr:data`. The run also types the stable
+`msrd:activity-mine a prov:Activity ; prov:wasAssociatedWith agent:mine@<version>` once (with
+the ontology `owl:versionInfo`, no timestamps, idempotent) and appends a per-run `prov:Activity`
+node `urn:msr:run:mine/<ts>` plus one `prov:wasGeneratedBy` generation edge per auto-accepted
+fact into the append-only `urn:msr:provenance` graph — the same two-activity pattern the NIST
+loader and extraction use (`cmd/loader/nist.go`). No `msr:citedIn` is asserted on the individual
+(that predicate is deferred to chunk-7 citation extraction per `provenance-model`); the
+document link that matters here is the `prov:wasDerivedFrom`. It never enters staging (the schema
+is unchanged, so there is nothing to review). The exception: an individual that can only be typed
+by **proposed** schema (`msrd:graphite` needs the proposed `msr:Moderator`) cannot be
+auto-accepted — it is placed **inside that proposal's graph**, carrying the same provenance
+edges, and reaches `urn:msr:data` only when chunk 9 approves the bundle. The miner decides
+auto-accept-vs-ride by whether the individual's type/edges resolve entirely within the current
+core schema.
 
-### D9 — Staging invisibility via graph membership
+**Pipeline identity:** `mine` gets its own `msrd:activity-mine` / `agent:mine@<version>` — a
+distinct stage of the evolution loop, so its auto-accepted facts have clean, queryable lineage;
+reusing `msrd:activity-extraction` is the alternative, rejected for lineage clarity.
+
+### D10 — Staging invisibility via graph membership
 
 Because proposals and auto-accept-excepted individuals live only in `urn:msr:staging` /
 `urn:msr:proposal/{id}`, a read through the core-dataset contract (the three `FROM` graphs)
@@ -270,7 +313,7 @@ never returns them — no status filtering required. A test asserts a freshly-mi
 absent from a core-dataset read but present in a raw staging query, mirroring chunk 1's
 staging-exclusion pin.
 
-### D10 — Test strategy
+### D11 — Test strategy
 
 Hermetic pytest; no live model, and (for units) no GraphDB:
 
@@ -285,6 +328,11 @@ Hermetic pytest; no live model, and (for units) no GraphDB:
 - **Instance auto-accept** — an instance under an existing class → a direct
   `urn:msr:data` write flagged `msr:autoAccepted`; an instance depending on proposed schema
   → it rides the proposal bundle, nothing in `urn:msr:data`.
+- **Provenance on auto-accepted facts** — an auto-accepted individual carries
+  `prov:wasGeneratedBy msrd:activity-mine` + `prov:wasDerivedFrom` its source `msr:Document` in
+  `urn:msr:data`, the stable activity is typed once (idempotent re-run), and `urn:msr:provenance`
+  holds the per-run activity node plus one generation edge per fact (append-only across two
+  runs); asserted against a fake SPARQL client.
 - **Proposal emission / idempotency** — a fixed candidate → the exact expected `INSERT DATA`
   triples (deterministic IRIs, no blank nodes) against a fake SPARQL client, split correctly
   across `urn:msr:staging` and `urn:msr:proposal/{id}`; a second run yields identical triples.
@@ -311,10 +359,11 @@ Hermetic pytest; no live model, and (for units) no GraphDB:
   `unit:MOL-PER-MOL` for solubility) → the classifier is prompted to leave ambiguous/unknown
   units unset (D6), so the real demo target is emitted with the unit as a reviewer decision;
   the guard only ever fires on a _confidently-asserted_ out-of-allowlist IRI.
-- **Instance auto-accept writes to core without review** → by design (schema unchanged);
-  scoped to individuals typeable by existing classes, flagged `msr:autoAccepted` with
-  provenance so chunk 9's checkpoint/restore reverts them, and excluded when they depend on
-  proposed schema.
+- **Instance auto-accept writes to core without review** → by design (schema unchanged, and the
+  trust foundation redefines "core = SHACL-valid" — machine-derived triples may write to core if
+  well-formed, `docs/PROVENANCE_AND_TRUST_DESIGN.md` §3); scoped to individuals typeable by
+  existing classes, flagged `msr:autoAccepted` and provenance-complete (D8) so chunk 9's
+  checkpoint/restore reverts them, and excluded when they depend on proposed schema.
 - **Editing the seed `ontology/msr.ttl`** (D4) touches a foundational file → additive and
   self-contained (governance classes/predicates), loaded by the existing idempotent
   graph-replace `PUT`, no loader code change; follows chunk 6's precedent.
@@ -325,26 +374,31 @@ Hermetic pytest; no live model, and (for units) no GraphDB:
 
 ## Migration Plan
 
-Additive on top of chunks 1 and 6. Bootstrap order becomes `make up` → `make load-seed` (now
-including the `ChangeProposal` governance TBox) → `make load-nist` → `make ingest` →
-`make link` → `make mine` → `make test`. The `ontology/msr.ttl` governance-TBox edit is
-loaded by `make load-seed` **at bootstrap, before the data pipeline runs**.
+Additive on top of chunks 1 and 6 and the merged trust foundation. Bootstrap order becomes
+`make up` → `make load-seed` (now including the `ChangeProposal` governance TBox) →
+`make load-nist` → `make ingest` → `make link` → `make mine` → `make test`. The
+`ontology/msr.ttl` governance-TBox edit loads into `urn:msr:ontology` via `make load-seed`'s
+graph-replace `PUT` **at bootstrap, before the data pipeline runs**.
 
-- **Do not re-run `make load-seed` after `load-nist`/`link`/`mine`.** `load-seed` loads
-  `example-flibe.ttl` into `urn:msr:data` with Graph Store `PUT` (graph-**replace**), so a
-  re-seed after the data pipeline would wipe the NIST salt catalog, the chunk-6 mentions, and
-  chunk 8's `msr:autoAccepted` individuals in `urn:msr:data`. `load-nist` already runs
-  `load-seed` as a prerequisite, so the governance TBox is picked up on the normal bootstrap
-  chain without a standalone re-seed. Proposals in `urn:msr:staging` / `urn:msr:proposal/{id}`
-  are **not** seed files and survive a re-seed; the auto-accepted instances in `urn:msr:data`
-  do not — so the recovery path after a re-seed is to re-run `load-nist` → `link` → `mine`.
+- **`make load-seed` no longer touches `urn:msr:data`.** Since `ground-demo-in-real-docs`
+  deleted `ontology/example-flibe.ttl`, `load-seed` loads TBox + vocab only
+  (`msr.ttl` → `urn:msr:ontology`, `vocab.ttl` → `urn:msr:vocab`), and `urn:msr:data` is written
+  *exclusively* by real-data writers (`loader nist`, `ingest`/`link`, and this `mine` stage) via
+  additive `INSERT DATA` — never Graph Store `PUT` (`cmd/loader/seed.go`, `nist.go`). So
+  re-running `load-seed` is **harmless** to the NIST catalog, the chunk-6 mentions, and chunk 8's
+  `msr:autoAccepted` individuals; the old "a re-seed wipes `urn:msr:data`" hazard no longer
+  exists. `load-nist` still runs `load-seed` as a prerequisite, so the governance TBox is picked
+  up on the normal bootstrap chain. The demo's precondition is the full real pipeline
+  (`load-nist` → `ingest` → `link` → `mine`); there is no static seed to fall back on.
 
 Rollback: delete the mined triples — `DROP GRAPH <urn:msr:proposal/...>`,
 `DELETE WHERE { GRAPH <urn:msr:staging> { ?p a msr:ChangeProposal … } }`, and `DELETE` the
 `msr:autoAccepted` individuals from `urn:msr:data` — or a full `down -v` + re-bootstrap;
-everything is re-creatable from the vendored inputs and the graph. Root `Makefile` gains
-`make mine` (after `make link`) additively per the parallel-execution contract; the
-`extraction` image is unchanged (no new packages).
+everything is re-creatable from the vendored inputs and the graph. The `urn:msr:provenance`
+entries for the run are append-only and clear only on a full `down -v` (as with the loader),
+which is acceptable for disposable POC data. Root `Makefile` gains `make mine` (after
+`make link`) additively per the parallel-execution contract; the `extraction` image is unchanged
+(no new packages).
 
 ## Open Questions
 

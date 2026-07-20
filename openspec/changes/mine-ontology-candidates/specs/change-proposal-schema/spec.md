@@ -42,6 +42,18 @@ SHALL NOT set `approved` or `rejected` — status transitions are chunk 9's resp
 - **WHEN** the miner writes a new proposal
 - **THEN** its `msr:reviewStatus` is `pending`
 
+### Requirement: Proposals record their generating mine run
+Every `msr:ChangeProposal` resource the miner writes SHALL be attributed to the run that
+produced it via `prov:wasGeneratedBy` the per-run activity node `urn:msr:run:mine/<ts>` (the
+same node recorded in `urn:msr:provenance`), so a reviewer can trace which run surfaced a
+candidate — consistent with Principle 1 of `docs/PROVENANCE_AND_TRUST_DESIGN.md` (provenance
+everywhere). This is in addition to the `msr:hasEvidence` sentences that ground the candidate in
+real documents.
+
+#### Scenario: A proposal is attributed to its mine run
+- **WHEN** the miner writes a `msr:ChangeProposal`
+- **THEN** the resource carries `prov:wasGeneratedBy` the run's `urn:msr:run:mine/<ts>` activity node (recorded in `urn:msr:provenance`)
+
 ### Requirement: Primary kind is for display; a bundle may mix triple types
 The `msr:kind` of a proposal SHALL record the primary kind for triage and display, but the
 proposal graph MAY contain a mix of TBox axioms and instance triples in one bundle. The
@@ -50,4 +62,4 @@ approval routing (chunk 9) routes each triple by what it is, ignoring `msr:kind`
 
 #### Scenario: A class proposal bundles a relation and an individual
 - **WHEN** the `graphite` proposal is written with `msr:kind "class"`
-- **THEN** its proposal graph contains the `msr:Moderator` class, the `msr:moderatedBy` property, the `msrd:graphite` individual, and the MSRE edge — a mixed bundle under one `ChangeProposal`
+- **THEN** its proposal graph contains the `msr:Moderator` class, the `msr:moderatedBy` object property (range `msr:Moderator`), and the `msrd:graphite` individual typed by that class — a mixed TBox + instance bundle under one `ChangeProposal` (the concrete reactor→moderator *instance* edge is deferred to chunk-7 relation extraction and not hand-asserted, since `msr:MoltenSaltReactor`/`msrd:MSRE` were removed with the seed)
