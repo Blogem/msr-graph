@@ -190,6 +190,14 @@ def test_lif_bef2_composed_mention_links_to_loaded_salt_individual() -> None:
     ``msr:linksTo`` the loaded MSRE-coolant FLiBe individual
     ``msrd:salt-BeF2-LiF-34.0-66.0`` (34 mol% BeF2 / 66 mol% LiF), not merely
     a vocab concept.
+
+    ground-demo-in-real-docs (design.md D4): with no hand-curated seed
+    A-Box, this ``ASK`` for a real composed-mention ``msr:linksTo`` edge
+    into ``msrd:salt-BeF2-LiF-34.0-66.0`` (minted only by ``loader nist``)
+    is the **authoritative end-to-end grounding-edge acceptance check** for
+    that change -- there is no other path (seed or otherwise) that could
+    make this pass except the real ingest -> link pipeline actually
+    grounding a salt mention to the loaded individual.
     """
     config = Config.from_env()
 
