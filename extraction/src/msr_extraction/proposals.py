@@ -35,7 +35,6 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
-from msr_extraction.mine_provenance import run_activity_iri
 from msr_extraction.mining_types import (
     KIND_CLASS,
     KIND_PROPERTY,
@@ -153,10 +152,22 @@ def _staging_resource_block(
     triaged: TriagedCandidate,
     proposal_iri: str,
     proposal_graph: str,
-    run_ts: str,
     evidence: list[Evidence],
 ) -> str:
-    """Return the Turtle block for the ``msr:ChangeProposal`` resource plus its evidence."""
+    """Return the Turtle block for the ``msr:ChangeProposal`` resource plus its evidence.
+
+    Deliberately omits ``prov:wasGeneratedBy`` -- a per-run generation edge
+    would carry the run-specific :func:`mine_provenance.run_activity_iri`
+    and so would change on every invocation, which would break the
+    ``proposal-staging`` spec's "re-run leaves ``urn:msr:staging`` triple
+    counts unchanged" idempotency guarantee. The per-run attribution edge
+    the ``change-proposal-schema`` spec requires (``ChangeProposal``
+    resource -> its mine run) is instead written by the CLI umbrella into
+    the append-only ``urn:msr:provenance`` graph via
+    ``mine_provenance.write_generation_edges``, mirroring how
+    ``mentions.py``/``documents.py`` keep ``urn:msr:data`` idempotent while
+    still recording per-run lineage.
+    """
     predicates = [
         "a msr:ChangeProposal",
         f'msr:kind "{_escape_literal(triaged.kind)}"^^xsd:string',
@@ -164,7 +175,6 @@ def _staging_resource_block(
         f'msr:term "{_escape_literal(triaged.candidate.term)}"^^xsd:string',
         f'msr:docFrequency "{triaged.candidate.doc_frequency}"^^xsd:integer',
         f'msr:hasProposalGraph "{proposal_graph}"^^xsd:anyURI',
-        f"prov:wasGeneratedBy {run_activity_iri(run_ts)}",
     ]
     if evidence:
         evidence_iris = ", ".join(
@@ -294,6 +304,15 @@ def build_proposal_bundle(
     (``slug = mining_types.term_slug(triaged.candidate.term)``), then
     assembles the ``urn:msr:staging`` resource+evidence block and the
     per-kind proposal-graph TBox/instance block. No blank nodes anywhere.
+
+    ``run_ts`` is accepted but **reserved/unused** by the staging block
+    (kept in the signature for call-site/API stability and in case a
+    future bundle component needs it): the per-run
+    ``prov:wasGeneratedBy`` attribution for this proposal's
+    ``msr:ChangeProposal`` resource is written separately, by the CLI
+    umbrella, into ``urn:msr:provenance`` (append-only) via
+    ``mine_provenance.write_generation_edges`` -- not embedded in this
+    (idempotent, re-run-stable) bundle.
     """
     placement = triaged.placement
     if placement.canonical_unit and placement.canonical_unit not in allowlist.units:
@@ -311,7 +330,7 @@ def build_proposal_bundle(
         key=lambda e: (e.report, e.start_offset, e.end_offset),
     )
     staging_triples = _staging_resource_block(
-        triaged, proposal_iri, proposal_graph, run_ts, evidence
+        triaged, proposal_iri, proposal_graph, evidence
     )
     proposal_graph_triples = _proposal_graph_triples(triaged, slug)
 
