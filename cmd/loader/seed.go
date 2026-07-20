@@ -17,17 +17,21 @@ type seedFile struct {
 	graphIRI graph.GraphIRI
 }
 
-// seedFiles is the fixed seed-load manifest (task 5.1 / design D3).
+// seedFiles is the fixed seed-load manifest (task 5.1 / design D1): TBox
+// and vocab/terminology only. There is no hand-curated A-Box seed file --
+// urn:msr:data is never a PUT target of `loader seed` and is populated
+// exclusively by the real-data writers, `loader nist` and the extraction
+// pipeline (ingest/link).
 var seedFiles = []seedFile{
 	{name: "msr.ttl", graphIRI: graph.Ontology},
 	{name: "vocab.ttl", graphIRI: graph.Vocab},
-	{name: "example-flibe.ttl", graphIRI: graph.Data},
 }
 
-// runSeed implements `loader seed`: it PUTs each seed file to its named
-// graph via graph.PutGraph (Graph Store PUT = graph-replace, so re-running
-// yields identical triple counts per design D3), then ensures
-// urn:msr:staging exists without touching any existing content in it.
+// runSeed implements `loader seed`: it PUTs each seed file (TBox + vocab
+// only -- never urn:msr:data) to its named graph via graph.PutGraph (Graph
+// Store PUT = graph-replace, so re-running yields identical triple counts
+// per design D3), then ensures urn:msr:staging exists without touching any
+// existing content in it.
 func runSeed(env func(string) string, stdout io.Writer) error {
 	cfg := loadConfig(env)
 	client := graph.New(cfg.graphDBURL, cfg.graphDBRepo, nil)

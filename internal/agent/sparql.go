@@ -21,12 +21,20 @@ const sparqlToolDescription = `Runs a SPARQL 1.1 SELECT query over the core data
 	`dataset clause.
 
 Grounding pattern -- to resolve a salt or property mention to its measurement data:
-- Match the mention text against a skos:prefLabel/skos:altLabel (a salt individual also ` +
-	`carries rdfs:label).
-- Reach the msr:MoltenSalt individual or msr:PhysicalProperty term via skos:closeMatch. ` +
-	`The link may be asserted in EITHER direction (a salt closeMatch-es its concept; a ` +
-	`property concept closeMatch-es its term), so traverse it direction-agnostically with ` +
-	`the property path skos:closeMatch|^skos:closeMatch.
+- Salt: match a real msr:Mention's msr:surfaceForm against the query term, tolerant of OCR ` +
+	`noise -- a scanned surface form can render a subscript as a stray comma and otherwise ` +
+	`mangle punctuation (e.g. "LiF-BeF, (66-34 mole %)" for "LiF-BeF2 (66-34 mol%)"), so match ` +
+	`by independent CONTAINS/REGEX filters over the lowercased surface form: one filter per ` +
+	`compound-formula token (e.g. the two compound abbreviations making up the salt) and one ` +
+	`per composition digit (the mole-percent numbers), rather than requiring exact string ` +
+	`equality. Follow the matched Mention's msr:linksTo to the msr:MoltenSalt individual, and ` +
+	`surface that Mention's msr:inDocument as the grounding evidence -- this is what makes the ` +
+	`grounding itself, not just the measurement, traceable to a real document. Optionally, ` +
+	`first expand the user's query term through a skos:prefLabel/skos:altLabel synonym in the ` +
+	`vocab (e.g. a common nickname) before matching it against surface forms -- the vocab only ` +
+	`supplies labels for recognizing the term, never a grounding edge.
+- Property: match the query term directly against a msr:PhysicalProperty's own rdfs:label ` +
+	`(?prop a msr:PhysicalProperty ; rdfs:label ?l), with no concept hop.
 - Read the salt's msr:PropertyMeasurement: msr:ofSalt, msr:forProperty, msr:hasUnit, ` +
 	`msr:equationForm, msr:validTempMin/msr:validTempMax, msr:dataLocator, msr:citedIn, ` +
 	`prov:wasDerivedFrom. msr:dataLocator is the key into the measurement_value table read ` +
@@ -34,7 +42,8 @@ Grounding pattern -- to resolve a salt or property mention to its measurement da
 	`external unit may lack one, and a required join would drop every row).
 
 Declare the prefixes you use as PREFIX lines in the query itself; the tool does not inject ` +
-	`them. A ready block (prov: is only needed for prov:wasDerivedFrom):
+	`them. A ready block (prov: is only needed for prov:wasDerivedFrom; skos: only for the ` +
+	`optional synonym-expansion step above):
   PREFIX msr:  <https://w3id.org/msr-kg/ontology#>
   PREFIX msrd: <https://w3id.org/msr-kg/data#>
   PREFIX voc:  <https://w3id.org/msr-kg/vocab#>
@@ -42,15 +51,18 @@ Declare the prefixes you use as PREFIX lines in the query itself; the tool does 
   PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
   PREFIX prov: <http://www.w3.org/ns/prov#>
 
-Worked example -- ground "FLiBe" + "density" to its measurement in one query:
+Worked example -- ground a salt reference and a property term to a measurement in one query ` +
+	`(fill the bracketed placeholders in with the tokens/digits/label for whatever salt and ` +
+	`property you are grounding):
   PREFIX msr:  <https://w3id.org/msr-kg/ontology#>
-  PREFIX skos: <http://www.w3.org/2004/02/skos/core#>
   PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
-  SELECT DISTINCT ?salt ?prop ?dataLocator ?equationForm ?validTempMin ?validTempMax ?unit ?unitLabel WHERE {
-    ?saltConcept skos:prefLabel|skos:altLabel ?sl . FILTER(LCASE(STR(?sl)) = "flibe")
-    ?salt a msr:MoltenSalt ; (skos:closeMatch|^skos:closeMatch) ?saltConcept .
-    ?propConcept skos:prefLabel|skos:altLabel ?pl . FILTER(LCASE(STR(?pl)) = "density")
-    ?prop (skos:closeMatch|^skos:closeMatch) ?propConcept .
+  SELECT DISTINCT ?salt ?prop ?doc ?dataLocator ?equationForm ?validTempMin ?validTempMax ?unit ?unitLabel WHERE {
+    ?m a msr:Mention ; msr:surfaceForm ?sf ; msr:linksTo ?salt ; msr:inDocument ?doc .
+    ?salt a msr:MoltenSalt .
+    BIND(LCASE(STR(?sf)) AS ?sfNorm)
+    FILTER(CONTAINS(?sfNorm, "<compound token 1>") && CONTAINS(?sfNorm, "<compound token 2>")
+           && CONTAINS(?sf, "<composition digit 1>") && CONTAINS(?sf, "<composition digit 2>"))
+    ?prop a msr:PhysicalProperty ; rdfs:label ?pl . FILTER(LCASE(STR(?pl)) = "<property term>")
     ?pm a msr:PropertyMeasurement ; msr:ofSalt ?salt ; msr:forProperty ?prop ;
         msr:dataLocator ?dataLocator ; msr:equationForm ?equationForm ; msr:hasUnit ?unit .
     OPTIONAL { ?pm msr:validTempMin ?validTempMin }

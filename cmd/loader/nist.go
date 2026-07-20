@@ -10,11 +10,18 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/blogem/msr-graph/internal/graph"
 	"github.com/blogem/msr-graph/internal/nist"
 	"github.com/blogem/msr-graph/internal/store"
 )
+
+// ontologyVersion is the loader's own version, recorded via
+// owl:versionInfo on each timestamped loader-run Activity record (task
+// 2.4). Bump this alongside releases that change the loader's emitted
+// triples.
+const ontologyVersion = "0.3.0"
 
 // qudtAllowlistFile is the vendored QUDT unit/quantity-kind allowlist,
 // resolved relative to config.ontologyDir (it lives alongside the seed
@@ -70,6 +77,11 @@ func runNist(env func(string) string, stdout io.Writer) error {
 		return fmt.Errorf("nist: inserting catalog triples into %s: %w", graph.Data, err)
 	}
 
+	runSPARQL := buildRunGraphData(time.Now().UTC(), ontologyVersion)
+	if err := client.Update(ctx, runSPARQL); err != nil {
+		return fmt.Errorf("nist: writing loader-run activity graph: %w", err)
+	}
+
 	printNistSummary(stdout, summary)
 	fmt.Fprintln(stdout, "loader: nist: load complete")
 	return nil
@@ -111,14 +123,31 @@ func nullFloat(v *float64) sql.NullFloat64 {
 	return sql.NullFloat64{Float64: *v, Valid: true}
 }
 
+// Provenance constants (task 2.1). nistDatasetIRI is the loader's
+// deterministic IRI for the NIST SRD-27 dataset -- buildInsertData defines
+// this node itself (the seed that used to define it is gone, see design
+// D3), and every measurement/catalog individual's prov:wasDerivedFrom
+// points at it. nistDatasetDOI is that dataset's real external identifier.
+// loaderActivityIRI is the deterministic per-pipeline Activity IRI every
+// loader-emitted individual references via prov:wasGeneratedBy (design
+// D2/D8) -- deterministic so the edge in urn:msr:data re-asserts as a
+// set-semantics no-op across runs; the wall-clock Activity record itself
+// is written into the timestamped run graph (see buildRunGraphData).
+const (
+	nistDatasetIRI    = "msrd:nist-srd27"
+	nistDatasetDOI    = "doi:10.18434/mds2-2298"
+	loaderActivityIRI = "msrd:activity-loader-nist"
+)
+
 // insertPrefixes are the PREFIX declarations shared by every buildInsertData
-// call, matching the seed turtle's prefix set (ontology/example-flibe.ttl)
-// so the emitted CURIEs resolve to identical IRIs.
+// call. These fix the loader's own deterministic-IRI-minting contract
+// (msr/msrd/unit/prov/rdfs/dcterms), independent of any hand-curated data.
 const insertPrefixes = `PREFIX msr:  <https://w3id.org/msr-kg/ontology#>
 PREFIX msrd: <https://w3id.org/msr-kg/data#>
 PREFIX unit: <http://qudt.org/vocab/unit/>
 PREFIX prov: <http://www.w3.org/ns/prov#>
 PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+PREFIX dcterms: <http://purl.org/dc/terms/>
 `
 
 // buildInsertData is a pure, non-networked function that renders the
@@ -129,14 +158,26 @@ PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
 // across measurements are deduplicated by IRI so the same block is emitted
 // once; under RDF set semantics repeats would be harmless, but a single
 // emission keeps the output readable. The loader never emits
-// hasRole/usedIn/citedIn/skos:closeMatch -- those are hand-curated seed
-// facts the loader cannot derive from NIST data, and re-asserting the
-// FLiBe density salt+measurement here is a set-semantics no-op against the
-// seed (identical IRIs, see ontology/example-flibe.ttl).
+// hasRole/usedIn/citedIn/skos:closeMatch -- those are not derivable from
+// NIST data; the loader mints deterministic IRIs from salt composition
+// (see internal/nist), so re-running against unchanged input data is a
+// set-semantics no-op (identical IRIs, identical triples).
+//
+// The loader is now the sole source of the msrd:nist-srd27 msr:Dataset
+// node (design D3: the seed that used to define it is gone), so this
+// function also emits that node -- with its DOI -- exactly once,
+// regardless of how many measurements follow. It is a derivation root: it
+// carries its external id (dcterms:identifier), never a wasDerivedFrom.
+// Every emitted MoltenSalt/Constituent/ChemicalCompound/PropertyMeasurement
+// additionally carries prov:wasGeneratedBy the deterministic loader-run
+// Activity and prov:wasDerivedFrom this Dataset node, so all instance data
+// the loader asserts is provenanced, not just measurements.
 func buildInsertData(ms []nist.Measurement) string {
 	var b strings.Builder
 	b.WriteString(insertPrefixes)
 	b.WriteString("INSERT DATA {\nGRAPH <urn:msr:data> {\n")
+
+	fmt.Fprintf(&b, "%s a msr:Dataset ; dcterms:identifier %s .\n", nistDatasetIRI, quoteLiteral(nistDatasetDOI))
 
 	seenCompound := make(map[string]bool)
 	seenSalt := make(map[string]bool)
@@ -157,7 +198,8 @@ func buildInsertData(ms []nist.Measurement) string {
 				continue
 			}
 			seenCompound[c.Compound] = true
-			fmt.Fprintf(&b, "msrd:%s a msr:ChemicalCompound ; rdfs:label %s .\n", c.Compound, quoteLiteral(c.Compound))
+			fmt.Fprintf(&b, "msrd:%s a msr:ChemicalCompound ; rdfs:label %s ; prov:wasGeneratedBy %s ; prov:wasDerivedFrom %s .\n",
+				c.Compound, quoteLiteral(c.Compound), loaderActivityIRI, nistDatasetIRI)
 		}
 
 		if !seenSalt[m.Salt.IRI] {
@@ -166,8 +208,8 @@ func buildInsertData(ms []nist.Measurement) string {
 			for _, c := range m.Salt.Constituents {
 				constituentIRIs = append(constituentIRIs, c.IRI)
 			}
-			fmt.Fprintf(&b, "%s a msr:MoltenSalt ; rdfs:label %s ; msr:hasConstituent %s .\n",
-				m.Salt.IRI, quoteLiteral(m.Salt.Label), strings.Join(constituentIRIs, " , "))
+			fmt.Fprintf(&b, "%s a msr:MoltenSalt ; rdfs:label %s ; msr:hasConstituent %s ; prov:wasGeneratedBy %s ; prov:wasDerivedFrom %s .\n",
+				m.Salt.IRI, quoteLiteral(m.Salt.Label), strings.Join(constituentIRIs, " , "), loaderActivityIRI, nistDatasetIRI)
 		}
 
 		for _, c := range m.Salt.Constituents {
@@ -188,20 +230,22 @@ func buildInsertData(ms []nist.Measurement) string {
 // constituentTriples renders one Constituent: a point composition carries
 // msr:moleFraction; a range composition (isotherm) carries
 // msr:moleFractionMin/Max instead -- never both, so a range constituent
-// never emits the plain moleFraction predicate.
+// never emits the plain moleFraction predicate. Every constituent also
+// carries prov:wasGeneratedBy/wasDerivedFrom (task 2.3b): it is asserted
+// data, not just measurements.
 func constituentTriples(c nist.Constituent) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s a msr:Constituent ; msr:ofCompound msrd:%s ;", c.IRI, c.Compound)
 	switch {
 	case c.MoleFraction != nil:
-		fmt.Fprintf(&b, " msr:moleFraction %s .\n", formatFloat(*c.MoleFraction))
+		fmt.Fprintf(&b, " msr:moleFraction %s ;", formatFloat(*c.MoleFraction))
 	case c.MoleFractionMin != nil && c.MoleFractionMax != nil:
-		fmt.Fprintf(&b, " msr:moleFractionMin %s ; msr:moleFractionMax %s .\n",
+		fmt.Fprintf(&b, " msr:moleFractionMin %s ; msr:moleFractionMax %s ;",
 			formatFloat(*c.MoleFractionMin), formatFloat(*c.MoleFractionMax))
 	default:
 		// Neither set: nothing to say about composition beyond ofCompound.
-		b.WriteString("\n")
 	}
+	fmt.Fprintf(&b, " prov:wasGeneratedBy %s ; prov:wasDerivedFrom %s .\n", loaderActivityIRI, nistDatasetIRI)
 	return b.String()
 }
 
@@ -209,6 +253,9 @@ func constituentTriples(c nist.Constituent) string {
 // (full QUDT IRI), equation form, validity range (omitted where the
 // pointer is nil), locator, provenance, and -- for isotherm rows -- the
 // varying compositionComponent. Coefficients are deliberately absent.
+// Provenance is prov:wasGeneratedBy the deterministic loader-run Activity
+// plus prov:wasDerivedFrom the NIST dataset -- no msr:citedIn, since NIST
+// SRD-27 has no per-row citation to assert truthfully (design D3).
 func measurementTriples(m nist.Measurement) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s a msr:PropertyMeasurement ;\n", m.IRI)
@@ -226,7 +273,53 @@ func measurementTriples(m nist.Measurement) string {
 	if m.CompositionComponent != "" {
 		fmt.Fprintf(&b, "    msr:compositionComponent msrd:%s ;\n", m.CompositionComponent)
 	}
-	fmt.Fprintf(&b, "    prov:wasDerivedFrom msrd:nist-srd27 .\n")
+	fmt.Fprintf(&b, "    prov:wasGeneratedBy %s ;\n", loaderActivityIRI)
+	fmt.Fprintf(&b, "    prov:wasDerivedFrom %s .\n", nistDatasetIRI)
+	return b.String()
+}
+
+// buildRunGraphData is a pure, non-networked function (task 2.4) that
+// renders the additive SPARQL INSERT DATA statement recording this
+// loader-run's prov:Activity as a wall-clock record. Unlike buildInsertData,
+// this record is intentionally per-run, not idempotent within
+// urn:msr:data (design D8): every invocation with a distinct ts produces a
+// distinct run graph <urn:msr:run:loader/{ts}>, so re-running the loader
+// against unchanged input still leaves an audit trail of "when did this
+// run happen" rather than being collapsed away by set semantics. The
+// caller supplies ts explicitly (rather than this function calling
+// time.Now()) so it stays a pure, deterministically-testable function of
+// its inputs.
+//
+// It also re-asserts the msrd:nist-srd27 msr:Dataset node (with its DOI)
+// into the separate GRAPH <urn:msr:src:nist-srd27> source-audit graph
+// (design D2), independent of urn:msr:data, so the dataset's external
+// identity is discoverable even if urn:msr:data is ever replaced.
+func buildRunGraphData(ts time.Time, version string) string {
+	tsStr := ts.UTC().Format(time.RFC3339)
+
+	var b strings.Builder
+	b.WriteString(`PREFIX msr:  <https://w3id.org/msr-kg/ontology#>
+PREFIX msrd: <https://w3id.org/msr-kg/data#>
+PREFIX prov: <http://www.w3.org/ns/prov#>
+PREFIX owl:  <http://www.w3.org/2002/07/owl#>
+PREFIX xsd:  <http://www.w3.org/2001/XMLSchema#>
+PREFIX dcterms: <http://purl.org/dc/terms/>
+`)
+	b.WriteString("INSERT DATA {\n")
+
+	fmt.Fprintf(&b, "GRAPH <urn:msr:run:loader/%s> {\n", tsStr)
+	fmt.Fprintf(&b, "%s a prov:Activity ;\n", loaderActivityIRI)
+	fmt.Fprintf(&b, "    prov:wasAssociatedWith <agent:loader@%s> ;\n", version)
+	fmt.Fprintf(&b, "    prov:startedAtTime \"%s\"^^xsd:dateTime ;\n", tsStr)
+	fmt.Fprintf(&b, "    prov:endedAtTime   \"%s\"^^xsd:dateTime ;\n", tsStr)
+	fmt.Fprintf(&b, "    owl:versionInfo %s .\n", quoteLiteral(version))
+	b.WriteString("}\n")
+
+	fmt.Fprintf(&b, "GRAPH <urn:msr:src:nist-srd27> {\n")
+	fmt.Fprintf(&b, "%s a msr:Dataset ; dcterms:identifier %s .\n", nistDatasetIRI, quoteLiteral(nistDatasetDOI))
+	b.WriteString("}\n")
+
+	b.WriteString("}\n")
 	return b.String()
 }
 
@@ -243,11 +336,10 @@ func quoteLiteral(s string) string {
 // same float64 (e.g. 0.34, 800.0, 0.333) -- never scientific notation, so
 // values like 800 read as "800.0" rather than "8e+02". Whole numbers always
 // get an explicit ".0" so the emitted literal parses as xsd:decimal, never
-// xsd:integer: the hand-curated seed (ontology/example-flibe.ttl) writes
-// msr:validTempMin 800.0 and msr:moleFraction 1.0 as decimals, and under
-// RDF set semantics 800 (xsd:integer) is a distinct triple object from 800.0
-// (xsd:decimal) -- without this, re-asserting the FLiBe measurement would
-// add a second validTempMin triple instead of being the intended no-op.
+// xsd:integer: under RDF set semantics 800 (xsd:integer) is a distinct
+// triple object from 800.0 (xsd:decimal) -- without this, re-running the
+// loader against unchanged input would add a second validTempMin triple
+// instead of being the intended set-semantics no-op.
 func formatFloat(v float64) string {
 	s := strconv.FormatFloat(v, 'f', -1, 64)
 	if !strings.ContainsAny(s, ".eE") {

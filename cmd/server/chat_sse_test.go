@@ -14,8 +14,11 @@ package main
 //   - every trace event type is emitted and well-formed across a
 //     grounded turn (SPARQL -> SQL -> script -> answer);
 //   - script_run carries source/stdout/stderr/exit_code/sandbox_id;
-//   - provenance carries data_locators/cited_in/dataset_dois and a
-//     non-empty ontology_version stamped from the prompt cache;
+//   - provenance carries data_locators and a non-empty ontology_version
+//     stamped from the prompt cache; cited_in/dataset_dois are empty in
+//     this fixture (ground-demo-in-real-docs D7: no fabricated citedIn/
+//     DOI -- document traceability instead comes from the grounded
+//     msr:Mention's msr:inDocument surfaced in the sparql_query result);
 //   - nothing is written to a store while serving a chat request.
 //
 // Helper names are prefixed sse* (or otherwise distinct) to avoid
@@ -231,23 +234,27 @@ func newSSEMinimalSetup(t *testing.T) (http.Handler, *sseScriptedLLM) {
 }
 
 // newSSEFullTurnSetup wires a scripted turn that exercises all three
-// tools in order -- sparql_query (grounding, with dataLocator/citedIn/doi
-// bound so a provenance event fires), sql_query (a real temp SQLite
-// measurement store), and run_python (a fake sandbox) -- then a final
-// text answer. It returns the assembled handler, the store's file path
-// (for the no-persistence check), and the fake sandbox (for call-count
+// tools in order -- sparql_query (grounding via a real msr:Mention's
+// surfaceForm -> msr:linksTo -> salt, with msr:inDocument as the
+// document-traceability evidence and dataLocator bound so a provenance
+// event fires; ground-demo-in-real-docs D2/D3 -- no skos:closeMatch,
+// no fabricated citedIn/doi), sql_query (a real temp SQLite measurement
+// store), and run_python (a fake sandbox) -- then a final text answer.
+// It returns the assembled handler, the store's file path (for the
+// no-persistence check), and the fake sandbox (for call-count
 // assertions).
 func newSSEFullTurnSetup(t *testing.T) (http.Handler, string, *sseFakeSandbox) {
 	t.Helper()
 
 	grounding := &graph.Results{}
-	grounding.Head.Vars = []string{"salt", "dataLocator", "citedIn", "doi", "validTempMin", "validTempMax"}
+	grounding.Head.Vars = []string{"salt", "mention", "surfaceForm", "inDocument", "dataLocator", "validTempMin", "validTempMax"}
 	grounding.Results.Bindings = []map[string]graph.Binding{
 		{
 			"salt":         {Type: "uri", Value: "https://w3id.org/msr-kg/data#salt-BeF2-LiF-34.0-66.0"},
+			"mention":      {Type: "uri", Value: "https://w3id.org/msr-kg/data#mention-ORNL-TM-2316-225-260"},
+			"surfaceForm":  {Type: "literal", Value: "LiF-BeF, (66-34 mole %)"},
+			"inDocument":   {Type: "uri", Value: "https://w3id.org/msr-kg/data#ORNL-TM-2316"},
 			"dataLocator":  {Type: "literal", Value: sseTestLocator},
-			"citedIn":      {Type: "uri", Value: "https://w3id.org/msr-kg/data#doc-nist-srd27"},
-			"doi":          {Type: "literal", Value: "10.1000/example-nist-srd27"},
 			"validTempMin": {Type: "literal", Value: "800"},
 			"validTempMax": {Type: "literal", Value: "1080"},
 		},
@@ -259,7 +266,7 @@ func newSSEFullTurnSetup(t *testing.T) (http.Handler, string, *sseFakeSandbox) {
 	sb := &sseFakeSandbox{stdout: `{"density_g_cm3": 1.9738}`, exitCode: 0}
 
 	llm := &sseScriptedLLM{completions: []agent.Completion{
-		{ToolCalls: []agent.ToolCall{{ID: "1", Name: "sparql_query", Arguments: `{"query":"SELECT ?salt ?dataLocator ?citedIn ?doi ?validTempMin ?validTempMax WHERE {}"}`}}},
+		{ToolCalls: []agent.ToolCall{{ID: "1", Name: "sparql_query", Arguments: `{"query":"SELECT ?salt ?mention ?surfaceForm ?inDocument ?dataLocator ?validTempMin ?validTempMax WHERE {}"}`}}},
 		{ToolCalls: []agent.ToolCall{{ID: "2", Name: "sql_query", Arguments: `{"query":"SELECT c0, c1, t_min, t_max FROM measurement_value WHERE locator = '` + sseTestLocator + `'"}`}}},
 		{ToolCalls: []agent.ToolCall{{ID: "3", Name: "run_python", Arguments: `{"script":"import json; print(json.dumps({'density_g_cm3': 2.413 + -4.88e-4*900}))"}`}}},
 		{Content: "The density of FLiBe (LiF-BeF2, 34.0-66.0 mol%) at 900 K is approximately 1.974 g/cm3 (dataLocator " + sseTestLocator + ")."},
@@ -367,6 +374,7 @@ func TestSSE_AllEventTypesEmittedAndWellFormed(t *testing.T) {
 		agent.EventToolResult: false,
 		agent.EventScriptRun:  false,
 		agent.EventProvenance: false,
+		agent.EventAnswer:     false,
 		agent.EventDone:       false,
 	}
 	for _, e := range events {
@@ -393,6 +401,10 @@ func TestSSE_AllEventTypesEmittedAndWellFormed(t *testing.T) {
 		case agent.EventProvenance:
 			if e.Provenance == nil {
 				t.Errorf("provenance event missing a well-formed provenance payload: %+v", e)
+			}
+		case agent.EventAnswer:
+			if e.Answer == nil {
+				t.Errorf("answer event missing a well-formed answer payload: %+v", e)
 			}
 		case agent.EventDone, agent.EventError:
 			// no required sub-payload
@@ -479,17 +491,74 @@ func TestSSE_ProvenanceFields(t *testing.T) {
 	if len(found.DataLocators) != 1 || found.DataLocators[0] != sseTestLocator {
 		t.Errorf("provenance.data_locators = %v, want [%q]", found.DataLocators, sseTestLocator)
 	}
-	if len(found.CitedIn) != 1 || found.CitedIn[0] != "https://w3id.org/msr-kg/data#doc-nist-srd27" {
-		t.Errorf("provenance.cited_in = %v, want the grounded citing document", found.CitedIn)
+	// ground-demo-in-real-docs D7: no fabricated citedIn/DOI binding is
+	// present in this fixture (they pointed at a fake doc-nist-srd27 +
+	// fake DOI); the provenance event still fires off dataLocator alone,
+	// and document traceability comes from the grounded mention's
+	// inDocument surfaced in the sparql_query tool_result, not from a
+	// citedIn/dataset_dois provenance field.
+	if len(found.CitedIn) != 0 {
+		t.Errorf("provenance.cited_in = %v, want empty (no fabricated citedIn binding in this fixture)", found.CitedIn)
 	}
-	if len(found.DatasetDOIs) != 1 || found.DatasetDOIs[0] != "10.1000/example-nist-srd27" {
-		t.Errorf("provenance.dataset_dois = %v, want the grounded dataset DOI", found.DatasetDOIs)
+	if len(found.DatasetDOIs) != 0 {
+		t.Errorf("provenance.dataset_dois = %v, want empty (no fabricated DOI binding in this fixture)", found.DatasetDOIs)
 	}
 	if found.OntologyVersion == "" {
 		t.Error("provenance.ontology_version is empty, want it stamped from the prompt cache's detected version")
 	}
 	if found.OntologyVersion != sseTestVersion {
 		t.Errorf("provenance.ontology_version = %q, want %q (the version this test's fake schema source detected)", found.OntologyVersion, sseTestVersion)
+	}
+}
+
+// --- 5b: grounding traces to a real document via the mention ---
+
+func TestSSE_GroundingSurfacesDocumentMention(t *testing.T) {
+	// Spec "Grounding traces to a real document": the sparql_query
+	// tool_result must surface the matched msr:Mention's msr:inDocument
+	// and surfaceForm, so the grounding itself -- not just the
+	// measurement -- is traceable to ORNL-TM-2316. No skos:closeMatch
+	// binding may appear anywhere in the trace (ground-demo-in-real-docs
+	// D2/D6).
+	handler, _, _ := newSSEFullTurnSetup(t)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/chat", strings.NewReader(sseChatBody))
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	events := parseSSEEvents(t, rec.Body.String())
+
+	var sparqlResult *agent.ToolResultEvent
+	for _, e := range events {
+		if e.Type == agent.EventToolResult && e.ToolResult != nil && e.ToolResult.Name == "sparql_query" {
+			sparqlResult = e.ToolResult
+			break
+		}
+	}
+	if sparqlResult == nil {
+		t.Fatalf("no sparql_query tool_result in the stream: %v", eventTypesOfSSE(events))
+	}
+
+	if !strings.Contains(sparqlResult.Content, "https://w3id.org/msr-kg/data#ORNL-TM-2316") {
+		t.Errorf("sparql_query tool_result = %q, want it to surface the grounded mention's inDocument (ORNL-TM-2316)", sparqlResult.Content)
+	}
+	if !strings.Contains(sparqlResult.Content, "LiF-BeF, (66-34 mole %)") {
+		t.Errorf("sparql_query tool_result = %q, want it to surface the matched mention's surfaceForm", sparqlResult.Content)
+	}
+
+	for _, e := range events {
+		var raw string
+		switch {
+		case e.Type == agent.EventToolResult && e.ToolResult != nil:
+			raw = e.ToolResult.Content
+		case e.Type == agent.EventToolCall && e.ToolCall != nil:
+			raw = e.ToolCall.Arguments
+		default:
+			continue
+		}
+		if strings.Contains(strings.ToLower(raw), "closematch") {
+			t.Errorf("event carried a skos:closeMatch reference, want none anywhere in the trace: %+v", e)
+		}
 	}
 }
 

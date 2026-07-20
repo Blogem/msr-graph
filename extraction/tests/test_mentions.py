@@ -69,7 +69,9 @@ def test_mention_triples_exact_shape() -> None:
         f"    msr:inDocument <{DOCUMENT_IRI}> ;\n"
         '    msr:surfaceForm "LiF-BeF2"^^xsd:string ;\n'
         '    msr:startOffset "10"^^xsd:integer ;\n'
-        '    msr:endOffset "18"^^xsd:integer .'
+        '    msr:endOffset "18"^^xsd:integer ;\n'
+        "    prov:wasGeneratedBy msrd:activity-extraction ;\n"
+        f"    prov:wasDerivedFrom <{DOCUMENT_IRI}> ."
     )
     assert mention_triples(MENTION) == expected
 
@@ -135,3 +137,73 @@ def test_write_mentions_orders_deterministically_regardless_of_input_order() -> 
     client_reversed = _FakeSparqlClient()
     write_mentions([mention_a, mention_b], client_reversed)
     assert client_forward.calls[0] == client_reversed.calls[0]
+
+
+# --- openspec/changes/provenance-model additions (tasks 6.6/6.7) -----------
+#
+# design D6 / spec "mention-graph-writing" ADDED requirement "Mentions
+# carry generation provenance": each written msr:Mention SHALL carry
+# prov:wasGeneratedBy the deterministic msrd:activity-extraction Activity
+# IRI, in addition to its existing msr:inDocument. These tests are written
+# against that requirement and are expected to fail on this isolated
+# pass-1 branch until the coder's task-3.2 change to mentions.py lands
+# (mention_triples does not yet emit this edge).
+
+
+def test_mention_triples_carries_generation_provenance() -> None:
+    """Covers 6.6: a written mention carries prov:wasGeneratedBy
+    msrd:activity-extraction (its msr:inDocument remains the derivation
+    source, per the "A written mention references the extraction
+    activity" scenario)."""
+    triples = mention_triples(MENTION)
+    assert "prov:wasGeneratedBy msrd:activity-extraction" in triples
+    assert f"msr:inDocument <{DOCUMENT_IRI}>" in triples
+
+
+def test_write_mentions_generation_edge_is_deterministic_across_runs() -> None:
+    """Covers 6.7: adding the generation edge keeps the mention write
+    idempotent -- the deterministic msrd:activity-extraction IRI
+    re-asserts as a set-semantics no-op, so a second run over the same
+    mentions produces byte-identical output (design D8 / spec scenario
+    "Generation edge preserves fact-store idempotency")."""
+    client = _FakeSparqlClient()
+    write_mentions([MENTION], client)
+    write_mentions([MENTION], client)
+    assert len(client.calls) == 2
+    assert client.calls[0] == client.calls[1]
+    assert "prov:wasGeneratedBy msrd:activity-extraction" in client.calls[0]
+
+
+# --- prov:wasDerivedFrom fix ------------------------------------------------
+#
+# mention_triples now also asserts prov:wasDerivedFrom <{document_iri}> as
+# its final triple, alongside the existing prov:wasGeneratedBy
+# msrd:activity-extraction and msr:inDocument edges, so a PROV-only
+# consumer (e.g. the SHACL shapes) can traverse the mention's derivation
+# edge without knowing about msr:inDocument.
+
+
+def test_mention_triples_carries_was_derived_from_document() -> None:
+    """A written mention asserts prov:wasDerivedFrom pointing at the same
+    document IRI as msr:inDocument, as the final triple in the block, in
+    addition to the existing prov:wasGeneratedBy and msr:inDocument
+    edges."""
+    triples = mention_triples(MENTION)
+    assert f"prov:wasDerivedFrom <{DOCUMENT_IRI}> ." in triples
+    assert triples.rstrip().endswith(f"prov:wasDerivedFrom <{DOCUMENT_IRI}> .")
+    # Same document IRI as msr:inDocument -- not some other IRI.
+    assert f"msr:inDocument <{DOCUMENT_IRI}> ;" in triples
+    # Existing edges are preserved alongside the new one.
+    assert "prov:wasGeneratedBy msrd:activity-extraction ;" in triples
+
+
+def test_write_mentions_was_derived_from_is_deterministic_across_runs() -> None:
+    """The new prov:wasDerivedFrom edge uses the deterministic
+    document_iri, so it keeps the mention write idempotent -- a second run
+    over the same mentions produces byte-identical output."""
+    client = _FakeSparqlClient()
+    write_mentions([MENTION], client)
+    write_mentions([MENTION], client)
+    assert len(client.calls) == 2
+    assert client.calls[0] == client.calls[1]
+    assert f"prov:wasDerivedFrom <{DOCUMENT_IRI}>" in client.calls[0]

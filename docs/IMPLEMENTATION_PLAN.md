@@ -58,7 +58,7 @@ chunk 1) — keep changes to those additive and rebase frequently.
 
 | Phase | Changes (parallel) | Milestone — phase exit criteria |
 |-------|--------------------|---------------------------------|
-| **P1** | 1 `bootstrap-graph-infra` | **M1 — stores live.** GraphDB + SQLite up via `make up`; seed ontology/vocab/A-Box loaded and queryable through the core-dataset client; staging exclusion pinned by test. |
+| **P1** | 1 `bootstrap-graph-infra` | **M1 — stores live.** GraphDB + SQLite up via `make up`; seed ontology/vocab loaded and queryable through the core-dataset client (no A-Box — `urn:msr:data` starts empty); staging exclusion pinned by test. |
 | **P2** | 2 `load-nist-structured-data` · 3 `sandbox-exec-pool` · 5 `ingest-archive-documents` | **M2 — data landed, execution ready.** NIST fluoride subset in SQLite + catalog triples in the graph; curated corpus normalized/segmented with the evolution-demo targets verified present; sandbox pool runs scripts against the read-only DB with isolation properties tested. |
 | **P3** | 4 `grounded-analysis-agent` · 6 `ner-entity-linking` | **M3 — demo #1: grounded analysis.** The agent answers the density question over the chat API with a full SSE trace, all computation in sandbox scripts; text mentions linked to vocab concepts and the loaded salt individuals at ≥ 0.90 precision. |
 | **P3.5** | 12 `provenance-model` · 13 `shacl-validation` | **M3.5 — trust foundation.** Every asserted fact carries resolvable provenance, **enforced by SHACL at commit** (violations rejected); the agent stamps every answer grounded-vs-ungrounded and returns the provenance chain of the facts it used. Both run on real data already held. Sequenced: 12 → 13. **Gates P4.** See `docs/PROVENANCE_AND_TRUST_DESIGN.md`. |
@@ -85,7 +85,7 @@ Fixed here so each OpenSpec change references them instead of re-deciding. Detai
 
   ```
   docker-compose.yml  Makefile
-  ontology/       msr.ttl, vocab.ttl, example-flibe.ttl   (already materialized)
+  ontology/       msr.ttl, vocab.ttl                      (already materialized; no seed A-Box)
   cmd/            loader/  server/                        (Go binaries)
   internal/       graph/ (SPARQL client + FROM injection) · store/ (SQLite) ·
                   sandbox/ (container pool) · agent/ (loop, tools, trace events)
@@ -104,7 +104,8 @@ Fixed here so each OpenSpec change references them instead of re-deciding. Detai
   emits answers)* — **no asserted fact enters the core dataset, and no answer leaves the
   agent, without a resolvable link to its source.** Fact-bearing individuals carry required
   PROV-O edges (`prov:wasDerivedFrom` a `Dataset`/`Document`; `prov:wasGeneratedBy` an
-  `Activity` with agent + version + time); measurements keep `dataLocator` + `citedIn`.
+  `Activity` with agent + version + time); measurements keep `dataLocator` (no loader-emitted
+  `citedIn` — deferred to chunk 7 per design D3, see `PROVENANCE_AND_TRUST_DESIGN.md`).
   Enforcement is declarative: **SHACL shapes validated by GraphDB on commit reject
   un-provenanced or malformed triples** (chunk 13). The agent stamps each answer
   grounded-vs-ungrounded and returns the provenance chain of the facts it used; `run_python`
@@ -131,17 +132,17 @@ Fixed here so each OpenSpec change references them instead of re-deciding. Detai
 - **Canonical salt naming:** the loader normalizes at the boundary — components
   alphabetized, composition values reordered in lockstep, one-decimal mole %
   (`LiF-BeF2,34.0-66.0` → `BeF2-LiF | 66.0-34.0`); the canonical form is used in IRIs,
-  locators, the SQLite `salt` column, and labels. Friendly names come from vocab
-  `closeMatch`, and chunk 6's formula normalizer maps mention variants to the same form.
-  The rule is implemented **twice on purpose** — Go in the loader (chunk 2), Python for
-  text mentions (chunk 6); it's pure string/structure work, so duplication beats a
-  cross-language dependency. Drift guard: a shared fixture
-  `testdata/salt-canonicalization.json` (raw → canonical cases, authored by chunk 2)
-  that **both** the Go tests and the pytest suite must pass.
+  locators, the SQLite `salt` column, and labels. Friendly names come from the vocab's own
+  `skos:prefLabel`/`skos:altLabel` (not a cross-layer alignment edge), and chunk 6's formula
+  normalizer maps mention variants to the same form. The rule is implemented **twice on
+  purpose** — Go in the loader (chunk 2), Python for text mentions (chunk 6); it's pure
+  string/structure work, so duplication beats a cross-language dependency. Drift guard: a
+  shared fixture `testdata/salt-canonicalization.json` (raw → canonical cases, authored by
+  chunk 2) that **both** the Go tests and the pytest suite must pass.
 - **Deterministic IRIs, no blank nodes** in pipeline-written data — re-runs are idempotent
-  (RDF set semantics); minting scheme in ARCHITECTURE. The seed A-Box
-  (`example-flibe.ttl`) already follows the contract; seed files load with graph-replace
-  semantics (Graph Store `PUT`).
+  (RDF set semantics); minting scheme in ARCHITECTURE. There is no seed A-Box — the loader
+  (chunk 2) is the first writer of `urn:msr:data` and follows the contract itself; seed
+  files (`msr.ttl`, `vocab.ttl`) load with graph-replace semantics (Graph Store `PUT`).
 - **LLM access:** DeepSeek API only (OpenAI-compatible; no Anthropic models, no local
   LLMs) — **V4 Flash** for extraction/disambiguation/triage, **V4 Pro** for the analysis
   agent; cached byte-stable KG-schema system prompt (TBox + vocab + salt catalog,
@@ -167,15 +168,15 @@ Fixed here so each OpenSpec change references them instead of re-deciding. Detai
 
 ## 1 — `bootstrap-graph-infra`  *(foundation)*
 - **Goal:** Stand up local stores and load the seed ontology + vocabulary so the design is live and queryable.
-- **Scope:** Docker Compose for the **whole solution** (GraphDB repo `msr` with **inference disabled**; `server` and `extraction` image scaffolds; the sandbox base image — minimal Python + numpy/pandas; shared data volume); repo layout per the contracts; SQLite init (`measurement_value` DDL, journal mode `DELETE` pinned); named-graph bootstrap — `msr.ttl`→`urn:msr:ontology`, `vocab.ttl`→`urn:msr:vocab`, `example-flibe.ttl`→`urn:msr:data`, loaded with **graph-replace semantics** (Graph Store `PUT`); create `urn:msr:staging`; the shared **`internal/graph` client with core-dataset `FROM` injection** (GraphDB has no store-side graph exclusion — this client *is* the enforcement); `make up` / `make load-seed`.
+- **Scope:** Docker Compose for the **whole solution** (GraphDB repo `msr` with **inference disabled**; `server` and `extraction` image scaffolds; the sandbox base image — minimal Python + numpy/pandas; shared data volume); repo layout per the contracts; SQLite init (`measurement_value` DDL, journal mode `DELETE` pinned); named-graph bootstrap — `msr.ttl`→`urn:msr:ontology`, `vocab.ttl`→`urn:msr:vocab`, loaded with **graph-replace semantics** (Graph Store `PUT`); no A-Box is seeded, so `urn:msr:data` starts empty and is populated only by chunk 2's loader and later extraction; create `urn:msr:staging`; the shared **`internal/graph` client with core-dataset `FROM` injection** (GraphDB has no store-side graph exclusion — this client *is* the enforcement); `make up` / `make load-seed`.
 - **Interfaces:** produces compose + Makefile, initialized stores, and `internal/graph` — the read/write path every later chunk uses.
 - **Depends on:** —
-- **Acceptance:** GraphDB reachable; a SPARQL query **via the core-dataset client** returns the FLiBe example measurement; a triple placed in `urn:msr:staging` does **not** appear via the client but **does** appear in a raw no-`FROM` query (pinning why the client exists); `make load-seed` run twice yields identical triple counts.
+- **Acceptance:** GraphDB reachable; a SPARQL query **via the core-dataset client** returns the seeded TBox/vocab triples (e.g. `msr:density`); a triple placed in `urn:msr:staging` does **not** appear via the client but **does** appear in a raw no-`FROM` query (pinning why the client exists); `make load-seed` run twice yields identical triple counts.
 - **Test seed:** Go tests for the client's `FROM` injection + staging exclusion (against the dockerized GraphDB); load idempotency.
 
 ## 2 — `load-nist-structured-data`  *(structured)*
 - **Goal:** Load the fluoride subset of NIST into SQLite and emit catalog triples into the graph.
-- **Scope:** Go loader (`cmd/loader`); vendor the 4 NIST CSVs into `data/nist/`; fluoride-subset filter (per `DATA_SCOPE.md`); salt-formula + composition parser → **canonical form** (alphabetized components, lockstep-reordered compositions, per the naming contract) → constituents (**minted IRIs, no blank nodes** — identical to the seed A-Box's, so re-asserting them is a no-op); rows → `measurement_value` (`source='nist'`, locator per contract); emit `MoltenSalt` + `Constituent` + `PropertyMeasurement` (metadata + `dataLocator`) → `urn:msr:data` via `internal/graph`; every emitted QUDT unit IRI validated against a small vendored allowlist (fail loudly on unknowns — settles the `unit:S-PER-CentiM` spelling question from ONTOLOGY.md). Numbers stay in SQLite.
+- **Scope:** Go loader (`cmd/loader`); vendor the 4 NIST CSVs into `data/nist/`; fluoride-subset filter (per `DATA_SCOPE.md`); salt-formula + composition parser → **canonical form** (alphabetized components, lockstep-reordered compositions, per the naming contract) → constituents (**minted IRIs, no blank nodes**, per the deterministic minting contract, so re-asserting them is a no-op); rows → `measurement_value` (`source='nist'`, locator per contract); emit `MoltenSalt` + `Constituent` + `PropertyMeasurement` (metadata + `dataLocator`) → `urn:msr:data` via `internal/graph`; every emitted QUDT unit IRI validated against a small vendored allowlist (fail loudly on unknowns — settles the `unit:S-PER-CentiM` spelling question from ONTOLOGY.md). Numbers stay in SQLite.
 - **Interfaces:** consumes `data/nist/*.txt`; produces SQLite rows + catalog triples that chunk 4 reads, chunk 6 links mentions against, and chunk 7 extends.
 - **Depends on:** 1
 - **Acceptance:** FLiBe density coefficients (`2.413, -4.88e-4`) present in SQLite; SPARQL returns a FLiBe density `PropertyMeasurement` with a resolvable locator; no chloride rows loaded (fluoride filter verified); re-running the loader changes nothing; **DATA_SCOPE open items 1–3 answered and recorded**: fluoride row counts per property file, FLiNaK + MSRE-coolant row presence confirmed, equation forms verified against `molten-salt-data.pdf`.
@@ -191,7 +192,7 @@ Fixed here so each OpenSpec change references them instead of re-deciding. Detai
 
 ## 4 — `grounded-analysis-agent`  *(structured · demo #1)*
 - **Goal:** A conversational agent that answers domain questions using the graph + the table — **all computation in sandboxed scripts, never in the model** — and streams a full trace of how each answer was produced.
-- **Scope:** Go agent loop (`internal/agent`, DeepSeek V4 Pro via an injected OpenAI-compatible client) with **three** tools — `sparql_query` (grounding: resolve "FLiBe" → salt / measurement / locator / equation-form / valid range via the graph + SKOS altLabels; **reads through the core-dataset client**), `sql_query` (read-only, SELECT-only guard), and `run_python` (chunk-3 pool; scripts read `/data/msr.db` and compute — equation evaluation, aggregation, comparison). Cached KG-schema system prompt (byte-stable TBox + vocab + salt-catalog serialization; Go prompt builder lives here; rebuilt when the per-request `owl:versionInfo` check sees a bump — covers approvals and restores). **Chat API:** `POST /api/chat` on the server, **stateless** — request body carries the full conversation (`{"messages": [{"role", "content"}, …]}`, OpenAI-style; no server-side sessions); response streams SSE **trace events** — `text`, `tool_call`, `tool_result`, `script_run` (source + stdout/stderr + exit code), `provenance` (dataLocators, `citedIn` docs, dataset DOIs, ontology version), `done`. This request + event schema is the chunk-10 contract. Traces are ephemeral — no persistence, the server never writes SQLite.
+- **Scope:** Go agent loop (`internal/agent`, DeepSeek V4 Pro via an injected OpenAI-compatible client) with **three** tools — `sparql_query` (grounding: resolve a salt reference by matching a real `msr:Mention.surfaceForm` and following `msr:linksTo` to the `msr:MoltenSalt` individual, then its measurement / locator / equation-form / valid range; resolve a property reference by matching the query term against a `msr:PhysicalProperty`'s own `rdfs:label` — no `skos:closeMatch` hop either way; **reads through the core-dataset client**), `sql_query` (read-only, SELECT-only guard), and `run_python` (chunk-3 pool; scripts read `/data/msr.db` and compute — equation evaluation, aggregation, comparison). Cached KG-schema system prompt (byte-stable TBox + vocab + salt-catalog serialization; Go prompt builder lives here; rebuilt when the per-request `owl:versionInfo` check sees a bump — covers approvals and restores). **Chat API:** `POST /api/chat` on the server, **stateless** — request body carries the full conversation (`{"messages": [{"role", "content"}, …]}`, OpenAI-style; no server-side sessions); response streams SSE **trace events** — `text`, `tool_call`, `tool_result`, `script_run` (source + stdout/stderr + exit code), `provenance` (dataLocators, `citedIn` docs, dataset DOIs, ontology version), `done`. This request + event schema is the chunk-10 contract. Traces are ephemeral — no persistence, the server never writes SQLite.
 - **Interfaces:** read-only over both stores + the chunk-3 pool; schema-generic (no salt/property names hardcoded), so chunks 7 and 9 grow its answer surface with no code change.
 - **Depends on:** 1, 2, 3
 - **Acceptance:**
@@ -263,17 +264,24 @@ Inserted between P3 and P4; **gates P4**. Full model and rationale in
 `docs/PROVENANCE_AND_TRUST_DESIGN.md`. Sequenced **12 → 13**. Both run on real data already
 held.
 
+**Trust sequence:** `ground-demo-in-real-docs` (prerequisite, removes the hand-curated seed
+A-Box) → **12 `provenance-model`** (this phase's first chunk — layers provenance onto the
+now-all-real graph) → **13 `shacl-validation`** (enforces it). `ground-demo-in-real-docs` is
+not itself a numbered chunk above (it landed as an unplanned prerequisite once the seed was
+found to be load-bearing for grounding); it must land before chunk 12 so provenance and the
+write-time gate apply to real data only, never fabricated seed facts.
+
 ## 12 — `provenance-model`  *(trust)*
 - **Goal:** Make provenance a first-class, **required** property of every fact and every answer — the cross-cutting invariant that is currently only convention.
-- **Scope:** a PROV-O slice in the ontology (`prov:Entity`/`Activity`/`Agent`); **complete + required** provenance on all fact-bearing individuals (`prov:wasDerivedFrom` a `Dataset`/`Document`, `prov:wasGeneratedBy` an `Activity` with agent + `owl:versionInfo` + timestamp); per-source/run named graphs (`urn:msr:src:*`, `urn:msr:run:*`) each with an `Activity` record (coarse audit dimension). **Retrofit** the NIST loader to emit `citedIn` and a self-contained dataset node with DOI (not load-order-dependent) and the seed likewise. **Answer-time enforcement** in the agent: stamp every answer grounded-vs-ungrounded and return the provenance chain of the facts used — gated in `loop.go`, surfaced as a first-class SSE event, so a bare number can't reach the user unmarked. **Compute-time:** `run_python` provenance references the `dataLocator`(s) the script read.
+- **Scope:** a PROV-O slice in the ontology (`prov:Entity`/`Activity`/`Agent`); **complete + required** provenance on all fact-bearing individuals (`prov:wasDerivedFrom` a `Dataset`/`Document`, `prov:wasGeneratedBy` an `Activity` with agent + `owl:versionInfo` + timestamp); per-source/run named graphs (`urn:msr:src:*`, `urn:msr:run:*`) each with an `Activity` record (coarse audit dimension). **Retrofit** the NIST loader to emit a self-contained dataset node with DOI (not load-order-dependent) and the seed likewise; per design D3 the loader emits **no** `citedIn` — NIST SRD-27 has no per-row citation, so measurement↔document citation is deferred to chunk-7 citation extraction (`citedIn` stays TBox-declared but unused). **Answer-time enforcement** in the agent: stamp every answer grounded-vs-ungrounded and return the provenance chain of the facts used — gated in `loop.go`, surfaced as a first-class SSE event, so a bare number can't reach the user unmarked. **Compute-time:** `run_python` provenance references the `dataLocator`(s) the script read.
 - **Interfaces:** extends `internal/graph` writes, `cmd/loader`, `internal/agent` (loop, events, tools) and the extraction writers; **defines the provenance vocabulary** chunks 13, 14, 7 and 8 conform to.
-- **Depends on:** 2 (loader), 4 (agent).
-- **Acceptance:** every `PropertyMeasurement`/`Mention` has `wasDerivedFrom` + a source; NIST rows carry `citedIn` + DOI regardless of load order; the agent flags an ungrounded answer as such and will not present a numeric result without a provenance chain; a `run_python` result references its source locator(s).
-- **Test seed:** Go tests that loader output includes `citedIn`/DOI for every row; an agent-loop test that an answer with no provenance event is stamped ungrounded; event-schema test for the grounded/ungrounded + provenance-chain events; extraction pytest that written mentions carry `Activity` provenance.
+- **Depends on:** 2 (loader), 4 (agent); and, per the trust sequence above, the prerequisite `ground-demo-in-real-docs` (seed already removed — design D9).
+- **Acceptance:** every `PropertyMeasurement`/`Mention` has `wasDerivedFrom` + a source; NIST rows carry `prov:wasDerivedFrom` the dataset + DOI regardless of load order (no `citedIn` — deferred to chunk 7 per design D3); the agent flags an ungrounded answer as such and will not present a numeric result without a provenance chain; a `run_python` result references its source locator(s). The `Activity` IRI a fact references via `wasGeneratedBy` is deterministic per pipeline/source (byte-stable across re-runs); the wall-clock-timestamped `Activity` record itself lives in the per-run named graph `urn:msr:run:<pipeline>/<ts>` (design D8).
+- **Test seed:** Go tests that loader output includes `prov:wasDerivedFrom`/`prov:wasGeneratedBy` + DOI for every row (no `citedIn` — deferred to chunk 7 per design D3); an agent-loop test that an answer with no provenance event is stamped ungrounded; event-schema test for the grounded/ungrounded + provenance-chain events; extraction pytest that written mentions carry `Activity` provenance.
 
 ## 13 — `shacl-validation`  *(trust)*
 - **Goal:** Turn the provenance and schema invariants into **declarative gates the database enforces on write** — the missing validation layer.
-- **Scope:** enable GraphDB's native SHACL (`ShaclSail`) on the `msr` repo — a bootstrap change to `scripts/ensure-repo.sh` / repo config (verify the exact 11.4.2 config surface). Author the shape catalogue: **provenance invariants** (measurements/mentions/thread-nodes require `wasDerivedFrom` + source; measurements require `dataLocator` + `citedIn` + `forProperty`/`ofSalt`/`hasUnit`/`equationForm`) and **data-quality invariants** (unit ∈ QUDT allowlist; valid-range present and `validTempMin ≤ validTempMax`; `linksTo` target-kind). Load shapes into the reserved shapes graph; wire validation into the loader/extraction write path; choose a bulk-load strategy (incremental vs load-then-validate); surface validation reports legibly.
+- **Scope:** enable GraphDB's native SHACL (`ShaclSail`) on the `msr` repo — a bootstrap change to `scripts/ensure-repo.sh` / repo config (verify the exact 11.4.2 config surface). Author the shape catalogue: **provenance invariants** (measurements/mentions/thread-nodes require `wasDerivedFrom` + source; measurements require `dataLocator` + `forProperty`/`ofSalt`/`hasUnit`/`equationForm` — no `citedIn` constraint, deferred to chunk 7 per design D3) and **data-quality invariants** (unit ∈ QUDT allowlist; valid-range present and `validTempMin ≤ validTempMax`; `linksTo` target-kind). Load shapes into the reserved shapes graph; wire validation into the loader/extraction write path; choose a bulk-load strategy (incremental vs load-then-validate); surface validation reports legibly.
 - **Interfaces:** repo config (`ensure-repo.sh`, `docker-compose.yml`) + the `internal/graph` write path; consumes the provenance vocabulary from 12.
 - **Depends on:** 1 (bootstrap/repo), 12 (shapes encode the model).
 - **Acceptance:** a write of a measurement/mention missing required provenance is **rejected on commit with a report**; a measurement with a non-allowlist unit or inverted temp-range is rejected; valid data loads unchanged; `ensure-repo.sh` idempotently creates a SHACL-enabled repo.
