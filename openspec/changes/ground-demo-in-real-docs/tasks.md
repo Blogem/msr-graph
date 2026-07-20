@@ -40,6 +40,6 @@
 
 ## 6. Validation
 
-- [ ] 6.1 `go test ./...` and the extraction pytest suite green (offline unit tests; guarded integration tests documented)
-- [ ] 6.2 `openspec validate ground-demo-in-real-docs --strict` passes
+- [x] 6.1 `go test ./...` and the extraction pytest suite green (offline unit tests; guarded integration tests documented)
+- [x] 6.2 `openspec validate ground-demo-in-real-docs --strict` passes
 - [ ] 6.3 Manual acceptance: full build + `make demo-density`, inspect the trace — grounding resolves via a real `msr:Mention`/`msr:linksTo` and the provenance names `ORNL-TM-2316`; no `skos:closeMatch`-to-a-salt anywhere

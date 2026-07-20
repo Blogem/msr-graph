@@ -74,7 +74,7 @@ Because this change ships before `provenance-model`, the interim graph is *real 
 
 ## Migration Plan
 
-No data migration (POC data disposable). Deploy after `provenance-model`. Reproduce the demo: `make up && make load-nist && make ingest && make link && make demo-density`. Rollback: restore `example-flibe.ttl` + its `seedFiles` entry and revert the `sparql.go` grounding recipe (git revert).
+No data migration (POC data disposable). This change lands **first** in the trust sequence — deploy it **before** `provenance-model` (see Context and D7). Reproduce the demo: `make up && make load-nist && make ingest && make link && make demo-density`. Rollback: restore `example-flibe.ttl` + its `seedFiles` entry and revert the `sparql.go` grounding recipe (git revert).
 
 ## Open Questions
 
