@@ -27,12 +27,15 @@ const (
 	replenishMaxBackoff     = 30 * time.Second
 )
 
-// container is the pool's internal handle for one warm, ready sandbox: just
-// enough to identify it to the Runtime. It carries no other state because
-// containers are single-use -- there is nothing to reset or reuse (design
-// D1).
+// container is the pool's internal handle for one warm, ready sandbox: its
+// id plus the wall-clock instant at which its bounded `sleep <IdleTTL>` PID 1
+// exits and AutoRemove deletes it. `expires` lets Run reject a container that
+// has sat idle long enough to self-reap before handing it out -- otherwise a
+// pool left idle longer than IdleTTL would dispense already-removed ids and
+// exec would fail with "No such container" (design D1/D9).
 type warmContainer struct {
-	id string
+	id      string
+	expires time.Time
 }
 
 // Pool is a fixed-size warm pool of single-use sandbox containers. The
@@ -121,7 +124,7 @@ func New(ctx context.Context, cfg Config, rt Runtime) (*Pool, error) {
 			return nil, fmt.Errorf("sandbox: failed to warm initial pool (created %d/%d): %w", i, cfg.PoolSize, err)
 		}
 		created = append(created, id)
-		p.ready <- warmContainer{id: id}
+		p.ready <- warmContainer{id: id, expires: time.Now().Add(spec.IdleTTL)}
 	}
 
 	return p, nil
@@ -145,6 +148,28 @@ func (p *Pool) Run(ctx context.Context, script []byte) (stdout, stderr []byte, e
 	case <-p.done:
 		return nil, nil, 0, errClosed
 	case c = <-p.ready:
+	}
+
+	// Age-aware acquisition (fixes the stale-container "No such container"
+	// failure): a warm container's PID 1 is `sleep <IdleTTL>` with
+	// AutoRemove, so one that has sat idle in the pool long enough has already
+	// exited and been removed. If the acquired container lacks enough
+	// remaining lifetime to outlast a full run (guarding both the
+	// already-reaped and the would-reap-mid-run cases), discard it and create
+	// a fresh replacement inline so this run succeeds instead of erroring on a
+	// vanished container. During active use containers are freshly replenished
+	// and this branch never trips, so it adds no steady-state latency.
+	if time.Until(c.expires) <= p.timeout {
+		if rmErr := p.rt.Remove(context.Background(), c.id); rmErr != nil {
+			log.Printf("sandbox: failed to remove stale warm container %s before replacing it: %v", c.id, rmErr)
+		}
+		id, createErr := p.rt.Create(ctx, p.spec)
+		if createErr != nil {
+			// Keep the pool topped up (we consumed a slot), then surface it.
+			p.startReplenish()
+			return nil, nil, 0, fmt.Errorf("sandbox: create replacement for stale warm container: %w", createErr)
+		}
+		c = warmContainer{id: id, expires: time.Now().Add(p.spec.IdleTTL)}
 	}
 
 	runCtx, cancel := context.WithTimeout(ctx, p.timeout)
@@ -234,7 +259,7 @@ func (p *Pool) replenish() {
 				log.Printf("sandbox: failed to remove freshly created container %s during shutdown: %v", id, rmErr)
 			}
 			return
-		case p.ready <- warmContainer{id: id}:
+		case p.ready <- warmContainer{id: id, expires: time.Now().Add(p.spec.IdleTTL)}:
 			return
 		}
 	}

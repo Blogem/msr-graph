@@ -23,6 +23,7 @@ under test.
 from __future__ import annotations
 
 import json
+import threading
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal, Protocol
 
@@ -53,12 +54,31 @@ class FlashClient:
         *,
         api_key: str | None = None,
         timeout: float = 60.0,
+        max_retries: int = 5,
     ) -> None:
-        """Store the DeepSeek endpoint, model name, and request settings."""
+        """Store the DeepSeek endpoint, model name, and request settings.
+
+        ``max_retries`` is handed to the underlying ``openai`` client, which
+        retries transient failures (HTTP 429 rate-limit, 5xx, timeouts,
+        connection errors) with exponential backoff and honors ``Retry-After``
+        (scale-mention-linking D5). This matters at higher
+        ``MSR_DISAMBIG_CONCURRENCY``: without it, a rate-limit blip would
+        surface as an exception that :func:`disambiguate` swallows to
+        ``novel`` — silently dropping a real link. The retry keeps the layer
+        robust under load rather than trading recall for speed.
+        """
         self.base_url = base_url
         self.model = model
         self.api_key = api_key
         self.timeout = timeout
+        self.max_retries = max_retries
+        # One reused client (built lazily, thread-safe): openai.OpenAI is
+        # safe to share across threads and pools its HTTP connections, so the
+        # concurrent pre-warm (scale-mention-linking D2) shares one bounded
+        # connection pool instead of building a fresh client + TLS handshake
+        # per call.
+        self._client = None
+        self._client_lock = threading.Lock()
 
     @classmethod
     def from_config(cls, config: Config) -> FlashClient | None:
@@ -76,24 +96,38 @@ class FlashClient:
             api_key=config.deepseek_api_key or None,
         )
 
+    def _get_client(self):
+        """Return the shared ``openai`` client, building it once on first use.
+
+        Double-checked locking so concurrent first calls (the pre-warm pool)
+        build exactly one client.
+
+        # deferred import: `import openai` belongs inside this method body so
+        # the module imports with zero third-party deps at import time.
+        """
+        if self._client is None:
+            with self._client_lock:
+                if self._client is None:
+                    import openai
+
+                    self._client = openai.OpenAI(
+                        base_url=self.base_url,
+                        api_key=self.api_key or "unused",
+                        timeout=self.timeout,
+                        max_retries=self.max_retries,
+                    )
+        return self._client
+
     def complete(self, system_prompt: str, user_prompt: str) -> str:
         """Call DeepSeek's chat-completions endpoint and return the reply text.
 
         Uses JSON output mode (``response_format={"type": "json_object"}``),
         which guarantees syntactically valid JSON but not field-level
         structure — callers (see :func:`disambiguate`) must still validate
-        the parsed shape and contents.
-
-        # deferred import: `import openai` belongs inside this method body so
-        # the module imports with zero third-party deps at import time.
+        the parsed shape and contents. The shared client (see
+        :meth:`_get_client`) retries transient errors before this raises.
         """
-        import openai
-
-        client = openai.OpenAI(
-            base_url=self.base_url,
-            api_key=self.api_key or "unused",
-            timeout=self.timeout,
-        )
+        client = self._get_client()
         response = client.chat.completions.create(
             model=self.model,
             response_format={"type": "json_object"},

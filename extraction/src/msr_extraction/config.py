@@ -52,6 +52,26 @@ class Config:
     # docs) and `graphite` (388/637 docs), so both clear it as salient, while
     # still filtering out low-frequency OCR noise terms from the candidate set.
     salience_threshold: int = 50
+    # Mention-writer batch size (scale-mention-linking, D1): a report's
+    # mentions are written as multiple additive INSERT DATA POSTs of at most
+    # this many mentions each, keeping any single POST body well under
+    # GraphDB's Tomcat maxPostSize (a single unbatched POST of a large
+    # OCR-heavy report — e.g. NSRDS-NBS-61-p4's ~3.8k mentions — otherwise
+    # exceeds it and is rejected with an HTTP 500).
+    mention_write_batch_size: int = 500
+    # Layer-5 disambiguation concurrency (scale-mention-linking, D2): the
+    # bounded worker-pool size used to resolve a run's distinct unresolved
+    # surfaces in parallel. The DeepSeek/openai client is blocking I/O, so
+    # threads overlap the network round-trips that otherwise dominate the
+    # link wall-clock. 24 is a safe, effective default for this workload:
+    # comfortably below DeepSeek's concurrency ceiling and any practical
+    # rate limit, while enough to overlap the per-call latency that
+    # otherwise dominates. Override with MSR_DISAMBIG_CONCURRENCY.
+    disambig_concurrency: int = 24
+    # When true, ignore any persisted disambiguation cache on load and
+    # re-resolve every layer-5 surface via the model, rewriting the store
+    # (persist-disambiguation-cache D4). Env MSR_DISAMBIG_REFRESH.
+    disambig_cache_refresh: bool = False
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> Config:
@@ -80,6 +100,16 @@ class Config:
             salience_threshold=int(
                 env.get("MSR_SALIENCE_THRESHOLD", cls.salience_threshold)
             ),
+            mention_write_batch_size=int(
+                env.get("MSR_MENTION_WRITE_BATCH_SIZE", cls.mention_write_batch_size)
+            ),
+            disambig_concurrency=int(
+                env.get("MSR_DISAMBIG_CONCURRENCY", cls.disambig_concurrency)
+            ),
+            disambig_cache_refresh=(
+                env.get("MSR_DISAMBIG_REFRESH", "").strip().lower()
+                in ("1", "true", "yes")
+            ),
         )
 
     @property
@@ -95,6 +125,16 @@ class Config:
     def report_dir(self, report: str) -> Path:
         """Directory holding the processed artifacts for a given report number."""
         return self.corpus_dir / report
+
+    @property
+    def disambig_cache_path(self) -> Path:
+        """Path to the persisted layer-5 disambiguation cache (corpus-scoped).
+
+        Under ``corpus_dir`` (the ./data bind mount) so it survives across
+        `make link` container runs, and gitignored so it is never committed
+        (persist-disambiguation-cache D1).
+        """
+        return self.corpus_dir / "disambiguation-cache.json"
 
     @property
     def sparql_update_endpoint(self) -> str:

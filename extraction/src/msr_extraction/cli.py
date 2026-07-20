@@ -14,10 +14,12 @@ from __future__ import annotations
 import argparse
 import logging
 import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from msr_extraction import (
     acquisition,
     curated,
+    disambig_cache,
     documents,
     linker,
     manifest,
@@ -171,11 +173,102 @@ def _cmd_link(config: Config, reports: list[str] = curated.CURATED_REPORTS) -> i
 
     client = FlashClient.from_config(config)
     disambiguator: linker.Disambiguator | None = None
+    prewarm_report: "Callable[[str], None] | None" = None
+    save_disambig_cache: "Callable[[], None] | None" = None
     if client is not None:
+        # Per-run disambiguation cache keyed on surface form
+        # (cache-disambiguation-by-surface): layer-5 candidates are
+        # formula-shaped, so the surface determines identity and the same
+        # unresolved formula recurring across segments/reports need only be
+        # resolved once. A "novel" outcome is cached too. The known-IRI
+        # validation inside `disambiguate` still gates every link, so a
+        # cached outcome can never be a link to an unloaded IRI.
+        _disambig_cache: dict[str, tuple[str, str | None]] = {}
+
+        # Cross-run persistence (persist-disambiguation-cache D2/D3): seed the
+        # cache from the on-disk store, but only when it was written against
+        # the same known-IRI set (the hash guards staleness). Seeded surfaces
+        # are skipped by the pre-warm collector, so an unchanged graph makes
+        # zero model calls on re-run. Seeded `linked` entries are re-validated
+        # against the live known-IRI set (belt-and-suspenders against a
+        # hand-edited store).
+        _iris_hash = disambig_cache.known_iris_hash(known_iris)
+        if not config.disambig_cache_refresh:
+            seeded = disambig_cache.load_cache(config.disambig_cache_path, _iris_hash)
+            for surface, (status, target_iri) in seeded.items():
+                if status == "linked" and target_iri not in known_iris:
+                    continue
+                _disambig_cache[surface] = (status, target_iri)
+            if _disambig_cache:
+                logger.info(
+                    "link: seeded %d disambiguation outcome(s) from %s",
+                    len(_disambig_cache),
+                    config.disambig_cache_path,
+                )
+
+        def save_disambig_cache() -> None:
+            disambig_cache.save_cache(
+                config.disambig_cache_path, _iris_hash, _disambig_cache
+            )
+            logger.info(
+                "link: wrote %d disambiguation outcome(s) to %s",
+                len(_disambig_cache),
+                config.disambig_cache_path,
+            )
+
+        def _resolve(surface: str, sentence: str) -> tuple[str, str | None]:
+            result = disambiguate(surface, sentence, prompt_prefix, known_iris, client)
+            return (result.status, result.target_iri)
 
         def disambiguator(surface: str, sentence: str) -> tuple[str, str | None]:
-            result = disambiguate(surface, sentence, prompt_prefix, known_iris, client)
-            return result.status, result.target_iri
+            cached = _disambig_cache.get(surface)
+            if cached is not None:
+                return cached
+            outcome = _resolve(surface, sentence)
+            _disambig_cache[surface] = outcome
+            return outcome
+
+        def prewarm_report(report: str) -> None:
+            # Concurrent pre-warm (scale-mention-linking D2). A cheap collect
+            # scan gathers this report's distinct not-yet-cached layer-5
+            # surfaces (the collector returns "novel" so linking proceeds and
+            # the throwaway records are discarded), then a bounded thread pool
+            # resolves them in parallel into the shared cache — so the real
+            # link pass below issues no model calls. Threads are correct here
+            # because the DeepSeek client is blocking I/O; `disambiguate`
+            # never raises, so worker futures never do. `pending` maps each
+            # distinct surface to the first sentence context seen for it.
+            pending: dict[str, str] = {}
+
+            def collector(surface: str, sentence: str) -> tuple[str, str | None]:
+                if surface not in _disambig_cache and surface not in pending:
+                    pending[surface] = sentence
+                return ("novel", None)
+
+            linker.link_report(
+                report,
+                config,
+                matcher,
+                known,
+                known_iris,
+                prompt_prefix=prompt_prefix,
+                disambiguator=collector,
+            )
+            if not pending:
+                return
+            with ThreadPoolExecutor(max_workers=config.disambig_concurrency) as pool:
+                futures = {
+                    pool.submit(_resolve, surface, sentence): surface
+                    for surface, sentence in pending.items()
+                }
+                for future in as_completed(futures):
+                    _disambig_cache[futures[future]] = future.result()
+            logger.info(
+                "link: report=%s pre-warmed %d distinct layer-5 surface(s) (concurrency=%d)",
+                report,
+                len(pending),
+                config.disambig_concurrency,
+            )
 
     else:
         logger.warning("link: DEEPSEEK_BASE_URL not configured; layer 5 spans fall to novel")
@@ -191,6 +284,9 @@ def _cmd_link(config: Config, reports: list[str] = curated.CURATED_REPORTS) -> i
         if not segments_path.exists():
             logger.warning("link: report=%s missing %s, skipping", report, segments_path)
             continue
+
+        if prewarm_report is not None:
+            prewarm_report(report)
 
         records = linker.link_report(
             report,
@@ -216,7 +312,9 @@ def _cmd_link(config: Config, reports: list[str] = curated.CURATED_REPORTS) -> i
             for record in records
             if record.status == "linked"
         ]
-        mentions.write_mentions(linked_mentions, sparql, run_ts)
+        mentions.write_mentions(
+            linked_mentions, sparql, run_ts, batch_size=config.mention_write_batch_size
+        )
 
         linked_count = len(linked_mentions)
         novel_count = len(records) - linked_count
@@ -231,6 +329,9 @@ def _cmd_link(config: Config, reports: list[str] = curated.CURATED_REPORTS) -> i
         )
         logger.info(summary)
         print(summary)
+
+    if save_disambig_cache is not None:
+        save_disambig_cache()
 
     logger.info("link: complete")
     return 0
