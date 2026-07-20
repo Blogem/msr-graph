@@ -25,6 +25,7 @@ Verified feasibility (live clone of `openmsr/msr-archive`): the real OCR of **`O
 - `seed-graph-loading`: `make load-seed` no longer loads an A-Box; `example-flibe.ttl` is removed and only TBox + vocab load into their graphs.
 - `document-graph`: spec-text reconciliation for seed removal — the `msr:Document` write is additive over the **real-data-writer** triples already in `urn:msr:data` (loader catalog/dataset, extraction mentions), not over a seed A-Box; `msrd:ORNL-TM-2316` is now first written by the loader/ingest, not "already typed in the seed." No behavior change.
 - `salt-canonicalization`: spec-text reconciliation for seed removal — deterministic IRI minting is described against the minting contract itself, not "matching the seed A-Box" (which no longer exists). No behavior change.
+- `entity-linking`: the anchor set drops the unattested `FLiBe` nickname (real-corpus finding: it does not appear in the finalized curated document text, only in non-curated archive files); the composed `LiF-BeF2` salt link is unaffected.
 
 ## Impact
 
