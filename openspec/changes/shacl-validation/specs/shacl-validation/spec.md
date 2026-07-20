@@ -48,6 +48,17 @@ The catalogue SHALL include a shape targeting `msr:Mention` that requires (minCo
 - **WHEN** a `msr:Mention` carrying `msr:inDocument`, `msr:startOffset`, `msr:endOffset`, `msr:surfaceForm`, `prov:wasDerivedFrom`, and `prov:wasGeneratedBy` is written
 - **THEN** the commit succeeds
 
+### Requirement: Catalog-individual provenance shape
+The catalogue SHALL include shapes targeting `msr:MoltenSalt`, `msr:Constituent`, and `msr:ChemicalCompound` that each require (minCount 1) `prov:wasGeneratedBy` and `prov:wasDerivedFrom`, mirroring the landed `provenance-model` invariant that **every** pipeline-asserted instance individual — not only measurements and mentions — carries generation and derivation provenance. A catalog individual missing either PROV edge MUST cause its transaction to be rejected. (The NIST loader is the only writer of these individuals and emits both edges on every one, so the shape enforces the invariant without rejecting valid writes.)
+
+#### Scenario: Salt, constituent, or compound missing provenance is rejected
+- **WHEN** a `msr:MoltenSalt`, `msr:Constituent`, or `msr:ChemicalCompound` is written without `prov:wasGeneratedBy` or `prov:wasDerivedFrom`
+- **THEN** the commit is rejected with a report naming the failing constraint and focus node
+
+#### Scenario: Fully-provenanced catalog individual is accepted
+- **WHEN** a `msr:MoltenSalt`, `msr:Constituent`, or `msr:ChemicalCompound` carrying both `prov:wasGeneratedBy` and `prov:wasDerivedFrom` is written
+- **THEN** the commit succeeds
+
 ### Requirement: Unit allowlist data-quality shape
 The catalogue SHALL constrain a measurement's `msr:hasUnit` to the QUDT allowlist. The allowed set MUST be derived from `ontology/qudt-units.json` (the single source of truth) rather than hand-maintained in the shape, so the shape and the loader agree on the allowlist.
 

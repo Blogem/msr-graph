@@ -11,6 +11,7 @@
 - [ ] 2.2 Add the `msr:Mention` shape (`msr:inDocument`, `msr:startOffset`, `msr:endOffset`, `msr:surfaceForm`, `prov:wasDerivedFrom`, `prov:wasGeneratedBy` — minCount 1 each; every mention writer already emits all six per the landed `provenance-model`).
 - [ ] 2.3 Add the valid-temperature-range shape via a `sh:sparql` constraint whose `SELECT` filters `validTempMin > validTempMax` (and flags a half-populated range) — per D4, a filter inside `sh:sparql`, not an unsupported pairwise-comparison component.
 - [ ] 2.4 Add the `msr:linksTo` target-kind shape: prefer Core `sh:class`/`sh:nodeKind` (matches explicit `rdf:type`, since inference is off — D4); use `sh:sparql` (confirmed supported) for the existence/expected-kind check where Core cannot express it.
+- [ ] 2.5 Add the catalog-individual provenance shape targeting `msr:MoltenSalt`, `msr:Constituent`, and `msr:ChemicalCompound` (each requires `prov:wasGeneratedBy` + `prov:wasDerivedFrom`, minCount 1). The NIST loader — the only writer of these — emits both edges on every such individual per the landed `provenance-model`, so this enforces the invariant without rejecting valid writes.
 
 ## 3. Unit allowlist shape from single source of truth
 
@@ -42,6 +43,7 @@
 - [ ] 7.7 Test: `ensure-repo.sh` idempotently creates a SHACL-enabled repo (no-op on an already-SHACL-enabled repo) and fails with guidance when the existing repo is not SHACL-enabled (D7).
 - [ ] 7.8 Unit test for the allowlist-generation step (3.1): the emitted `sh:in` list matches the IRIs in `ontology/qudt-units.json`.
 - [ ] 7.9 Go test for the write-path validation-error typing (5.1): a simulated `sh:ValidationReport` response is classified as a validation error with constraint/focus-node detail.
+- [ ] 7.10 Opt-in integration test: a `msr:MoltenSalt` / `msr:Constituent` / `msr:ChemicalCompound` missing `prov:wasGeneratedBy` or `prov:wasDerivedFrom` is rejected; a fully-provenanced one is accepted.
 
 ## 8. Documentation
 
