@@ -13,7 +13,7 @@
 @prefix nuclear: <nuclear:> .   # DIAMOND opaque class IRIs — non-dereferenceable, alignment only
 
 <https://w3id.org/msr-kg/ontology> a owl:Ontology ;
-    owl:versionInfo "0.1.0-seed" ;
+    owl:versionInfo "0.2.0" ;
     rdfs:label "MSR Seed Ontology (POC)" ;
     rdfs:comment "Seed T-Box for the MSR KG POC. Reuses DIAMOND labels via rdfs:seeAlso; adds the PropertyMeasurement pattern." .
 
@@ -25,8 +25,7 @@ msr:ChemicalCompound a owl:Class ; rdfs:subClassOf msr:Substance ;
 msr:MoltenSalt a owl:Class ; rdfs:subClassOf msr:Substance ;
     rdfs:label "MoltenSalt" ;
     rdfs:comment "A molten-salt melt at a defined composition; pure or a mixture." ;
-    rdfs:seeAlso nuclear:000258 ;   # DIAMOND MoltenSalt (⊂ LiquidFuel — intentionally NOT inherited)
-    skos:closeMatch voc:molten-salts .
+    rdfs:seeAlso nuclear:000258 .   # DIAMOND MoltenSalt (⊂ LiquidFuel — intentionally NOT inherited)
 
 msr:Constituent a owl:Class ;
     rdfs:comment "Reifies 'compound X at mole fraction f' within a MoltenSalt." .
@@ -43,29 +42,25 @@ msr:canonicalUnit a owl:ObjectProperty ; rdfs:range qudt:Unit .
 
 msr:density a msr:PhysicalProperty ;
     rdfs:label "density" ; msr:quantityKind qk:Density ; msr:canonicalUnit unit:GM-PER-CentiM3 ;
-    rdfs:seeAlso nuclear:000242 ; skos:closeMatch voc:density .
+    rdfs:seeAlso nuclear:000242 .
 msr:viscosity a msr:PhysicalProperty ;
     rdfs:label "viscosity" ; msr:quantityKind qk:DynamicViscosity ; msr:canonicalUnit unit:MilliPA-SEC ;
-    rdfs:seeAlso nuclear:000243 ; skos:closeMatch voc:viscosity .
+    rdfs:seeAlso nuclear:000243 .
 msr:surfaceTension a msr:PhysicalProperty ;
     rdfs:label "surface tension" ; msr:quantityKind qk:SurfaceTension ; msr:canonicalUnit unit:MilliN-PER-M ;
-    rdfs:seeAlso nuclear:000158 ; skos:closeMatch voc:surface-tension .   # DIAMOND InterfacialTension
+    rdfs:seeAlso nuclear:000158 .   # DIAMOND InterfacialTension
 msr:electricalConductivity a msr:PhysicalProperty ;
     rdfs:label "electrical conductivity" ; msr:quantityKind qk:ElectricConductivity ; msr:canonicalUnit unit:S-PER-CentiM ;
-    rdfs:comment "No DIAMOND equivalent — this seed fills the gap." ; skos:closeMatch voc:electric-conductivity .
+    rdfs:comment "No DIAMOND equivalent — this seed fills the gap." .
 # document-sourced properties (values come from the archive, not NIST)
 msr:thermalConductivity a msr:PhysicalProperty ;
-    rdfs:label "thermal conductivity" ; msr:quantityKind qk:ThermalConductivity ; msr:canonicalUnit unit:W-PER-M-K ;
-    skos:closeMatch voc:thermal-conductivity .
+    rdfs:label "thermal conductivity" ; msr:quantityKind qk:ThermalConductivity ; msr:canonicalUnit unit:W-PER-M-K .
 msr:specificHeat a msr:PhysicalProperty ;
-    rdfs:label "specific heat" ; msr:quantityKind qk:SpecificHeatCapacity ; msr:canonicalUnit unit:J-PER-KiloGM-K ;
-    skos:closeMatch voc:specific-heat .
+    rdfs:label "specific heat" ; msr:quantityKind qk:SpecificHeatCapacity ; msr:canonicalUnit unit:J-PER-KiloGM-K .
 msr:vaporPressure a msr:PhysicalProperty ;
-    rdfs:label "vapor pressure" ; msr:quantityKind qk:VaporPressure ; msr:canonicalUnit unit:PA ;
-    skos:closeMatch voc:vapor-pressure .
+    rdfs:label "vapor pressure" ; msr:quantityKind qk:VaporPressure ; msr:canonicalUnit unit:PA .
 msr:meltingPoint a msr:PhysicalProperty ;
-    rdfs:label "melting point" ; msr:quantityKind qk:Temperature ; msr:canonicalUnit unit:K ;
-    skos:closeMatch voc:melting-point .
+    rdfs:label "melting point" ; msr:quantityKind qk:Temperature ; msr:canonicalUnit unit:K .
 
 ### Unit labels
 # QUDT units are referenced as values only (never imported/dereferenced; see
@@ -113,20 +108,6 @@ msr:Isotherm1 a msr:EquationForm ; msr:formula "c0 + c1*C" ; msr:independentVari
 msr:Isotherm2 a msr:EquationForm ; msr:formula "c0 + c1*C + c2*C^2" ; msr:independentVariable "composition" .           # NIST 'I2'
 msr:Isotherm3 a msr:EquationForm ; msr:formula "c0 + c1*C + c2*C^2 + c3*C^3" ; msr:independentVariable "composition" .  # NIST 'I3'
 msr:Isotherm4 a msr:EquationForm ; msr:formula "c0 + c1*C + c2*C^2 + c3*C^3 + c4*C^4" ; msr:independentVariable "composition" .  # NIST 'I4'
-
-### Reactor & role layer
-msr:MoltenSaltReactor a owl:Class ;
-    rdfs:label "MoltenSaltReactor" ;
-    rdfs:seeAlso nuclear:000364 ;   # DIAMOND MoltenSaltReactor (⊂ FastNeutronReactor — intentionally NOT inherited; MSRE was thermal)
-    skos:closeMatch voc:molten-salt-reactors .
-msr:usedIn a owl:ObjectProperty ; rdfs:domain msr:MoltenSalt ; rdfs:range msr:MoltenSaltReactor .
-
-msr:SaltRole a owl:Class ;
-    rdfs:comment "The functional role a salt plays (ORNL-TM-2316 triad). Modeled as a role, not baked into the class." .
-msr:hasRole a owl:ObjectProperty ; rdfs:domain msr:MoltenSalt ; rdfs:range msr:SaltRole .
-msr:FuelSalt    a msr:SaltRole ; skos:closeMatch voc:fuel-salt .
-msr:CoolantSalt a msr:SaltRole ; rdfs:seeAlso nuclear:000223 ; skos:closeMatch voc:coolant-salt .   # DIAMOND Coolant
-msr:FlushSalt   a msr:SaltRole ; skos:closeMatch voc:flush-salt .
 
 ### Provenance layer
 msr:Document a owl:Class ; rdfs:subClassOf prov:Entity .
