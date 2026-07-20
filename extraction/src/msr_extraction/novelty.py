@@ -186,6 +186,18 @@ def _ngrams(tokens: list[str]) -> list[str]:
     return terms
 
 
+def _terms_in_text(text: str) -> list[str]:
+    """Normalize `text` into its deduplicated n-gram terms (`_tokenize` + `_ngrams`).
+
+    Shared by :func:`enumerate_lexical_terms` (candidate-term generation)
+    and :func:`score_document_frequency` (per-document term generation) so
+    both sides of the document-frequency membership check are produced by
+    byte-identical normalization/filtering -- candidate terms and
+    per-document terms can never drift apart in form.
+    """
+    return _ngrams(_tokenize(text))
+
+
 def enumerate_lexical_terms(reports: list[str], config: Config) -> dict[str, list[Evidence]]:
     """Lexical term-candidate pass over each report's curated `segments.jsonl`.
 
@@ -219,7 +231,7 @@ def enumerate_lexical_terms(reports: list[str], config: Config) -> dict[str, lis
         for obj in _read_jsonl(path):
             text = obj["text"]
             char_start = obj["char_start"]
-            segment_terms = _ngrams(_tokenize(text))
+            segment_terms = _terms_in_text(text)
             if not segment_terms:
                 continue
             evidence_key = (report, char_start)
@@ -331,8 +343,25 @@ def score_document_frequency(terms: set[str], config: Config) -> dict[str, int]:
     """Document frequency of each term over the full 637-document OCR corpus.
 
     Builds the case-folded doc-text index once (via :func:`_build_corpus_index`
-    over ``config.archive_dir.rglob("*.txt")``), then counts, per term, how
-    many of those documents' text contains it as a case-folded substring.
+    over ``config.archive_dir.rglob("*.txt")``); for each document, generates
+    that document's own set of normalized n-gram terms via :func:`_terms_in_text`
+    -- the *same* ``_tokenize`` + ``_ngrams`` path :func:`enumerate_lexical_terms`
+    uses to build candidate terms -- and intersects it against `terms` in one
+    hash-set operation, incrementing each matched term's count. This is
+    O(docs * doc_ngrams) with O(1) hash lookups per document, independent of
+    the candidate-set size, instead of the naive O(docs * terms * doclen)
+    substring scan (``for text in corpus: for term in terms: term in text``),
+    which is unusable at the full lexical-pass scale (hundreds of thousands
+    of candidate terms over 637 documents took hours).
+
+    Semantics note: because both sides come from the same normalized-token
+    n-gram path, this is exact-match membership on normalized token n-grams,
+    NOT substring containment. A term like ``"solubility"`` no longer
+    incidentally matches inside ``"solubilities"`` -- this is the intended,
+    more precise "token scan" reading. Counts may differ slightly from the
+    old substring-based counts; the default ``salience_threshold`` (50) is
+    robust to that shift.
+
     If `archive_dir` is missing or has no `.txt` sidecars, logs a warning
     and returns ``{term: 0 for term in terms}`` rather than raising.
     """
@@ -355,11 +384,15 @@ def score_document_frequency(terms: set[str], config: Config) -> dict[str, int]:
         )
         return {term: 0 for term in terms}
 
+    total_docs = len(corpus_texts)
+    logger.info("scoring %d candidate terms over %d documents", len(terms), total_docs)
     counts: dict[str, int] = {term: 0 for term in terms}
-    for text in corpus_texts:
-        for term in terms:
-            if term in text:
-                counts[term] += 1
+    for doc_index, text in enumerate(corpus_texts, start=1):
+        doc_terms = set(_terms_in_text(text))
+        for term in doc_terms & terms:
+            counts[term] += 1
+        if doc_index % 100 == 0:
+            logger.info("scored %d/%d documents", doc_index, total_docs)
     return counts
 
 
