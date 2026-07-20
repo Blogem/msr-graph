@@ -207,10 +207,13 @@ func TestBuildInsertData_NoHandCuratedEdges(t *testing.T) {
 }
 
 // TestBuildInsertData_Empty documents the trivial boundary: an empty
-// measurement slice should not panic and (if it produces output at all)
-// should not fabricate a GRAPH block with no content worth asserting on
-// beyond "no panic, no crash". This guards against buildInsertData
-// dereferencing ms[0] unconditionally.
+// measurement slice should not panic. buildInsertData ALWAYS emits the
+// msrd:nist-srd27 Dataset node -- it is a derivation root, emitted
+// regardless of measurement count (design D3, task 5.2) -- so even a nil
+// measurement slice yields exactly one fact IRI: the Dataset node itself.
+// This guards against buildInsertData dereferencing ms[0] unconditionally,
+// while still pinning that the Dataset node is always a fact IRI carrying a
+// generation edge.
 func TestBuildInsertData_Empty(t *testing.T) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -218,8 +221,8 @@ func TestBuildInsertData_Empty(t *testing.T) {
 		}
 	}()
 	_, factIRIs := buildInsertData(nil, ontologyVersion)
-	if len(factIRIs) != 0 {
-		t.Errorf("buildInsertData(nil) returned %d fact IRIs, want 0: %v", len(factIRIs), factIRIs)
+	if len(factIRIs) != 1 || factIRIs[0] != nistDatasetIRI {
+		t.Errorf("buildInsertData(nil) returned fact IRIs %v, want exactly [%s]", factIRIs, nistDatasetIRI)
 	}
 }
 

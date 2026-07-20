@@ -242,6 +242,64 @@ func TestNistLoadIdempotentAcrossBothStores(t *testing.T) {
 		t.Errorf("measurement_value row count changed across a repeat nist load: %d -> %d", rowCountAfterFirstRun, got)
 	}
 
+	// provenance-run-lineage task 5.8: the stable msrd:activity-loader-nist
+	// typing added to urn:msr:data by buildInsertData (design D1) is
+	// deterministic and timestamp-free, so it must not perturb the
+	// "urn:msr:data triple count is unchanged across a repeat run" guarantee
+	// this test already exercises above. Re-assert that explicitly: exactly
+	// one typed msrd:activity-loader-nist individual exists in urn:msr:data
+	// (never a second copy from the second run), and it carries no
+	// timestamp facet -- if the stable-activity typing were accidentally
+	// timestamped, it would itself break the triple-count invariant just
+	// checked.
+	t.Run("stable activity typing does not perturb urn:msr:data idempotency", func(t *testing.T) {
+		query := `
+			PREFIX msrd: <https://w3id.org/msr-kg/data#>
+			PREFIX prov: <http://www.w3.org/ns/prov#>
+			SELECT ?p ?o WHERE {
+				msrd:activity-loader-nist a prov:Activity ; ?p ?o .
+			}
+		`
+		results, err := client.Select(ctx, query)
+		if err != nil {
+			t.Fatalf("Select for msrd:activity-loader-nist: %v", err)
+		}
+		if len(results.Results.Bindings) == 0 {
+			t.Fatal("expected msrd:activity-loader-nist to carry at least one attribute triple in urn:msr:data, got none")
+		}
+		for _, b := range results.Results.Bindings {
+			p := b["p"].Value
+			if p == "http://www.w3.org/ns/prov#startedAtTime" || p == "http://www.w3.org/ns/prov#endedAtTime" {
+				t.Errorf("msrd:activity-loader-nist unexpectedly carries timestamp predicate %s -- this would break urn:msr:data idempotency across repeat runs", p)
+			}
+		}
+
+		// COUNT(?activity) with a bound variable, not COUNT(*) over a fully
+		// ground (zero-variable) BGP: this GraphDB deployment's SPARQL
+		// engine returns 0 for COUNT(*) when the WHERE clause has no
+		// variables at all, even when the ground triple pattern matches
+		// (confirmed independently via ASK, which correctly returns true) --
+		// so COUNT(*) here would be a false negative, not a real assertion.
+		countQuery := `
+			PREFIX msrd: <https://w3id.org/msr-kg/data#>
+			PREFIX prov: <http://www.w3.org/ns/prov#>
+			SELECT (COUNT(?activity) AS ?count) WHERE {
+				?activity a prov:Activity .
+				FILTER(?activity = msrd:activity-loader-nist)
+			}
+		`
+		results, err = client.Select(ctx, countQuery)
+		if err != nil {
+			t.Fatalf("Select counting msrd:activity-loader-nist typing: %v", err)
+		}
+		if len(results.Results.Bindings) != 1 {
+			t.Fatalf("expected exactly one COUNT(?activity) binding, got %d", len(results.Results.Bindings))
+		}
+		if got := results.Results.Bindings[0]["count"].Value; got != "1" {
+			t.Errorf("expected exactly one `a prov:Activity` typing triple for msrd:activity-loader-nist in urn:msr:data after a repeat run, got count=%s", got)
+		}
+	})
+
 	for _, anchor := range []struct {
 		name  string
 		curie string
