@@ -1,14 +1,20 @@
-"""Novelty-detection miner (novelty-detection spec, design.md D2/D9).
+"""Novelty-detection miner (novelty-detection spec, refine-mine-salience design.md D1/D5).
 
 Enumerates candidate terms from two sources without re-running the chunk-6
-spaCy linker: (a) a lexical term-candidate pass over the curated
-documents' ``segments.jsonl`` text, and (b) the chunk-6
-``mentions.jsonl`` artifacts' ``status:"novel"`` records (unresolved
-salt-formula spans). Chunk 6's matcher is a rules-only
+spaCy linker: (a) a **spaCy noun-chunk pass** (:func:`enumerate_spacy_terms`)
+over the curated documents' ``segments.jsonl`` text -- content tokens kept
+only when alphabetic, non-stopword, length >= 3, and not part of a
+non-concept named entity, lemmatized, 1-3 surviving tokens per chunk -- and
+(b) the chunk-6 ``mentions.jsonl`` artifacts' ``status:"novel"`` records
+(unresolved salt-formula spans, unchanged). If the spaCy model cannot be
+loaded (:func:`load_spacy_pipeline` returns ``None``), the miner falls back
+to the prior lexical unigram/bigram/trigram pass
+(:func:`enumerate_lexical_terms`, kept intact for exactly this purpose)
+rather than failing (design D5). Chunk 6's matcher is a rules-only
 ``spacy.blank("en")`` pipeline that recognizes only seeded labels and
 salt-formula-shaped spans, so it never surfaces arbitrary novel
-terminology such as ``solubility`` or ``graphite`` -- the lexical pass is
-what makes those plain-prose terms discoverable at all.
+terminology such as ``solubility`` or ``graphite`` -- the spaCy/lexical pass
+is what makes those plain-prose terms discoverable at all.
 
 Before scoring, candidates whose normalized term already resolves to a
 known concept/class/individual in the **core dataset** (read through
@@ -42,7 +48,9 @@ from __future__ import annotations
 import json
 import logging
 import re
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from msr_extraction.config import Config
 from msr_extraction.curated import CURATED_REPORTS
@@ -145,6 +153,202 @@ _TOKEN_RE = re.compile(r"[A-Za-z]+(?:[-'][A-Za-z]+)*")
 
 #: n-gram sizes the lexical pass emits (unigrams through trigrams).
 _NGRAM_SIZES = (1, 2, 3)
+
+#: Named-entity types whose tokens are dropped from a spaCy noun chunk
+#: (design D1): people, organizations, places, and non-concept numeric/
+#: temporal entity types. A token survives only when spaCy assigns it
+#: `ent_type_ == ""` (not part of any entity) or an entity type outside
+#: this set.
+_DROPPED_ENT_TYPES = frozenset(
+    {
+        "PERSON",
+        "ORG",
+        "GPE",
+        "LOC",
+        "FAC",
+        "NORP",
+        "DATE",
+        "TIME",
+        "CARDINAL",
+        "ORDINAL",
+        "MONEY",
+        "PERCENT",
+        "QUANTITY",
+    }
+)
+
+#: spaCy pipeline components :func:`load_spacy_pipeline` keeps enabled
+#: (design D1/1.2): `tok2vec` feeds every statistical component below it;
+#: `tagger`/`attribute_ruler`/`lemmatizer` produce the lemmas
+#: :func:`enumerate_spacy_terms` forms candidates from; `parser` (or
+#: `senter`, kept if present) is what makes `doc.noun_chunks` available;
+#: `ner` is the entity-type filter above. Any OTHER component the loaded
+#: model happens to ship (e.g. a `textcat`) is disabled for perf, since
+#: none of this module's logic consults it.
+_KEEP_PIPES = frozenset(
+    {"tok2vec", "tagger", "attribute_ruler", "lemmatizer", "parser", "senter", "ner"}
+)
+
+#: Maximum surviving-token window a single noun chunk contributes to a
+#: candidate term (design D1: "form the candidate from 1-3 surviving
+#: tokens"). A chunk with more than 3 surviving content tokens keeps only
+#: the TRAILING `_MAX_CHUNK_TOKENS` of them: English noun-phrase heads are
+#: overwhelmingly chunk-final (e.g. "molten salt reactor coolant" is
+#: headed by "coolant"), so the trailing window is a deterministic,
+#: reasonable proxy for "the head plus its nearest modifiers" without
+#: inspecting `noun_chunk.root` explicitly (an assumption worth
+#: reconsidering if it under-performs in practice).
+_MAX_CHUNK_TOKENS = 3
+
+
+def load_spacy_pipeline(config: Config) -> Any | None:
+    """Lazily load the injectable spaCy pipeline used for noun-chunk enumeration.
+
+    Deferred import (``import spacy``) so this module stays importable with
+    zero third-party dependencies even when spaCy or its pinned model
+    (``config.spacy_model``, default ``en_core_web_sm``) is unavailable
+    (design D5) -- mirrors the ``import spacy``-inside-the-function
+    convention already used by ``seeding.py``/``triage.py``.
+
+    On any load failure (spaCy not installed, or the named model's data not
+    present), logs a clear error and returns ``None`` -- the sentinel every
+    caller (:func:`mine_candidates`) MUST treat as "fall back to the n-gram
+    pass" rather than raising. On success, disables every pipeline
+    component NOT in :data:`_KEEP_PIPES` (perf; design D1's "disable unused
+    components where safe") and returns the loaded, trimmed pipeline.
+    """
+    try:
+        import spacy
+    except ImportError:
+        logger.error(
+            "spacy is not installed; falling back to n-gram candidate enumeration"
+        )
+        return None
+
+    try:
+        nlp = spacy.load(config.spacy_model)
+    except OSError:
+        logger.error(
+            "spaCy model %r could not be loaded (missing model data?); "
+            "falling back to n-gram candidate enumeration",
+            config.spacy_model,
+        )
+        return None
+
+    for name in list(nlp.pipe_names):
+        if name not in _KEEP_PIPES:
+            nlp.disable_pipe(name)
+    return nlp
+
+
+@dataclass(frozen=True)
+class _SpacyTermHit:
+    """One spaCy-enumerated term's collected evidence and representative surface form."""
+
+    evidence: tuple[Evidence, ...]
+    #: The shortest, then lexicographically-first, original chunk text
+    #: observed for this term -- deterministic regardless of segment
+    #: processing order (see :func:`enumerate_spacy_terms`).
+    surface_form: str
+
+
+def _surviving_chunk_tokens(chunk: Any) -> list[Any]:
+    """Content tokens of spaCy `chunk` surviving the design-D1 filters, in order.
+
+    Kept: alphabetic (`token.is_alpha`), non-stopword (`not
+    token.is_stop`), length >= 3, and not part of a dropped-type named
+    entity (`token.ent_type_` empty or outside :data:`_DROPPED_ENT_TYPES`).
+    """
+    survivors = []
+    for token in chunk:
+        if not token.is_alpha:
+            continue
+        if token.is_stop:
+            continue
+        if len(token.text) < 3:
+            continue
+        if token.ent_type_ in _DROPPED_ENT_TYPES:
+            continue
+        survivors.append(token)
+    return survivors
+
+
+def enumerate_spacy_terms(
+    reports: list[str], config: Config, nlp: Any
+) -> dict[str, _SpacyTermHit]:
+    """spaCy noun-chunk candidate pass over each report's curated `segments.jsonl` (design D1).
+
+    Reads each report's ``segments.jsonl`` exactly like
+    :func:`enumerate_lexical_terms` (a missing file is a logged warning, not
+    an error) so candidates carry identical :class:`Evidence` (report,
+    document IRI, full segment ``sentence_text``, offsets) to the lexical
+    pass. Runs every segment's text through `nlp.pipe` in one batch (perf);
+    for each `doc.noun_chunks` entry, keeps only the surviving tokens
+    (:func:`_surviving_chunk_tokens`) -- a chunk that reduces to zero
+    surviving tokens contributes no candidate. Surviving tokens beyond
+    :data:`_MAX_CHUNK_TOKENS` are trimmed to the trailing window; the
+    candidate ``term`` is the casefolded, space-joined lemma sequence, and
+    its ``surface_form`` is the original (untrimmed) chunk text.
+
+    A term's evidence is deduplicated per segment exactly like the lexical
+    pass (:data:`evidence_key` = ``(report, char_start)``); its
+    `surface_form` is picked deterministically (shortest, then
+    lexicographically-first observed chunk text for that term) since the
+    same lemma-normalized term can surface from differently-worded chunks
+    across segments/reports.
+
+    Returns ``term -> _SpacyTermHit``, built without relying on dict
+    iteration order (the caller, :func:`mine_candidates`, sorts its final
+    output).
+    """
+    segment_meta: list[tuple[str, str, int, str]] = []
+    for report in reports:
+        path = config.segments_path(report)
+        if not path.exists():
+            logger.warning(
+                "segments.jsonl missing for report %s at %s; skipping spaCy pass",
+                report,
+                path,
+            )
+            continue
+        document_iri = f"{MSRD}{report}"
+        for obj in _read_jsonl(path):
+            segment_meta.append((report, document_iri, obj["char_start"], obj["text"]))
+
+    evidence_by_term: dict[str, dict[tuple[str, int], Evidence]] = {}
+    surface_forms_by_term: dict[str, set[str]] = {}
+
+    texts = [text for (_, _, _, text) in segment_meta]
+    docs = nlp.pipe(texts)
+    for (report, document_iri, char_start, text), doc in zip(segment_meta, docs):
+        evidence_key = (report, char_start)
+        evidence = Evidence(
+            report=report,
+            document_iri=document_iri,
+            sentence_text=text,
+            start_offset=char_start,
+            end_offset=char_start + len(text),
+        )
+        for chunk in doc.noun_chunks:
+            survivors = _surviving_chunk_tokens(chunk)
+            if not survivors:
+                continue
+            if len(survivors) > _MAX_CHUNK_TOKENS:
+                survivors = survivors[-_MAX_CHUNK_TOKENS:]
+            term = " ".join(tok.lemma_.casefold() for tok in survivors)
+            if not term:
+                continue
+            evidence_bucket = evidence_by_term.setdefault(term, {})
+            evidence_bucket.setdefault(evidence_key, evidence)
+            surface_forms_by_term.setdefault(term, set()).add(chunk.text)
+
+    return {
+        term: _SpacyTermHit(
+            evidence=tuple(evidence_bucket.values()),
+            surface_form=min(surface_forms_by_term[term], key=lambda s: (len(s), s)),
+        )
+        for term, evidence_bucket in evidence_by_term.items()
+    }
 
 
 def _read_jsonl(path: Path) -> list[dict]:
