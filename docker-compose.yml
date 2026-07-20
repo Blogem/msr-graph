@@ -157,6 +157,12 @@ services:
       GRAPHDB_URL: http://graphdb:7200
       GRAPHDB_REPO: msr
       MSR_CORPUS_DIR: /data/corpus
+      # Chunk 7 (extract-property-relations): the SQLite measurement_value
+      # store and the QUDT unit allowlist directory, mirroring the `loader`
+      # service above so text-derived measurements land in the same store
+      # and units are validated against the same allowlist.
+      MSR_DB_PATH: /data/msr.db
+      MSR_ONTOLOGY_DIR: /app/ontology
       # Optional DeepSeek V4 Flash disambiguation config for `make link`
       # (chunk 6, ner-entity-linking design.md D5). Left empty by default so
       # the injected client's stubbed/absent-client path is used when unset.
@@ -178,6 +184,7 @@ services:
       MSR_DISAMBIG_REFRESH: ${MSR_DISAMBIG_REFRESH:-}
     volumes:
       - ./data:/data
+      - ./ontology:/app/ontology:ro
     depends_on:
       graphdb:
         condition: service_healthy

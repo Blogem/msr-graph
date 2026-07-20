@@ -40,6 +40,10 @@ Grounding pattern -- to resolve a salt or property mention to its measurement da
 	`prov:wasDerivedFrom. msr:dataLocator is the key into the measurement_value table read ` +
 	`by sql_query/run_python. A unit IRI carries an rdfs:label symbol (OPTIONAL it -- an ` +
 	`external unit may lack one, and a required join would drop every row).
+- Source dataset: follow the measurement's prov:wasDerivedFrom to its msr:Dataset and select ` +
+	`that dataset's dcterms:identifier (its DOI) and rdfs:label, so the answer cites the source ` +
+	`dataset by name and DOI -- not just a bare IRI. Bind them as OPTIONAL (a dataset may lack ` +
+	`either).
 
 Declare the prefixes you use as PREFIX lines in the query itself; the tool does not inject ` +
 	`them. A ready block (prov: is only needed for prov:wasDerivedFrom; skos: only for the ` +
@@ -54,9 +58,11 @@ Declare the prefixes you use as PREFIX lines in the query itself; the tool does 
 Worked example -- ground a salt reference and a property term to a measurement in one query ` +
 	`(fill the bracketed placeholders in with the tokens/digits/label for whatever salt and ` +
 	`property you are grounding):
-  PREFIX msr:  <https://w3id.org/msr-kg/ontology#>
-  PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
-  SELECT DISTINCT ?salt ?prop ?doc ?dataLocator ?equationForm ?validTempMin ?validTempMax ?unit ?unitLabel WHERE {
+  PREFIX msr:     <https://w3id.org/msr-kg/ontology#>
+  PREFIX rdfs:    <http://www.w3.org/2000/01/rdf-schema#>
+  PREFIX prov:    <http://www.w3.org/ns/prov#>
+  PREFIX dcterms: <http://purl.org/dc/terms/>
+  SELECT DISTINCT ?salt ?prop ?doc ?dataLocator ?equationForm ?validTempMin ?validTempMax ?unit ?unitLabel ?dataset ?datasetDOI ?datasetLabel WHERE {
     ?m a msr:Mention ; msr:surfaceForm ?sf ; msr:linksTo ?salt ; msr:inDocument ?doc .
     ?salt a msr:MoltenSalt .
     BIND(LCASE(STR(?sf)) AS ?sfNorm)
@@ -64,10 +70,12 @@ Worked example -- ground a salt reference and a property term to a measurement i
            && CONTAINS(?sf, "<composition digit 1>") && CONTAINS(?sf, "<composition digit 2>"))
     ?prop a msr:PhysicalProperty ; rdfs:label ?pl . FILTER(LCASE(STR(?pl)) = "<property term>")
     ?pm a msr:PropertyMeasurement ; msr:ofSalt ?salt ; msr:forProperty ?prop ;
-        msr:dataLocator ?dataLocator ; msr:equationForm ?equationForm ; msr:hasUnit ?unit .
+        msr:dataLocator ?dataLocator ; msr:equationForm ?equationForm ; msr:hasUnit ?unit ;
+        prov:wasDerivedFrom ?dataset .
     OPTIONAL { ?pm msr:validTempMin ?validTempMin }
     OPTIONAL { ?pm msr:validTempMax ?validTempMax }
     OPTIONAL { ?unit rdfs:label ?unitLabel }
+    OPTIONAL { ?dataset dcterms:identifier ?datasetDOI ; rdfs:label ?datasetLabel }
   }
 Then look up coefficients by ?dataLocator with sql_query and compute with run_python.
 

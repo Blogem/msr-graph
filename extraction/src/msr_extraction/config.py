@@ -52,6 +52,21 @@ class Config:
     # docs) and `graphite` (388/637 docs), so both clear it as salient, while
     # still filtering out low-frequency OCR noise terms from the candidate set.
     salience_threshold: int = 50
+    # Chunk 7 (extract-property-relations) — the SQLite measurement_value
+    # store's path (D-mirrors the Go loader/server `defaultDBPath =
+    # "data/msr.db"` and `MSR_DB_PATH` env), so text-derived measurements can
+    # be written to the same store as the NIST loader's rows.
+    db_path: Path = Path("data/msr.db")
+    # Precision knob for accepting an LLM-proposed relation as a written
+    # msr:PropertyMeasurement (chunk 7). 0.5 is a deliberately precision-biased
+    # default: a proposed relation must clear at least even odds before it is
+    # written to the graph, favoring fewer false positives over recall at POC
+    # scale.
+    confidence_threshold: float = 0.5
+    # Mirrors the loader's `MSR_ONTOLOGY_DIR=/app/ontology` (chunk 7) — the
+    # directory containing the QUDT unit allowlist used to validate
+    # LLM-proposed units before they are written.
+    ontology_dir: Path = Path("ontology")
     # Mention-writer batch size (scale-mention-linking, D1): a report's
     # mentions are written as multiple additive INSERT DATA POSTs of at most
     # this many mentions each, keeping any single POST body well under
@@ -66,7 +81,8 @@ class Config:
     # link wall-clock. 24 is a safe, effective default for this workload:
     # comfortably below DeepSeek's concurrency ceiling and any practical
     # rate limit, while enough to overlap the per-call latency that
-    # otherwise dominates. Override with MSR_DISAMBIG_CONCURRENCY.
+    # otherwise dominates. Override with MSR_DISAMBIG_CONCURRENCY. Reused by
+    # chunk 7's extract as the per-sentence relation-extraction fan-out size.
     disambig_concurrency: int = 24
     # When true, ignore any persisted disambiguation cache on load and
     # re-resolve every layer-5 surface via the model, rewriting the store
@@ -100,6 +116,13 @@ class Config:
             salience_threshold=int(
                 env.get("MSR_SALIENCE_THRESHOLD", cls.salience_threshold)
             ),
+            db_path=Path(env.get("MSR_DB_PATH", str(cls.db_path))),
+            confidence_threshold=float(
+                env.get(
+                    "MSR_EXTRACT_CONFIDENCE_THRESHOLD", cls.confidence_threshold
+                )
+            ),
+            ontology_dir=Path(env.get("MSR_ONTOLOGY_DIR", str(cls.ontology_dir))),
             mention_write_batch_size=int(
                 env.get("MSR_MENTION_WRITE_BATCH_SIZE", cls.mention_write_batch_size)
             ),
@@ -163,3 +186,12 @@ class Config:
     def normalized_path(self, report: str) -> Path:
         """Path to the chunk-5 OCR-normalized text for a given report."""
         return self.report_dir(report) / "normalized.txt"
+
+    def relations_path(self, report: str) -> Path:
+        """Path to the chunk-7 relation-extraction artifact for a given report."""
+        return self.report_dir(report) / "relations.jsonl"
+
+    @property
+    def qudt_units_path(self) -> Path:
+        """Path to the QUDT unit allowlist consulted by relation extraction."""
+        return self.ontology_dir / "qudt-units.json"

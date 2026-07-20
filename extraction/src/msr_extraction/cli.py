@@ -21,12 +21,17 @@ from msr_extraction import (
     curated,
     disambig_cache,
     documents,
+    edges,
     linker,
     manifest,
+    measurement_store,
+    measurements,
     mentions,
     mine_runner,
     provenance,
+    relations,
     segmenter,
+    units,
 )
 from msr_extraction.config import Config
 from msr_extraction.disambiguation import FlashClient, disambiguate
@@ -362,6 +367,128 @@ def _cmd_mine(config: Config) -> int:
     return 0
 
 
+def _cmd_extract(config: Config, reports: list[str] = curated.CURATED_REPORTS) -> int:
+    """Extract salt<->property<->value measurements and salt<->role/reactor
+    edges from linked sentences, write both measurement stores + role/reactor
+    edges (+ minted reactors) with per-fact generation provenance, and print
+    a per-doc run summary (design.md D2/D4/D5/D6/D7, tasks 7.1/5.6/2.2).
+
+    `reports` defaults to the full `curated.CURATED_REPORTS` set; callers
+    (e.g. the CLI dispatcher) may pass a `--report`/`--limit`-filtered subset
+    to bound a run to fewer documents.
+
+    Guards a missing `segments.jsonl` per report (logs a warning and skips
+    it) so a partial corpus doesn't crash the whole run.
+
+    Generates a single run timestamp for this invocation and writes the
+    stable per-pipeline `Activity` typing plus the per-run extraction
+    `Activity` node into `urn:msr:provenance` *before* processing any
+    report, so the run node exists before any measurement/edge write emits
+    a generation edge referencing it. Reuses the cached KG-schema prompt
+    prefix (task 2.2) rather than re-deriving it.
+    """
+    reader = GraphReader.from_config(config)
+    prompt_prefix = KGSchemaPromptCache().get(reader)
+
+    known = relations.KnownSets(
+        molten_salts=reader.read_molten_salts(),
+        physical_properties=reader.read_physical_properties(),
+        salt_roles=reader.read_salt_roles(),
+        reactor_concepts=reader.read_reactor_concepts(),
+    )
+    unit_mapper = units.UnitMapper.from_config(config)
+
+    client = FlashClient.from_config(config)
+    if client is None:
+        logger.warning(
+            "extract: DEEPSEEK_BASE_URL not configured; no relations will be extracted"
+        )
+        return 0
+
+    sparql = SparqlClient.from_config(config)
+    conn = measurement_store.connect(config.db_path)
+
+    run_ts = provenance.run_timestamp()
+    provenance.write_stable_activity(sparql)
+    provenance.write_activity(run_ts, sparql)
+
+    logger.info("extract: %d curated report(s) to process", len(reports))
+    logger.info("extract: fan-out concurrency=%d", config.disambig_concurrency)
+    for report in reports:
+        segments_path = config.segments_path(report)
+        if not segments_path.exists():
+            logger.warning("extract: report=%s missing %s, skipping", report, segments_path)
+            continue
+
+        result = relations.extract_report(
+            report,
+            config,
+            prompt_prefix,
+            client,
+            known,
+            unit_mapper,
+            concurrency=config.disambig_concurrency,
+        )
+
+        for m in result.measurements:
+            measurements.write_measurement(
+                salt_iri=m.salt_iri,
+                property_iri=m.property_iri,
+                property_name=m.property_name,
+                unit_curie=m.unit_curie,
+                equation=m.equation,
+                uncertainty=m.uncertainty,
+                confidence=m.confidence,
+                rationale=m.rationale,
+                report=m.report,
+                client=sparql,
+                conn=conn,
+                run_ts=run_ts,
+            )
+
+        role_edges = [
+            edges.RoleEdge(
+                salt_iri=r.salt_iri,
+                role_iri=r.role_iri,
+                report=r.report,
+                document_iri=f"msrd:{r.report}",
+                confidence=r.confidence,
+                rationale=r.rationale,
+            )
+            for r in result.roles
+        ]
+        reactor_edges = [
+            edges.ReactorEdge(
+                salt_iri=r.salt_iri,
+                reactor_slug=edges.slugify(r.reactor_label).lower(),
+                reactor_label=r.reactor_label,
+                grounding_concept_iri=r.reactor_concept_iri,
+                report=r.report,
+                document_iri=f"msrd:{r.report}",
+                confidence=r.confidence,
+                rationale=r.rationale,
+            )
+            for r in result.reactors
+        ]
+        edges.write_edges(role_edges, reactor_edges, sparql, run_ts)
+
+        rejected = sum(1 for record in result.records if record.disposition == "rejected")
+        skipped = sum(1 for record in result.records if record.disposition == "skipped")
+        summary = (
+            f"extract: report={report} sentences={result.sentences_seen} "
+            f"relations={len(result.records)} measurements={len(result.measurements)} "
+            f"roles={len(result.roles)} reactors={len(result.reactors)} "
+            f"rejected={rejected} skipped={skipped} "
+            f"malformed_calls={result.malformed_calls}"
+        )
+        logger.info(summary)
+        print(summary)
+
+    conn.close()
+    logger.info("extract: complete")
+    return 0
+
+
 _HANDLERS = {
     "acquire": _cmd_acquire,
     "manifest": _cmd_manifest,
@@ -370,6 +497,7 @@ _HANDLERS = {
     "ingest": _cmd_ingest,
     "link": _cmd_link,
     "mine": _cmd_mine,
+    "extract": _cmd_extract,
 }
 
 
@@ -416,6 +544,25 @@ def _build_parser() -> argparse.ArgumentParser:
             "write proposals to staging + auto-accepted instances to data."
         ),
     )
+    extract_parser = subparsers.add_parser(
+        "extract",
+        help=(
+            "Extract salt<->property<->value measurements and salt<->role/reactor "
+            "edges from linked sentences; write both stores + relations.jsonl."
+        ),
+    )
+    extract_parser.add_argument(
+        "--report",
+        action="append",
+        metavar="ID",
+        help="Restrict extraction to this curated report id (repeatable). Default: all curated reports.",
+    )
+    extract_parser.add_argument(
+        "--limit",
+        type=int,
+        metavar="N",
+        help="Process only the first N of the (possibly --report-filtered) selection.",
+    )
 
     return parser
 
@@ -438,6 +585,16 @@ def main(argv: list[str] | None = None) -> int:
             print(f"link: {exc}", file=sys.stderr)
             return 1
         return _cmd_link(config, reports=reports)
+
+    if args.command == "extract":
+        try:
+            reports = _resolve_link_reports(
+                curated.CURATED_REPORTS, args.report, args.limit
+            )
+        except ValueError as exc:
+            print(f"extract: {exc}", file=sys.stderr)
+            return 1
+        return _cmd_extract(config, reports=reports)
 
     handler = _HANDLERS[args.command]
     return handler(config)

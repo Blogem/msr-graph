@@ -270,6 +270,36 @@ func TestBuildSchemaPrompt_HeaderDescribesLinksToGroundingNotCloseMatch(t *testi
 	}
 }
 
+func TestBuildSchemaPrompt_HeaderForbidsCatalogShortcutAndIRIGuessing(t *testing.T) {
+	ctx := context.Background()
+
+	f := newFakeSchemaSource()
+	seedFixture(f, "0.1.0-seed")
+
+	prompt, err := agent.BuildSchemaPrompt(ctx, f)
+	if err != nil {
+		t.Fatalf("BuildSchemaPrompt: %v", err)
+	}
+
+	// Positive reinforcement (finding #2): the header must steer the agent
+	// to the Mention->linksTo grounding query and explicitly discourage the
+	// shortcuts observed in the demo -- guessing an msrd: IRI or label-matching
+	// the salt catalog directly instead of grounding through a real Mention.
+	for _, want := range []string{
+		"guessing an msrd:",
+		"orientation only",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Errorf("prompt header missing reinforcement %q\nprompt:\n%s", want, prompt)
+		}
+	}
+
+	// The reinforcement must not reintroduce the forbidden closeMatch token.
+	if strings.Contains(strings.ToLower(prompt), "closematch") {
+		t.Errorf("reinforcement reintroduced skos:closeMatch; got: %s", prompt)
+	}
+}
+
 func TestPromptCache_ReusesUntilVersionBump(t *testing.T) {
 	ctx := context.Background()
 

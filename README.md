@@ -49,7 +49,11 @@ make load-seed  # initialize the SQLite measurement_value schema and load the
                 # and ensure urn:msr:staging exists. There is no seed A-Box —
                 # urn:msr:data starts empty and is populated exclusively by
                 # `make load-nist` below and the extraction pipeline
-                # (`make ingest` + `make link`).
+                # (`make ingest` + `make link` + `make extract`). Because this
+                # PUTs only the TBox/vocab graphs and never touches
+                # urn:msr:data, it is safe to re-run at any point after data
+                # has been loaded — that is how a `msr.ttl` TBox edit gets
+                # applied to a live store.
 
 make load-nist  # ingest the 4 vendored NIST SRD 27 fluoride CSVs: coefficient
                 # rows -> SQLite measurement_value (source='nist'); MoltenSalt /
@@ -77,6 +81,13 @@ make link       # one-shot Compose run of the extraction container: seed the
                 # `make load-seed` to have run first (the mention T-Box lives
                 # in ontology/msr.ttl) as well as `make ingest` (segments.jsonl).
 
+make extract    # one-shot Compose run of the extraction container:
+                # LLM-assisted property-relation extraction over each curated
+                # document's linked mentions (see
+                # openspec/changes/extract-property-relations/design.md).
+                # Requires `make link` to have run first (mentions.jsonl and
+                # the msr:Mention graph). See "Property-relation extraction
+                # (`make extract`)" below for what it writes.
 make mine       # one-shot Compose run of the extraction container: enumerate
                 # novel candidates -> score -> triage -> write msr:ChangeProposal
                 # proposals + auto-accepted instances (see
@@ -111,13 +122,14 @@ or mentions until the real pipeline has run. To reproduce the density demo
 end to end on a fresh stack:
 
 ```bash
-make up && make load-nist && make ingest && make link && make demo-density
+make up && make load-nist && make ingest && make link && make extract && make demo-density
 ```
 
 `make link`'s Flash disambiguation layer may need `DEEPSEEK_API_KEY` set in
 the environment (the deterministic composed-salt match itself needs no LLM).
-`make demo-density` depends on that full build having populated
-`urn:msr:data` — it is not a standalone fixture.
+`make extract`'s LLM-assisted relation extraction likewise needs
+`DEEPSEEK_API_KEY` set. `make demo-density` depends on that full build having
+populated `urn:msr:data` — it is not a standalone fixture.
 
 ## SHACL validation (write-time enforcement)
 
@@ -218,6 +230,33 @@ spans the lexical layers can't settle, and writes the results both as
 
   The file is regenerated wholesale on each `make link` run, so it is
   idempotent like the graph writes.
+
+## Property-relation extraction (`make extract`)
+
+`make extract` runs the `extraction` container's LLM-assisted
+property-relation extraction pipeline (see
+[`openspec/changes/extract-property-relations/design.md`](openspec/changes/extract-property-relations/design.md)
+for the full design): for each curated document, it prompts the configured
+LLM with the document's linked mentions and text, proposes
+property/value/unit relations, validates proposed units against the QUDT
+allowlist (`ontology/qudt-units.json`) and filters by
+`MSR_EXTRACT_CONFIDENCE_THRESHOLD` (default 0.5, precision-biased), and
+writes the accepted relations as:
+
+- **`measurement_value` rows** (`source='document'`) in the SQLite store at
+  `MSR_DB_PATH`, alongside the NIST loader's `source='nist'` rows.
+- **`msr:PropertyMeasurement`** nodes in `urn:msr:data`, each carrying
+  `msr:extractionConfidence`, `msr:extractionRationale`, and `msr:citedIn`
+  back to the source `msr:Document`.
+- Minted **`msr:MoltenSaltReactor`** individuals and `msr:hasRole` /
+  `msr:usedIn` edges where the text supports them, each reified as an
+  `rdf:Statement` so the edge itself can carry the same provenance
+  properties.
+- Per-run lineage in `urn:msr:provenance` (the same run-Activity pattern used
+  by `make ingest`/`make link`; see `provenance.py`).
+- **`data/corpus/{report#}/relations.jsonl`** — one JSON object per proposed
+  relation (accepted or rejected), regenerated wholesale on each run like
+  `mentions.jsonl`, for inspection/debugging of the extraction pass.
 
 ## `data/` bind-mount ownership
 
