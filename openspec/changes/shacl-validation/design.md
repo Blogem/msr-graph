@@ -33,7 +33,7 @@ Current state:
 
 GraphDB's SHACL is a **repository capability fixed at creation time** (confirmed against the GraphDB SHACL docs: *"SHACL support in a given repository must be enabled when that repository is created … you cannot modify an already existing repository by enabling the validation afterwards"*). Enabling it belongs in `deploy/graphdb/msr-repo-config.ttl` so `ensure-repo.sh` creates a SHACL-enabled repo in one POST, keeping provisioning declarative and idempotent. Alternative — enabling SHACL through a REST call after creation — was rejected: GraphDB pins validation config at creation, so it is not even possible.
 
-**Verified config surface (GraphDB 11.x, confirm the exact sail-type string on 11.4.2).** GraphDB's SHACL is a **wrapping sail**: the repository's `sr:sailImpl` becomes `sail:sailType "graphdb:ShaclSail"` and the *current* GraphDB sail config (with `graphdb:ruleset "empty"` — D2 preserved) moves verbatim under `sail:delegate [ … ]`. SHACL parameters use the prefix `sail-shacl: <http://rdf4j.org/config/sail/shacl#>`. Target shape:
+**Verified config surface (GraphDB 11.4.2, sail-type literal confirmed live).** GraphDB's SHACL is a **wrapping sail**: the repository's `sr:sailImpl` becomes `sail:sailType "rdf4j:ShaclSail"` and the *current* GraphDB sail config (with `graphdb:ruleset "empty"` — D2 preserved) moves verbatim under `sail:delegate [ … ]`. SHACL parameters use the prefix `sail-shacl: <http://rdf4j.org/config/sail/shacl#>`. Task 1.2 confirmed the sail-type literal against a live GraphDB 11.4.2 instance (throwaway "shacl_roundtrip" repo, create-then-download-config round-trip): GraphDB rejects the GraphDB-native-looking guess `"graphdb:ShaclSail"` with HTTP 400 `Unsupported Sail type: graphdb:ShaclSail` and only accepts `"rdf4j:ShaclSail"` — the delivered `deploy/graphdb/msr-repo-config.ttl` uses this confirmed literal. Target shape:
 
 ```turtle
 @prefix sail-shacl: <http://rdf4j.org/config/sail/shacl#>.
@@ -41,7 +41,7 @@ GraphDB's SHACL is a **repository capability fixed at creation time** (confirmed
 
     sr:sailImpl [
         rep:repositoryType "graphdb:SailRepository" ;
-        sail:sailType "graphdb:ShaclSail" ;
+        sail:sailType "rdf4j:ShaclSail" ;
         sail-shacl:validationEnabled true ;
         sail-shacl:shapesGraph <http://rdf4j.org/schema/rdf4j#SHACLShapeGraph> ;
         sail-shacl:parallelValidation true ;
@@ -99,7 +99,7 @@ Because provisioning is check-then-create, an existing pre-SHACL `msr` repo on a
 
 ## Risks / Trade-offs
 
-- **[Exact 11.4.2 sail-type string]** → The config surface is now determined (D1): `graphdb:ShaclSail` wrapper + `sail:delegate`, `sail-shacl:` params, reserved shapes graph. The one residual is confirming the sail-type literal is `graphdb:ShaclSail` (GraphDB-native, matches UI-generated config) vs. `rdf4j:ShaclSail` on 11.4.2 exactly. Mitigation: the config-apply task verifies by round-tripping the config through GraphDB's own "create then download config" and diffing — no guessing.
+- **[Exact 11.4.2 sail-type string]** → RESOLVED. The config surface is determined and confirmed (D1): `rdf4j:ShaclSail` wrapper + `sail:delegate`, `sail-shacl:` params, reserved shapes graph. Task 1.2 confirmed the sail-type literal live against GraphDB 11.4.2 by round-tripping the config through GraphDB's own "create then download config" and diffing: GraphDB accepts only `rdf4j:ShaclSail` and returns HTTP 400 (`Unsupported Sail type: graphdb:ShaclSail`) for the GraphDB-native-looking guess. No guessing was needed — the delivered `deploy/graphdb/msr-repo-config.ttl` uses the confirmed literal.
 - **[Chunk 12 landed — provenance present]** → Chunk 12 `provenance-model` is landed and archived, so every measurement, mention, and catalog individual (`msr:MoltenSalt`/`msr:Constituent`/`msr:ChemicalCompound`) already carries `prov:wasDerivedFrom` + `prov:wasGeneratedBy`; the provenance-requiring shapes reject-if-absent without blocking valid writes. `msr:citedIn` is the one predicate no writer asserts (deferred to chunk 7), so the shapes deliberately do **not** require it — requiring it would reject every real measurement. Integration fixtures asserting acceptance of valid data must include the PROV edges the writers now emit.
 - **[Recreating the repo drops existing data]** → A developer bringing up on an old `graphdb-data` volume would get a silently pre-SHACL repo (check-then-create no-ops). Mitigation: D7 makes `ensure-repo.sh` detect and warn/fail on a non-SHACL existing repo, plus the documented volume-drop step. Acceptable data loss — POC data is disposable/replayable.
 - **[SHACL feature limits]** → GraphDB's engine omits some SHACL features (zero-or-more paths, `sh:xone`, qualified shapes, `sh:closed`, pairwise comparisons — see D4). Mitigation: none of our shapes need them; the one comparison (`validTempMin ≤ validTempMax`) is a filter inside a `sh:sparql` `SELECT`, which is supported. If a future shape needs an omitted feature, express it via `sh:sparql` or document the gap.
@@ -117,7 +117,7 @@ Because provisioning is check-then-create, an existing pre-SHACL `msr` repo on a
 
 Resolved from the GraphDB SHACL documentation (11.x line) rather than deferred to a spike:
 
-- **Config surface / shapes-graph IRI** → Determined (D1, D2): `graphdb:ShaclSail` wrapper with the current sail under `sail:delegate`; `sail-shacl: <http://rdf4j.org/config/sail/shacl#>` params (`validationEnabled`, `shapesGraph`, `parallelValidation`, `serializableValidation`, `logValidationViolations`, `transactionalValidationLimit`, …); shapes loaded into `http://rdf4j.org/schema/rdf4j#SHACLShapeGraph`. SHACL must be set at repo creation — cannot be added later. Only residual: confirm the sail-type literal (`graphdb:ShaclSail` vs `rdf4j:ShaclSail`) on 11.4.2 via config round-trip (Risks).
+- **Config surface / shapes-graph IRI** → Determined and confirmed (D1, D2): `rdf4j:ShaclSail` wrapper with the current sail under `sail:delegate`; `sail-shacl: <http://rdf4j.org/config/sail/shacl#>` params (`validationEnabled`, `shapesGraph`, `parallelValidation`, `serializableValidation`, `logValidationViolations`, `transactionalValidationLimit`, …); shapes loaded into `http://rdf4j.org/schema/rdf4j#SHACLShapeGraph`. SHACL must be set at repo creation — cannot be added later. Sail-type literal confirmed as `rdf4j:ShaclSail` on 11.4.2 via live config round-trip (task 1.2) — `graphdb:ShaclSail` is rejected with HTTP 400.
 - **`sh:sparql` support** → Yes (D4): GraphDB supports `sh:SPARQLConstraint` + `sh:SPARQLTarget`; the `linksTo` target-kind and `validTempMin ≤ validTempMax` checks use it. Path/feature limits noted in D4; none of our shapes hit them. No alternative solution required.
 - **Bulk-load strategy** → Per-transaction (incremental) validation (D6): POC batches are far below `transactionalValidationLimit` (500000). Load-then-validate kept only as a documented fallback for a future large ingest.
 - **Detect non-SHACL existing repo** → Yes (D7): `ensure-repo.sh` inspects an already-present repo's config and warns/fails if SHACL is not enabled, closing the silent-no-op-on-old-volume trap.
