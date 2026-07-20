@@ -172,6 +172,10 @@ services:
       # values stay safe under rate limits.
       MSR_DISAMBIG_CONCURRENCY: ${MSR_DISAMBIG_CONCURRENCY:-24}
       MSR_MENTION_WRITE_BATCH_SIZE: ${MSR_MENTION_WRITE_BATCH_SIZE:-500}
+      # Set MSR_DISAMBIG_REFRESH=1 to ignore the persisted disambiguation
+      # cache (data/corpus/disambiguation-cache.json) and re-resolve every
+      # layer-5 surface via the model (persist-disambiguation-cache).
+      MSR_DISAMBIG_REFRESH: ${MSR_DISAMBIG_REFRESH:-}
     volumes:
       - ./data:/data
     depends_on:
