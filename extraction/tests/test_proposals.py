@@ -26,6 +26,7 @@ from msr_extraction.mining_types import (
     KIND_RELATION,
     Placement,
     TriagedCandidate,
+    safe_type_ref,
     term_slug,
 )
 from msr_extraction.proposals import (
@@ -278,6 +279,17 @@ UNSAFE_PLACEMENT_VALUES = [
     pytest.param(FULL_IRI_PAYLOAD, id="full-iri"),
     pytest.param(PUNCTUATION_PAYLOAD, id="punctuation-and-space"),
 ]
+
+
+def test_safe_type_ref_rejects_trailing_newline() -> None:
+    """Hardening (security re-review): `^...$`-anchored regexes matched via
+    `.match()` let Python's `$` match just before a single trailing `\\n`,
+    so `"msr:Foo\\n"`/`"Foo\\n"` would slip through unchanged. The
+    validation now uses `.fullmatch()`, which requires the entire string
+    (including a trailing newline) to be consumed -- both forms must be
+    rejected."""
+    assert safe_type_ref("msr:Foo\n") is None
+    assert safe_type_ref("Foo\n") is None
 
 
 @pytest.mark.parametrize("unsafe_value", UNSAFE_PLACEMENT_VALUES)

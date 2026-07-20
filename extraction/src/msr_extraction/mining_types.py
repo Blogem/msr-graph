@@ -96,11 +96,11 @@ def safe_type_ref(value: str | None) -> str | None:
 
     if ":" in value:
         prefix, _, local = value.partition(":")
-        if prefix in _SAFE_CURIE_PREFIXES and _CURIE_LOCAL_RE.match(local):
+        if prefix in _SAFE_CURIE_PREFIXES and _CURIE_LOCAL_RE.fullmatch(local):
             return value
         return None
 
-    if _BARE_LOCAL_RE.match(value):
+    if _BARE_LOCAL_RE.fullmatch(value):
         return f"msr:{value}"
 
     return None
