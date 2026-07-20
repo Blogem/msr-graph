@@ -47,8 +47,8 @@
 
 ## 7. Validation
 
-- [ ] 7.1 `go build ./...` and `go vet ./...` pass.
-- [ ] 7.2 `go test ./...` passes (unit tests always; integration tests against a dockerized GraphDB per the repo's integration-test convention — do not point at the live `msr` repo).
-- [ ] 7.3 `openspec validate apply-ontology-changes --strict` passes.
+- [x] 7.1 `go build ./...` and `go vet ./...` pass.
+- [x] 7.2 `go test ./...` passes (unit tests always; integration tests against a dockerized GraphDB per the repo's integration-test convention — do not point at the live `msr` repo).
+- [x] 7.3 `openspec validate apply-ontology-changes --strict` passes.
 - [ ] 7.4 Manual end-to-end with a **fixture proposal** (the miner does not yet produce good real candidates — that mechanism is still being worked on): insert a hand-written `solubility` (or `graphite`) `msr:ChangeProposal` + `urn:msr:proposal/{id}` graph into `urn:msr:staging` (same `client.Update` pattern the integration tests use), then `make checkpoint` → approve via the API (agent now answers solubility) → `make restore` reverts it → re-approve reproduces it.
 - [ ] 7.5 **Deferred until the miner produces good candidates**: re-run the 7.4 flow end-to-end against real `make mine` output (real staged `solubility`/`graphite` proposals) rather than the fixture, to confirm the field shapes match what the miner actually writes.
