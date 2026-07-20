@@ -339,6 +339,79 @@ def test_cmd_link_prewarm_resolves_surfaces_concurrently(tmp_path, monkeypatch) 
     )
 
 
+def _setup_single_unresolved_report(tmp_path, monkeypatch, known):
+    """Wire a hermetic link run over one report whose segment holds a single
+    unresolved layer-5 surface ("NaCl-KCl"). Returns nothing; callers patch
+    FlashClient themselves per run."""
+    monkeypatch.setenv("MSR_CORPUS_DIR", str(tmp_path))
+    monkeypatch.setattr(curated, "CURATED_REPORTS", [REPORT])
+    monkeypatch.setattr(
+        cli, "GraphReader",
+        SimpleNamespace(from_config=lambda config: _FakeGraphReader(known)),
+    )
+    monkeypatch.setattr(
+        cli, "SparqlClient",
+        SimpleNamespace(from_config=lambda config: _FakeSparqlClient()),
+    )
+    report_dir = tmp_path / REPORT
+    report_dir.mkdir(parents=True)
+    text = "molten NaCl-KCl was tested."
+    segment = {"report": REPORT, "index": 0, "text": text, "char_start": 0, "char_end": len(text)}
+    (report_dir / "segments.jsonl").write_text(json.dumps(segment) + "\n", encoding="utf-8")
+
+
+def _run_link_with_counting_client(monkeypatch) -> _CountingFlashClient:
+    fake = _CountingFlashClient()
+    monkeypatch.setattr(cli, "FlashClient", SimpleNamespace(from_config=lambda config: fake))
+    assert cli.main(["link"]) == 0
+    return fake
+
+
+def test_second_run_uses_persisted_cache_and_makes_no_model_calls(tmp_path, monkeypatch) -> None:
+    """A first run persists its layer-5 outcome; a second run over the same
+    graph + corpus seeds from the cache and issues zero model calls."""
+    _setup_single_unresolved_report(tmp_path, monkeypatch, _known_entities())
+
+    first = _run_link_with_counting_client(monkeypatch)
+    assert first.surfaces == ["NaCl-KCl"], first.surfaces
+    assert (tmp_path / "disambiguation-cache.json").exists()
+
+    second = _run_link_with_counting_client(monkeypatch)
+    assert second.surfaces == [], f"second run should hit cache, got {second.surfaces}"
+
+
+def test_refresh_flag_forces_re_resolution(tmp_path, monkeypatch) -> None:
+    """MSR_DISAMBIG_REFRESH re-resolves despite a matching persisted cache."""
+    _setup_single_unresolved_report(tmp_path, monkeypatch, _known_entities())
+    _run_link_with_counting_client(monkeypatch)  # populate cache
+
+    monkeypatch.setenv("MSR_DISAMBIG_REFRESH", "1")
+    refreshed = _run_link_with_counting_client(monkeypatch)
+    assert refreshed.surfaces == ["NaCl-KCl"], refreshed.surfaces
+
+
+def test_changed_known_iris_invalidates_cache(tmp_path, monkeypatch) -> None:
+    """A different known-IRI set is a cache miss: the run re-resolves and
+    rewrites the store with the new hash."""
+    _setup_single_unresolved_report(tmp_path, monkeypatch, _known_entities())
+    _run_link_with_counting_client(monkeypatch)  # populate cache for known set 1
+
+    # Add an entity -> the known-IRI set (and its hash) changes.
+    extended = _known_entities() + [
+        KnownEntity(
+            target_iri="https://w3id.org/msr-kg/data#salt-extra",
+            labels=("Extra",),
+            kind="salt",
+        )
+    ]
+    monkeypatch.setattr(
+        cli, "GraphReader",
+        SimpleNamespace(from_config=lambda config: _FakeGraphReader(extended)),
+    )
+    after_change = _run_link_with_counting_client(monkeypatch)
+    assert after_change.surfaces == ["NaCl-KCl"], after_change.surfaces
+
+
 # --- `_resolve_link_reports` (pure helper) -----------------------------------
 
 

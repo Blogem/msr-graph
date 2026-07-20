@@ -19,6 +19,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from msr_extraction import (
     acquisition,
     curated,
+    disambig_cache,
     documents,
     linker,
     manifest,
@@ -172,6 +173,7 @@ def _cmd_link(config: Config, reports: list[str] = curated.CURATED_REPORTS) -> i
     client = FlashClient.from_config(config)
     disambiguator: linker.Disambiguator | None = None
     prewarm_report: "Callable[[str], None] | None" = None
+    save_disambig_cache: "Callable[[], None] | None" = None
     if client is not None:
         # Per-run disambiguation cache keyed on surface form
         # (cache-disambiguation-by-surface): layer-5 candidates are
@@ -181,6 +183,37 @@ def _cmd_link(config: Config, reports: list[str] = curated.CURATED_REPORTS) -> i
         # validation inside `disambiguate` still gates every link, so a
         # cached outcome can never be a link to an unloaded IRI.
         _disambig_cache: dict[str, tuple[str, str | None]] = {}
+
+        # Cross-run persistence (persist-disambiguation-cache D2/D3): seed the
+        # cache from the on-disk store, but only when it was written against
+        # the same known-IRI set (the hash guards staleness). Seeded surfaces
+        # are skipped by the pre-warm collector, so an unchanged graph makes
+        # zero model calls on re-run. Seeded `linked` entries are re-validated
+        # against the live known-IRI set (belt-and-suspenders against a
+        # hand-edited store).
+        _iris_hash = disambig_cache.known_iris_hash(known_iris)
+        if not config.disambig_cache_refresh:
+            seeded = disambig_cache.load_cache(config.disambig_cache_path, _iris_hash)
+            for surface, (status, target_iri) in seeded.items():
+                if status == "linked" and target_iri not in known_iris:
+                    continue
+                _disambig_cache[surface] = (status, target_iri)
+            if _disambig_cache:
+                logger.info(
+                    "link: seeded %d disambiguation outcome(s) from %s",
+                    len(_disambig_cache),
+                    config.disambig_cache_path,
+                )
+
+        def save_disambig_cache() -> None:
+            disambig_cache.save_cache(
+                config.disambig_cache_path, _iris_hash, _disambig_cache
+            )
+            logger.info(
+                "link: wrote %d disambiguation outcome(s) to %s",
+                len(_disambig_cache),
+                config.disambig_cache_path,
+            )
 
         def _resolve(surface: str, sentence: str) -> tuple[str, str | None]:
             result = disambiguate(surface, sentence, prompt_prefix, known_iris, client)
@@ -295,6 +328,9 @@ def _cmd_link(config: Config, reports: list[str] = curated.CURATED_REPORTS) -> i
         )
         logger.info(summary)
         print(summary)
+
+    if save_disambig_cache is not None:
+        save_disambig_cache()
 
     logger.info("link: complete")
     return 0

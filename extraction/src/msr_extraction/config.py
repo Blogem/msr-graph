@@ -62,6 +62,10 @@ class Config:
     # rate limit, while enough to overlap the per-call latency that
     # otherwise dominates. Override with MSR_DISAMBIG_CONCURRENCY.
     disambig_concurrency: int = 24
+    # When true, ignore any persisted disambiguation cache on load and
+    # re-resolve every layer-5 surface via the model, rewriting the store
+    # (persist-disambiguation-cache D4). Env MSR_DISAMBIG_REFRESH.
+    disambig_cache_refresh: bool = False
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> Config:
@@ -93,6 +97,10 @@ class Config:
             disambig_concurrency=int(
                 env.get("MSR_DISAMBIG_CONCURRENCY", cls.disambig_concurrency)
             ),
+            disambig_cache_refresh=(
+                env.get("MSR_DISAMBIG_REFRESH", "").strip().lower()
+                in ("1", "true", "yes")
+            ),
         )
 
     @property
@@ -108,6 +116,16 @@ class Config:
     def report_dir(self, report: str) -> Path:
         """Directory holding the processed artifacts for a given report number."""
         return self.corpus_dir / report
+
+    @property
+    def disambig_cache_path(self) -> Path:
+        """Path to the persisted layer-5 disambiguation cache (corpus-scoped).
+
+        Under ``corpus_dir`` (the ./data bind mount) so it survives across
+        `make link` container runs, and gitignored so it is never committed
+        (persist-disambiguation-cache D1).
+        """
+        return self.corpus_dir / "disambiguation-cache.json"
 
     @property
     def sparql_update_endpoint(self) -> str:
