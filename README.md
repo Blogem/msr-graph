@@ -77,9 +77,26 @@ make link       # one-shot Compose run of the extraction container: seed the
                 # `make load-seed` to have run first (the mention T-Box lives
                 # in ontology/msr.ttl) as well as `make ingest` (segments.jsonl).
 
+make mine       # one-shot Compose run of the extraction container: enumerate
+                # novel candidates -> score -> triage -> write msr:ChangeProposal
+                # proposals + auto-accepted instances (see
+                # openspec/changes/mine-ontology-candidates/design.md). Requires
+                # `make load-seed` to have run first (the ChangeProposal
+                # governance T-Box lives in ontology/msr.ttl) as well as
+                # `make link` (mentions to mine candidates from).
+
 make test       # GRAPHDB_REQUIRED=1 go test ./...
                 # integration tests FAIL (not skip) if the stack isn't up
 ```
+
+The `msr:ChangeProposal` governance T-Box (design.md D4) loads into
+`urn:msr:ontology` at bootstrap via `make load-seed`'s graph-replace PUT —
+i.e. before `load-nist`, `link`, and `mine` ever run. `load-seed` PUT-replaces
+only the T-Box and vocab graphs (`urn:msr:ontology`, `urn:msr:vocab`) and
+never touches `urn:msr:data`: all instance data, including salts, mentions,
+and `msr:autoAccepted` proposal instances, is written additively via SPARQL
+`INSERT DATA` by the real writers, never `PUT`. Re-running `load-seed` is
+therefore harmless to already-mined candidates and accepted instances.
 
 A bare `go test ./...` (without `GRAPHDB_REQUIRED=1` and without the stack
 running) stays green by **skipping** the integration tests.
