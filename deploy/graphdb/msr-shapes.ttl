@@ -1,0 +1,234 @@
+# msr-shapes.ttl — SHACL shape catalogue for the `msr` GraphDB repository.
+#
+# Loaded (by `scripts/ensure-repo.sh`, task 4.1) into the RDF4J reserved shapes
+# graph <http://rdf4j.org/schema/rdf4j#SHACLShapeGraph>, which the ShaclSail
+# wrapper configured in `deploy/graphdb/msr-repo-config.ttl` (design D1) reads
+# at commit time. Inference is OFF (design D2) — every `sh:class` constraint
+# below matches only the *explicitly asserted* `rdf:type`, never an inferred
+# one. All shapes use the default `sh:severity sh:Violation` (stated
+# explicitly below for clarity), so a violation rejects the whole commit
+# atomically (design D6 — per-transaction validation).
+#
+# This file authors every shape EXCEPT the `msr:hasUnit` value allowlist,
+# which is generated from `ontology/qudt-units.json` (single source of
+# truth, design D3) into the companion fragment `msr-shapes-units.ttl` and
+# loaded alongside this catalogue. This file still requires `msr:hasUnit` to
+# be *present* (minCount 1); it does not constrain which unit IRIs are valid.
+#
+# openspec/changes/shacl-validation: tasks 2.1-2.5, design D2/D4/D8, spec.md
+# requirements "Measurement provenance and completeness shape", "Mention
+# provenance shape", "Catalog-individual provenance shape",
+# "Valid-temperature-range data-quality shape", "linksTo target-kind
+# data-quality shape".
+
+@prefix msr:   <https://w3id.org/msr-kg/ontology#> .
+@prefix prov:  <http://www.w3.org/ns/prov#> .
+@prefix sh:    <http://www.w3.org/ns/shacl#> .
+@prefix skos:  <http://www.w3.org/2004/02/skos/core#> .
+@prefix owl:   <http://www.w3.org/2002/07/owl#> .
+@prefix rdf:   <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix xsd:   <http://www.w3.org/2001/XMLSchema#> .
+
+
+### 2.1 — msr:PropertyMeasurement provenance + completeness
+# spec.md "Measurement provenance and completeness shape"; tasks.md 2.1.
+# Deliberately does NOT require msr:citedIn (no writer asserts it yet — see
+# design.md "Risks" and the landed provenance-model D3; requiring it would
+# reject every real measurement). Deliberately does NOT put sh:maxCount on
+# prov:wasGeneratedBy (design D8 — facts accrue an additional per-run
+# generation edge in urn:msr:provenance on every pipeline run, so a
+# measurement legitimately carries more than one wasGeneratedBy edge over
+# its lifetime). The msr:hasUnit value-in-allowlist constraint is a SEPARATE
+# generated fragment (msr-shapes-units.ttl, task 3.1) — here we only enforce
+# that msr:hasUnit is present.
+msr:PropertyMeasurementShape
+    a sh:NodeShape ;
+    sh:targetClass msr:PropertyMeasurement ;
+    sh:property [
+        sh:path prov:wasDerivedFrom ;
+        sh:minCount 1 ;
+        sh:severity sh:Violation ;
+        sh:message "msr:PropertyMeasurement must carry at least one prov:wasDerivedFrom (its source Dataset/Document)." ;
+    ] ;
+    sh:property [
+        sh:path prov:wasGeneratedBy ;
+        sh:minCount 1 ;
+        sh:severity sh:Violation ;
+        sh:message "msr:PropertyMeasurement must carry at least one prov:wasGeneratedBy (the run Activity that produced it)." ;
+    ] ;
+    sh:property [
+        sh:path msr:dataLocator ;
+        sh:minCount 1 ;
+        sh:severity sh:Violation ;
+        sh:message "msr:PropertyMeasurement must carry msr:dataLocator (the coefficient-row pointer)." ;
+    ] ;
+    sh:property [
+        sh:path msr:forProperty ;
+        sh:minCount 1 ;
+        sh:severity sh:Violation ;
+        sh:message "msr:PropertyMeasurement must carry msr:forProperty." ;
+    ] ;
+    sh:property [
+        sh:path msr:ofSalt ;
+        sh:minCount 1 ;
+        sh:severity sh:Violation ;
+        sh:message "msr:PropertyMeasurement must carry msr:ofSalt." ;
+    ] ;
+    sh:property [
+        sh:path msr:hasUnit ;
+        sh:minCount 1 ;
+        sh:severity sh:Violation ;
+        sh:message "msr:PropertyMeasurement must carry msr:hasUnit (value-allowlist enforced separately, see msr-shapes-units.ttl)." ;
+    ] ;
+    sh:property [
+        sh:path msr:equationForm ;
+        sh:minCount 1 ;
+        sh:severity sh:Violation ;
+        sh:message "msr:PropertyMeasurement must carry msr:equationForm." ;
+    ] .
+
+
+### 2.3 — valid-temperature-range data-quality shape
+# spec.md "Valid-temperature-range data-quality shape"; tasks.md 2.3; design D4
+# (the min<=max comparison is a FILTER inside a sh:sparql SELECT, not an
+# unsupported pairwise-comparison component such as sh:lessThanOrEquals).
+# A measurement legitimately may have NEITHER bound (range unknown) — only an
+# inverted or half-populated range is rejected.
+msr:ValidTemperatureRangeShape
+    a sh:NodeShape ;
+    sh:targetClass msr:PropertyMeasurement ;
+    sh:sparql [
+        a sh:SPARQLConstraint ;
+        sh:severity sh:Violation ;
+        sh:message "msr:validTempMin/msr:validTempMax must both be present and validTempMin <= validTempMax when either bound is asserted." ;
+        sh:select """
+            PREFIX msr: <https://w3id.org/msr-kg/ontology#>
+            SELECT DISTINCT $this
+            WHERE {
+                {
+                    $this msr:validTempMin ?min .
+                    $this msr:validTempMax ?max .
+                    FILTER (?min > ?max)
+                }
+                UNION
+                {
+                    $this msr:validTempMin ?min .
+                    FILTER NOT EXISTS { $this msr:validTempMax ?anyMax }
+                }
+                UNION
+                {
+                    $this msr:validTempMax ?max .
+                    FILTER NOT EXISTS { $this msr:validTempMin ?anyMin }
+                }
+            }
+        """ ;
+    ] .
+
+
+### 2.2 — msr:Mention provenance
+# spec.md "Mention provenance shape"; tasks.md 2.2. Every mention writer
+# already emits all six per the landed provenance-model, so this enforces
+# the invariant without rejecting valid writes.
+msr:MentionShape
+    a sh:NodeShape ;
+    sh:targetClass msr:Mention ;
+    sh:property [
+        sh:path msr:inDocument ;
+        sh:minCount 1 ;
+        sh:severity sh:Violation ;
+        sh:message "msr:Mention must carry msr:inDocument." ;
+    ] ;
+    sh:property [
+        sh:path msr:startOffset ;
+        sh:minCount 1 ;
+        sh:severity sh:Violation ;
+        sh:message "msr:Mention must carry msr:startOffset." ;
+    ] ;
+    sh:property [
+        sh:path msr:endOffset ;
+        sh:minCount 1 ;
+        sh:severity sh:Violation ;
+        sh:message "msr:Mention must carry msr:endOffset." ;
+    ] ;
+    sh:property [
+        sh:path msr:surfaceForm ;
+        sh:minCount 1 ;
+        sh:severity sh:Violation ;
+        sh:message "msr:Mention must carry msr:surfaceForm." ;
+    ] ;
+    sh:property [
+        sh:path prov:wasDerivedFrom ;
+        sh:minCount 1 ;
+        sh:severity sh:Violation ;
+        sh:message "msr:Mention must carry at least one prov:wasDerivedFrom." ;
+    ] ;
+    sh:property [
+        sh:path prov:wasGeneratedBy ;
+        sh:minCount 1 ;
+        sh:severity sh:Violation ;
+        sh:message "msr:Mention must carry at least one prov:wasGeneratedBy." ;
+    ] .
+
+
+### 2.4 — msr:linksTo target-kind data-quality shape
+# spec.md "linksTo target-kind data-quality shape"; tasks.md 2.4; design D4.
+#
+# Assumption (no rdfs:range is asserted on msr:linksTo in ontology/msr.ttl,
+# so the expected kind is determined from how the extraction pipeline
+# actually populates known-entity targets, extraction/src/msr_extraction/
+# graph_reader.py `read_known_entities`, which is the sole producer of
+# msr:linksTo values): a linksTo target is one of
+#   - a vocab SKOS concept        (rdf:type skos:Concept)
+#   - an ontology class           (rdf:type owl:Class)
+#   - a physical-property individual (rdf:type msr:PhysicalProperty)
+#   - a loaded salt individual    (rdf:type msr:MoltenSalt)
+# A single Core sh:class cannot express this four-way disjunction together
+# with "the target has no asserted type at all" (dangling IRI) in one
+# constraint, so per design D4 this uses a sh:sparql constraint: the value
+# is a violation unless it has at least one of the four expected types
+# explicitly asserted. A completely dangling IRI (no rdf:type triple at all)
+# has none of the four and is correctly rejected by the same query.
+msr:LinksToTargetKindShape
+    a sh:NodeShape ;
+    sh:targetSubjectsOf msr:linksTo ;
+    sh:sparql [
+        a sh:SPARQLConstraint ;
+        sh:severity sh:Violation ;
+        sh:message "msr:linksTo target must exist and be an explicitly-typed skos:Concept, owl:Class, msr:PhysicalProperty, or msr:MoltenSalt." ;
+        sh:select """
+            PREFIX msr: <https://w3id.org/msr-kg/ontology#>
+            PREFIX skos: <http://www.w3.org/2004/02/skos/core#>
+            PREFIX owl: <http://www.w3.org/2002/07/owl#>
+            SELECT DISTINCT $this ?value
+            WHERE {
+                $this msr:linksTo ?value .
+                FILTER NOT EXISTS { ?value a skos:Concept }
+                FILTER NOT EXISTS { ?value a owl:Class }
+                FILTER NOT EXISTS { ?value a msr:PhysicalProperty }
+                FILTER NOT EXISTS { ?value a msr:MoltenSalt }
+            }
+        """ ;
+    ] .
+
+
+### 2.5 — catalog-individual provenance shape
+# spec.md "Catalog-individual provenance shape"; tasks.md 2.5. The NIST
+# loader is the only writer of these individuals and emits both PROV edges
+# on every one. Again no sh:maxCount on the PROV edges (design D8 — the
+# per-run wasGeneratedBy edge in urn:msr:provenance is additional to the
+# stable urn:msr:data edge).
+msr:CatalogIndividualProvenanceShape
+    a sh:NodeShape ;
+    sh:targetClass msr:MoltenSalt , msr:Constituent , msr:ChemicalCompound ;
+    sh:property [
+        sh:path prov:wasGeneratedBy ;
+        sh:minCount 1 ;
+        sh:severity sh:Violation ;
+        sh:message "Catalog individual (MoltenSalt/Constituent/ChemicalCompound) must carry at least one prov:wasGeneratedBy." ;
+    ] ;
+    sh:property [
+        sh:path prov:wasDerivedFrom ;
+        sh:minCount 1 ;
+        sh:severity sh:Violation ;
+        sh:message "Catalog individual (MoltenSalt/Constituent/ChemicalCompound) must carry at least one prov:wasDerivedFrom." ;
+    ] .
