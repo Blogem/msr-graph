@@ -112,8 +112,8 @@ func nullFloat(v *float64) sql.NullFloat64 {
 }
 
 // insertPrefixes are the PREFIX declarations shared by every buildInsertData
-// call, matching the seed turtle's prefix set (ontology/example-flibe.ttl)
-// so the emitted CURIEs resolve to identical IRIs.
+// call. These fix the loader's own deterministic-IRI-minting contract
+// (msr/msrd/unit/prov/rdfs), independent of any hand-curated data.
 const insertPrefixes = `PREFIX msr:  <https://w3id.org/msr-kg/ontology#>
 PREFIX msrd: <https://w3id.org/msr-kg/data#>
 PREFIX unit: <http://qudt.org/vocab/unit/>
@@ -129,10 +129,10 @@ PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
 // across measurements are deduplicated by IRI so the same block is emitted
 // once; under RDF set semantics repeats would be harmless, but a single
 // emission keeps the output readable. The loader never emits
-// hasRole/usedIn/citedIn/skos:closeMatch -- those are hand-curated seed
-// facts the loader cannot derive from NIST data, and re-asserting the
-// FLiBe density salt+measurement here is a set-semantics no-op against the
-// seed (identical IRIs, see ontology/example-flibe.ttl).
+// hasRole/usedIn/citedIn/skos:closeMatch -- those are not derivable from
+// NIST data; the loader mints deterministic IRIs from salt composition
+// (see internal/nist), so re-running against unchanged input data is a
+// set-semantics no-op (identical IRIs, identical triples).
 func buildInsertData(ms []nist.Measurement) string {
 	var b strings.Builder
 	b.WriteString(insertPrefixes)
@@ -243,11 +243,10 @@ func quoteLiteral(s string) string {
 // same float64 (e.g. 0.34, 800.0, 0.333) -- never scientific notation, so
 // values like 800 read as "800.0" rather than "8e+02". Whole numbers always
 // get an explicit ".0" so the emitted literal parses as xsd:decimal, never
-// xsd:integer: the hand-curated seed (ontology/example-flibe.ttl) writes
-// msr:validTempMin 800.0 and msr:moleFraction 1.0 as decimals, and under
-// RDF set semantics 800 (xsd:integer) is a distinct triple object from 800.0
-// (xsd:decimal) -- without this, re-asserting the FLiBe measurement would
-// add a second validTempMin triple instead of being the intended no-op.
+// xsd:integer: under RDF set semantics 800 (xsd:integer) is a distinct
+// triple object from 800.0 (xsd:decimal) -- without this, re-running the
+// loader against unchanged input would add a second validTempMin triple
+// instead of being the intended set-semantics no-op.
 func formatFloat(v float64) string {
 	s := strconv.FormatFloat(v, 'f', -1, 64)
 	if !strings.ContainsAny(s, ".eE") {
