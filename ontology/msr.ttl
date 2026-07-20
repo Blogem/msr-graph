@@ -9,11 +9,12 @@
 @prefix dcterms: <http://purl.org/dc/terms/> .
 @prefix owl:     <http://www.w3.org/2002/07/owl#> .
 @prefix rdfs:    <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix rdf:     <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
 @prefix xsd:     <http://www.w3.org/2001/XMLSchema#> .
 @prefix nuclear: <nuclear:> .   # DIAMOND opaque class IRIs — non-dereferenceable, alignment only
 
 <https://w3id.org/msr-kg/ontology> a owl:Ontology ;
-    owl:versionInfo "0.3.0" ;
+    owl:versionInfo "0.4.0" ;
     rdfs:label "MSR Seed Ontology (POC)" ;
     rdfs:comment "Seed T-Box for the MSR KG POC. Reuses DIAMOND labels via rdfs:seeAlso; adds the PropertyMeasurement pattern." .
 
@@ -134,3 +135,20 @@ msr:inDocument  a owl:ObjectProperty ; rdfs:domain msr:Mention ; rdfs:range msr:
 msr:surfaceForm a owl:DatatypeProperty ; rdfs:domain msr:Mention ; rdfs:range xsd:string .
 msr:startOffset a owl:DatatypeProperty ; rdfs:domain msr:Mention ; rdfs:range xsd:integer .
 msr:endOffset   a owl:DatatypeProperty ; rdfs:domain msr:Mention ; rdfs:range xsd:integer .
+
+### Extraction-provenance vocabulary  (chunk 7 — domain-agnostic; attaches to a
+### msr:PropertyMeasurement node or a reified rdf:Statement, hence no rdfs:domain)
+msr:extractionConfidence a owl:DatatypeProperty ; rdfs:range xsd:decimal ;
+    rdfs:comment "Extractor's 0–1 confidence in a text-derived assertion (a PropertyMeasurement or a reified role/reactor edge). Absent on loaded NIST/seed data." .
+msr:extractionRationale  a owl:DatatypeProperty ; rdfs:range xsd:string ;
+    rdfs:comment "Short rationale/evidence for the extraction. For review; loaded data carries none." .
+
+### Role/reactor layer  (chunk 7 — reintroduced OWL layer; SKOS concepts remain in vocab.ttl)
+msr:SaltRole a owl:Class .
+msr:FuelSalt    a msr:SaltRole ; rdfs:label "fuel salt" .
+msr:CoolantSalt a msr:SaltRole ; rdfs:label "coolant salt" .
+msr:FlushSalt   a msr:SaltRole ; rdfs:label "flush salt" .
+msr:hasRole a owl:ObjectProperty ; rdfs:domain msr:MoltenSalt ; rdfs:range msr:SaltRole .
+
+msr:MoltenSaltReactor a owl:Class .
+msr:usedIn a owl:ObjectProperty ; rdfs:domain msr:MoltenSalt ; rdfs:range msr:MoltenSaltReactor .
