@@ -39,11 +39,30 @@
 #                   # run this against a stack already brought up with `make up`.
 #   make demo-density # one-shot chatcli run of the canonical FLiBe density
 #                     # question, for a quick smoke test of the same endpoint.
+#   make checkpoint  # POST /api/checkpoints against the running server
+#                     # (LABEL, default "demo") — captures the whole store
+#                     # (GraphDB TriG export of all named graphs + a SQLite
+#                     # snapshot + the ontology version) under
+#                     # data/checkpoints/{LABEL}/ (see
+#                     # openspec/changes/apply-ontology-changes/design.md).
+#   make restore     # POST /api/checkpoints/{LABEL}/restore against the
+#                     # running server — clears and re-imports the graph and
+#                     # swaps the SQLite file back to the checkpointed copy.
 
-.PHONY: up down load-seed load-nist ingest link extract mine test chat demo-density
+.PHONY: up down load-seed load-nist ingest link extract mine test chat demo-density checkpoint restore
 
 # GraphDB's published host port (see docker-compose.yml, service "graphdb").
 GRAPHDB_URL ?= http://localhost:7200
+
+# The msr-graph server's published base URL (see cmd/server/config.go's
+# SERVER_ADDR, default ":8080", and docker-compose.yml, service "server").
+# Overridable so checkpoint/restore can target a differently-configured
+# server without editing this file.
+SERVER_URL ?= http://localhost:8080
+
+# Checkpoint label used by `make checkpoint` / `make restore`; override with
+# e.g. `make checkpoint LABEL=before-solubility`.
+LABEL ?= demo
 
 # Free-license request page referenced by GraphDB 11.x's own licensing docs
 # (https://graphdb.ontotext.com/documentation/11.4/licensing.html):
@@ -126,3 +145,13 @@ chat:
 demo-density:
 	@echo "==> running chatcli one-shot: canonical FLiBe density question"
 	go run ./cmd/chatcli -q "What is the density of FLiBe (the LiF-BeF2 66-34 mol% melt) at 900 K?"
+
+checkpoint:
+	@echo "==> creating checkpoint '$(LABEL)' via $(SERVER_URL)/api/checkpoints (run 'make up' first)"
+	curl -sS -X POST "$(SERVER_URL)/api/checkpoints" \
+		-H 'Content-Type: application/json' \
+		-d '{"label":"$(LABEL)"}'
+
+restore:
+	@echo "==> restoring checkpoint '$(LABEL)' via $(SERVER_URL)/api/checkpoints/$(LABEL)/restore (run 'make up' first)"
+	curl -sS -X POST "$(SERVER_URL)/api/checkpoints/$(LABEL)/restore"
