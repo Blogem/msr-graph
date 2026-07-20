@@ -132,18 +132,23 @@ func (e *Engine) Reject(ctx context.Context, id string) error {
 
 // Edit replaces the triples in the proposal's urn:msr:proposal/{id}
 // graph with triples (Turtle/N-Triples body content, using this
-// package's PREFIX declarations -- see sparqlPrefixes -- for any CURIEs
-// it contains). The msr:ChangeProposal resource's status is untouched
-// (it stays "pending"); a subsequent detail read or Approve operates on
-// the edited triples.
+// package's CURIEs -- see turtlePrefixes -- for anything it references
+// by prefix). The msr:ChangeProposal resource's status is untouched (it
+// stays "pending"); a subsequent detail read or Approve operates on the
+// edited triples.
+//
+// triples is sent to GraphDB as the raw HTTP request body of a Graph
+// Store Protocol PUT (graph.Client.PutProposalGraph), parsed server-side
+// as Turtle -- never spliced into a SPARQL UPDATE string in Go. Building
+// "INSERT DATA { GRAPH <..> { " + triples + " } }" would let a triples
+// value containing e.g. "} } ; CLEAR ALL ; ..." break out of the INSERT
+// block and run arbitrary SPARQL (a confirmed SPARQL-injection finding);
+// PUT-replace has no such surface because GraphDB's Turtle parser, not
+// its SPARQL parser, ever sees this content.
 func (e *Engine) Edit(ctx context.Context, id string, triples string) error {
-	proposalGraph := string(graph.ProposalGraph(id))
+	document := turtlePrefixes + triples
 
-	drop := fmt.Sprintf("DROP SILENT GRAPH <%s>", proposalGraph)
-	insert := sparqlPrefixes + fmt.Sprintf("INSERT DATA { GRAPH <%s> {\n%s\n} }", proposalGraph, triples)
-	update := drop + " ;\n" + insert
-
-	if err := e.gc.Update(ctx, update); err != nil {
+	if err := e.gc.PutProposalGraph(ctx, id, []byte(document)); err != nil {
 		var ve *graph.ValidationError
 		if errors.As(err, &ve) {
 			return err

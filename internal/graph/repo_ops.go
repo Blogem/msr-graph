@@ -105,9 +105,13 @@ func (c *Client) ImportRepo(ctx context.Context, trig []byte) error {
 // deliberately no Proposal graph constant and proposal graphs are never
 // added to the PutGraph knownGraphs allowlist: they are dynamic
 // (one per proposal, id-keyed) and PutGraph's destructive graph-replace
-// semantics are the wrong tool for a graph a reviewer might be
-// concurrently editing. Callers reach a proposal graph through Update
-// (as an explicit GRAPH target) or SelectRaw.
+// semantics are the wrong tool for an arbitrary caller-chosen IRI, since
+// a wrong value there would silently wipe a core graph. Callers reach a
+// proposal graph through Update (as an explicit GRAPH target), SelectRaw,
+// or -- for a whole-graph replace -- PutProposalGraph below, which is
+// exempt from that allowlist concern because it never accepts a raw
+// GraphIRI from the caller: it always derives the target from
+// ProposalGraph(id) itself, so it can never be pointed at a core graph.
 //
 // A single-named-graph read needs no dedicated helper: it is already
 // cleanly expressible as SelectRaw with an explicit dataset scope,
@@ -117,4 +121,47 @@ func (c *Client) ImportRepo(ctx context.Context, trig []byte) error {
 // it is intentionally omitted.
 func ProposalGraph(id string) GraphIRI {
 	return GraphIRI("urn:msr:proposal/" + id)
+}
+
+// PutProposalGraph replaces the entire contents of proposal id's
+// urn:msr:proposal/{id} graph with turtle via the SPARQL 1.1 Graph Store
+// Protocol PUT (graph-replace semantics), mirroring PutGraph's request/
+// response handling exactly. It exists as the injection-safe transport
+// for "edit a proposal's triples": turtle is sent as the raw HTTP
+// request body and parsed server-side by GraphDB, so a caller-supplied
+// document can never be spliced into -- and break out of -- a SPARQL
+// UPDATE string the way building "INSERT DATA { GRAPH <..> { <turtle> }
+// }" in Go would allow (a document containing "} } ; CLEAR ALL ; ..."
+// would otherwise run arbitrary SPARQL).
+//
+// PutProposalGraph deliberately bypasses PutGraph's knownGraphs
+// allowlist: unlike PutGraph, it never takes a caller-supplied GraphIRI.
+// The target is always ProposalGraph(id), built inside this function
+// from the urn:msr:proposal/ prefix, so id cannot steer the write at a
+// core graph (Ontology/Data/Vocab/Staging) regardless of what a caller
+// passes as id.
+func (c *Client) PutProposalGraph(ctx context.Context, id string, turtle []byte) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, c.graphStoreEndpoint(ProposalGraph(id)), bytes.NewReader(turtle))
+	if err != nil {
+		return fmt.Errorf("graph: build PutProposalGraph request: %w", err)
+	}
+	req.Header.Set("Content-Type", "text/turtle")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("graph: PutProposalGraph request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("graph: read PutProposalGraph response: %w", err)
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		if ve := detectValidationError(body); ve != nil {
+			return ve
+		}
+		return fmt.Errorf("graph: PutProposalGraph failed: %s: %s", resp.Status, bytes.TrimSpace(body))
+	}
+	return nil
 }

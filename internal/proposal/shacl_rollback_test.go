@@ -61,6 +61,13 @@ func (f *fakeApproveClient) SelectRaw(_ context.Context, _ string) (*graph.Resul
 	}), nil
 }
 
+// PutProposalGraph is a no-op here: this test only exercises Approve, so
+// it never calls Edit / PutProposalGraph, but the method is required to
+// satisfy proposal.GraphClient.
+func (f *fakeApproveClient) PutProposalGraph(_ context.Context, _ string, _ []byte) error {
+	return nil
+}
+
 func (f *fakeApproveClient) Update(_ context.Context, update string) error {
 	f.updateCalls = append(f.updateCalls, update)
 	return &graph.ValidationError{

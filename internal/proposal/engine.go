@@ -28,6 +28,12 @@ type GraphClient interface {
 	Select(ctx context.Context, query string) (*graph.Results, error)
 	SelectRaw(ctx context.Context, query string) (*graph.Results, error)
 	Update(ctx context.Context, update string) error
+	// PutProposalGraph replaces proposal id's urn:msr:proposal/{id}
+	// graph with turtle via the Graph Store Protocol -- the transport
+	// Edit uses instead of splicing caller-supplied content into a
+	// SPARQL UPDATE string (see graph.Client.PutProposalGraph's doc
+	// comment for why that splice was a SPARQL-injection vector).
+	PutProposalGraph(ctx context.Context, id string, turtle []byte) error
 }
 
 // Engine promotes, rejects, and edits msr:ChangeProposal resources
@@ -57,6 +63,24 @@ PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
 PREFIX skos: <http://www.w3.org/2004/02/skos/core#>
 PREFIX owl: <http://www.w3.org/2002/07/owl#>
 PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+`
+
+// turtlePrefixes mirrors sparqlPrefixes' namespaces (plus the QUDT qk:/
+// unit: prefixes ontology/msr.ttl itself declares, for a canonicalUnit/
+// quantityKind CURIE) in Turtle @prefix syntax. Edit prepends this to
+// the caller-supplied replacement triples before handing the whole
+// document to graph.Client.PutProposalGraph, so a reviewer's edit body
+// can use the same short CURIEs proposals are already written with.
+const turtlePrefixes = `@prefix msr: <https://w3id.org/msr-kg/ontology#> .
+@prefix msrd: <https://w3id.org/msr-kg/data#> .
+@prefix voc: <https://w3id.org/msr-kg/vocab#> .
+@prefix prov: <http://www.w3.org/ns/prov#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix skos: <http://www.w3.org/2004/02/skos/core#> .
+@prefix owl: <http://www.w3.org/2002/07/owl#> .
+@prefix qk: <http://qudt.org/vocab/quantitykind/> .
+@prefix unit: <http://qudt.org/vocab/unit/> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
 `
 
 // proposalResourceIRI returns the msrd:proposal-{id} CURIE for the

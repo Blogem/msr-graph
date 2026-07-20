@@ -18,6 +18,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"testing"
 
 	"github.com/blogem/msr-graph/internal/graph"
@@ -170,6 +171,57 @@ func TestImportRepo_NonSuccessStatusIsError(t *testing.T) {
 
 	if err := c.ImportRepo(context.Background(), trig); err == nil {
 		t.Fatal("expected an error for a non-2xx ImportRepo response")
+	}
+}
+
+// TestPutProposalGraph_IssuesGraphStorePutWithTurtleBody pins
+// PutProposalGraph's request shape (the injection-safe replacement for
+// splicing a proposal edit into a SPARQL UPDATE string, per the
+// security-review finding on Engine.Edit): a PUT to the Graph Store
+// Protocol endpoint, ?graph=urn:msr:proposal/{id}, Content-Type:
+// text/turtle, and turtle sent verbatim as the raw request body -- never
+// form-encoded, never embedded in a query string GraphDB would parse as
+// SPARQL.
+func TestPutProposalGraph_IssuesGraphStorePutWithTurtleBody(t *testing.T) {
+	turtle := []byte(`@prefix msr: <https://w3id.org/msr-kg/ontology#> .
+msr:solubility a msr:PhysicalProperty .`)
+	srv, rec := newRecordingServer(t, http.StatusNoContent, "")
+	c := graph.New(srv.URL, "msr", srv.Client())
+
+	if err := c.PutProposalGraph(context.Background(), "property-solubility", turtle); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if rec.method != http.MethodPut {
+		t.Errorf("method = %q, want PUT", rec.method)
+	}
+	if rec.path != "/repositories/msr/rdf-graphs/service" {
+		t.Errorf("path = %q, want /repositories/msr/rdf-graphs/service", rec.path)
+	}
+	query, err := url.ParseQuery(rec.rawQuery)
+	if err != nil {
+		t.Fatalf("parsing recorded query %q: %v", rec.rawQuery, err)
+	}
+	if got := query.Get("graph"); got != "urn:msr:proposal/property-solubility" {
+		t.Errorf("graph query param = %q, want %q", got, "urn:msr:proposal/property-solubility")
+	}
+	if rec.contentType != "text/turtle" {
+		t.Errorf("Content-Type header = %q, want text/turtle", rec.contentType)
+	}
+	if !bytes.Equal(rec.body, turtle) {
+		t.Errorf("request body = %q, want %q (verbatim, no injection surface)", rec.body, turtle)
+	}
+}
+
+// TestPutProposalGraph_NonSuccessStatusIsError confirms a non-2xx
+// response (e.g. malformed turtle, or a SHACL rejection) is surfaced as
+// an error, using detectValidationError the same way PutGraph does.
+func TestPutProposalGraph_NonSuccessStatusIsError(t *testing.T) {
+	srv, _ := newRecordingServer(t, http.StatusBadRequest, "malformed turtle")
+	c := graph.New(srv.URL, "msr", srv.Client())
+
+	if err := c.PutProposalGraph(context.Background(), "property-solubility", []byte("not turtle {{{")); err == nil {
+		t.Fatal("expected an error for a non-2xx PutProposalGraph response")
 	}
 }
 
