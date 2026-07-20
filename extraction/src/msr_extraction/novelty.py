@@ -48,6 +48,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -199,6 +200,92 @@ _KEEP_PIPES = frozenset(
 #: inspecting `noun_chunk.root` explicitly (an assumption worth
 #: reconsidering if it under-performs in practice).
 _MAX_CHUNK_TOKENS = 3
+
+# camelCase word-boundary split: a zero-width position between a
+# lower/digit and a following upper ("moltenSalt" -> "molten Salt"), or
+# between an upper letter and a following upper+lower pair ("MSRSalt" ->
+# "MSR Salt", isolating a trailing capitalized word after a run of
+# capitals/an acronym). `.sub(" ", text)` inserts a space at each such
+# position without consuming any character.
+_CAMEL_SPLIT_RE = re.compile(r"(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])")
+
+# Any run of non-alphanumeric characters is a token boundary (whitespace,
+# hyphens, underscores, punctuation, ...) once camelCase has already been
+# split into separate words above.
+_SEPARATOR_RE = re.compile(r"[^A-Za-z0-9]+")
+
+
+def _normalize_token_sequence(text: str) -> tuple[str, ...]:
+    """Normalize `text` into a casefolded token sequence (design D2).
+
+    Splits camelCase word boundaries (case-sensitive, so this MUST run
+    before casefolding), then collapses any run of non-alphanumeric
+    characters into a token boundary and casefolds every token. A raw known
+    label (``"MoltenSalt"``, ``"molten salt"``, ``"molten_salt"``) and an
+    already-casefolded, space-joined candidate term (``"molten salt"``) all
+    normalize to the identical token sequence ``("molten", "salt")``, which
+    is what makes :class:`ExclusionIndex`'s token-sequence containment
+    check spelling-variant-proof.
+    """
+    spaced = _CAMEL_SPLIT_RE.sub(" ", text)
+    return tuple(tok.casefold() for tok in _SEPARATOR_RE.split(spaced) if tok)
+
+
+def _normalize_plain_tokens(text: str) -> tuple[str, ...]:
+    """Normalize `text` into a casefolded token sequence WITHOUT camelCase splitting.
+
+    Used for chunk-6 mention `surface_form`s (the already-linked exclusion):
+    those are OCR'd natural-language/chemistry-formula spans (e.g.
+    ``"FLiBe"``, ``"LiF-BeF2"``), not authored compound-word identifiers, so
+    running them through :func:`_normalize_token_sequence`'s camelCase
+    splitter would spuriously fragment a single token on incidental
+    internal capitalization (``"FLiBe"`` -> ``"f li be"`` instead of
+    ``"flibe"``). :func:`_normalize_token_sequence` is reserved for
+    genuinely camelCase-authored **ontology labels** (e.g. the class label
+    ``"MoltenSalt"``, design D2's own example); candidate terms reaching
+    :class:`ExclusionIndex` are always already-casefolded plain text (no
+    uppercase survives), so applying the camelCase-aware normalizer to them
+    at lookup time is a no-op -- only the *known-label* side needs the
+    choice of normalizer to matter.
+    """
+    return tuple(tok.casefold() for tok in _SEPARATOR_RE.split(text) if tok)
+
+
+class ExclusionIndex:
+    """Normalized-label token-sequence exclusion index (design D2).
+
+    Built by :func:`build_exclusion_set` from every known label (core
+    dataset + chunk-6 linked mentions); supports ``term in index`` for a
+    raw candidate term string. Membership normalizes `term` the same way
+    every indexed label was normalized (:func:`_normalize_token_sequence`)
+    and returns ``True`` iff some indexed label's *full* normalized token
+    sequence is a contiguous run within the term's token sequence -- so a
+    known label's sequence must appear whole (in order, back-to-back), not
+    merely share individual tokens with the candidate.
+    """
+
+    def __init__(self, sequences: Iterable[tuple[str, ...]]) -> None:
+        by_length: dict[int, set[tuple[str, ...]]] = {}
+        for seq in sequences:
+            if not seq:
+                continue
+            by_length.setdefault(len(seq), set()).add(seq)
+        self._by_length: dict[int, frozenset[tuple[str, ...]]] = {
+            length: frozenset(seqs) for length, seqs in by_length.items()
+        }
+
+    def __contains__(self, term: str) -> bool:
+        term_tokens = _normalize_token_sequence(term)
+        n = len(term_tokens)
+        if n == 0:
+            return False
+        for length, sequences in self._by_length.items():
+            if length > n:
+                continue
+            for start in range(n - length + 1):
+                if term_tokens[start : start + length] in sequences:
+                    return True
+        return False
 
 
 def load_spacy_pipeline(config: Config) -> Any | None:
@@ -495,24 +582,48 @@ def read_miss_candidates(reports: list[str], config: Config) -> list[Candidate]:
     return candidates
 
 
-def build_exclusion_set(reader: GraphReader, reports: list[str], config: Config) -> set[str]:
-    """Normalized terms already known to the core dataset or already linked.
+def build_exclusion_set(reader: GraphReader, reports: list[str], config: Config) -> ExclusionIndex:
+    """Build the normalization/token-sequence-aware exclusion index (design D2/4.1).
 
-    Combines every label of every :class:`~msr_extraction.graph_reader.KnownEntity`
-    returned by ``reader.read_known_entities()`` (which is itself
-    restricted to the three core ``FROM`` graphs -- staging/proposal
-    graphs are never consulted, and this function adds no graph
-    parameters of its own) with every ``status:"linked"`` record's
-    ``surface_form`` from each report's `mentions.jsonl`. All entries are
-    case-folded and stripped so lookups are normalization-consistent with
-    :func:`enumerate_lexical_terms`/:func:`read_miss_candidates`.
+    Sources ALL core labels the `GraphReader` exposes: every label of every
+    :class:`~msr_extraction.graph_reader.KnownEntity` from
+    ``reader.read_known_entities()`` (SKOS `prefLabel`/`altLabel` -- incl.
+    reactor concepts, ontology classes, physical properties, salts) PLUS
+    chunk-7's salt-role labels (``reader.read_role_reactor_labels()``) --
+    all read only through the three core ``FROM`` graphs, so this function
+    adds no graph parameters of its own and staging/proposal are never
+    consulted. Also folds in every ``status:"linked"`` record's
+    ``surface_form`` from each report's `mentions.jsonl` (chunk 6's own
+    already-resolved mentions).
+
+    Ontology labels are normalized via :func:`_normalize_token_sequence`
+    (casefold + camelCase split + separator collapse), so the returned
+    :class:`ExclusionIndex` excludes spelling/spacing/camelCase variants of
+    a known label (e.g. `molten salt` vs the class label `MoltenSalt`).
+    Linked-mention `surface_form`s are normalized via
+    :func:`_normalize_plain_tokens` (casefold + separator collapse, no
+    camelCase split): those are OCR'd formula/nickname spans (e.g.
+    `"FLiBe"`), not authored compound identifiers, and camelCase-splitting
+    them would spuriously fragment a single token.
     """
-    excluded: set[str] = set()
+    sequences: set[tuple[str, ...]] = set()
+
+    def _index_label(label: str) -> None:
+        tokens = _normalize_token_sequence(label)
+        if tokens:
+            sequences.add(tokens)
+
+    def _index_surface(surface_form: str) -> None:
+        tokens = _normalize_plain_tokens(surface_form)
+        if tokens:
+            sequences.add(tokens)
+
     for entity in reader.read_known_entities():
         for label in entity.labels:
-            normalized = label.strip().casefold()
-            if normalized:
-                excluded.add(normalized)
+            _index_label(label)
+
+    for label in reader.read_role_reactor_labels():
+        _index_label(label)
 
     for report in reports:
         path = config.mentions_path(report)
@@ -528,8 +639,9 @@ def build_exclusion_set(reader: GraphReader, reports: list[str], config: Config)
                 continue
             surface_form = obj.get("surface_form")
             if surface_form:
-                excluded.add(surface_form.strip().casefold())
-    return excluded
+                _index_surface(surface_form)
+
+    return ExclusionIndex(sequences)
 
 
 def _build_corpus_index(archive_dir: Path) -> list[str]:
