@@ -100,7 +100,7 @@ def test_triage_candidate_routes_graphite_shaped_term_to_class() -> None:
     candidate routes to kind=class."""
     candidate = _candidate("graphite", "The core is graphite-moderated by design.")
     stub = StubCompleter(
-        {"kind": "class", "broader_class": "https://w3id.org/msr-kg/ontology#Moderator"}
+        {"kind": "class", "broaderClass": "https://w3id.org/msr-kg/ontology#Moderator"}
     )
 
     result = triage_candidate(candidate, PROMPT_PREFIX, stub)

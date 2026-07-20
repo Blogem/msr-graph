@@ -143,8 +143,11 @@ def test_enumerate_lexical_terms_surfaces_term_absent_from_mentions(tmp_path) ->
     ev = evidence_items[0]
     assert ev.report == REPORT
     assert ev.document_iri == f"{MSRD}{REPORT}"
+    # Evidence.sentence_text is the full enclosing segment, not the bare
+    # term -- the term must appear as a substring of it.
+    assert "solubility" in ev.sentence_text.lower()
     normalized_text = config.normalized_path(REPORT).read_text(encoding="utf-8")
-    assert normalized_text[ev.start_offset : ev.end_offset].lower() == "solubility"
+    assert normalized_text[ev.start_offset : ev.end_offset] == ev.sentence_text
     # grounded in the real curated sentence, not fabricated
     assert ev.sentence_text in normalized_text
 

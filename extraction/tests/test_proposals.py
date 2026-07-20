@@ -190,6 +190,37 @@ def test_write_proposal_is_idempotent_across_identical_reruns() -> None:
     assert client_a.updates == client_b.updates
 
 
+def test_write_proposal_is_idempotent_across_different_run_timestamps() -> None:
+    """Scenario: cross-run idempotency (task 8.5 completion) -- building
+    and writing the same triaged candidate at two DIFFERENT run_ts values
+    (as would happen across two separate `mine` invocations) produces
+    byte-identical urn:msr:staging / urn:msr:proposal/{id} INSERT DATA
+    updates. run_ts is accepted by build_proposal_bundle but must not leak
+    into the (idempotent) bundle content -- the per-run
+    prov:wasGeneratedBy attribution lives in urn:msr:provenance, written
+    by the CLI via mine_provenance, not embedded here. In particular the
+    staging block must never carry an urn:msr:run:mine/ node."""
+    triaged = _triaged("solubility", KIND_PROPERTY)
+
+    client_t1 = FakeSparqlClient()
+    bundle_t1 = build_proposal_bundle(triaged, _allowlist(), "T1")
+    assert bundle_t1 is not None
+    write_proposal(bundle_t1, client_t1)
+
+    client_t2 = FakeSparqlClient()
+    bundle_t2 = build_proposal_bundle(triaged, _allowlist(), "T2")
+    assert bundle_t2 is not None
+    write_proposal(bundle_t2, client_t2)
+
+    assert client_t1.updates == client_t2.updates
+
+    staging_update = next(u for u in client_t1.updates if "GRAPH <urn:msr:staging>" in u)
+    assert "urn:msr:run:mine/" not in staging_update
+    for update in client_t1.updates:
+        assert "T1" not in update
+        assert "T2" not in update
+
+
 def test_write_proposal_appends_extra_proposal_triples() -> None:
     """The ``extra_proposal_triples`` hook (e.g. the graphite bundle's
     Moderator-typed individual riding with the class proposal, design.md
