@@ -10,27 +10,27 @@
 
 ## 2. Approval typed-routing engine (`internal/proposal`)
 
-- [ ] 2.1 Define the engine type and the narrow graph interface it depends on (Select/SelectRaw/Update subset) so it is fakeable.
-- [ ] 2.2 Build the three filtered `INSERT { GRAPH <dest> } WHERE { GRAPH <proposal> } FILTER(...)` copies — vocab (skos:Concept + SKOS predicates), ontology (owl:Class/ObjectProperty/DatatypeProperty declarations, rdfs:subClassOf, rdfs:domain/range, msr:PhysicalProperty individuals with quantityKind/canonicalUnit), data (everything else).
-- [ ] 2.3 Concatenate the three copies + version bump + status flip + decision-provenance insert into one SPARQL UPDATE request so GraphDB commits them as a single transaction.
-- [ ] 2.4 Surface a GraphDB SHACL rejection as the existing typed `ValidationError` (reuse `graph.Update`'s detection), leaving the proposal `pending`.
-- [ ] 2.5 Tests (integration, dockerized GraphDB): approve `solubility` → triples in ontology+vocab, visible via core `Select`; approve the mixed `graphite` bundle → class+property in ontology, individual in data; SHACL-violating bundle rolls back with nothing in core; second approval adds no duplicate triples; proposal graph retained.
+- [x] 2.1 Define the engine type and the narrow graph interface it depends on (Select/SelectRaw/Update subset) so it is fakeable.
+- [x] 2.2 Build the three filtered `INSERT { GRAPH <dest> } WHERE { GRAPH <proposal> } FILTER(...)` copies — vocab (skos:Concept + SKOS predicates), ontology (owl:Class/ObjectProperty/DatatypeProperty declarations, rdfs:subClassOf, rdfs:domain/range, msr:PhysicalProperty individuals with quantityKind/canonicalUnit), data (everything else).
+- [x] 2.3 Concatenate the three copies + version bump + status flip + decision-provenance insert into one SPARQL UPDATE request so GraphDB commits them as a single transaction.
+- [x] 2.4 Surface a GraphDB SHACL rejection as the existing typed `ValidationError` (reuse `graph.Update`'s detection), leaving the proposal `pending`.
+- [x] 2.5 Tests (integration, dockerized GraphDB): approve `solubility` → triples in ontology+vocab, visible via core `Select`; approve the mixed `graphite` bundle → class+property in ontology, individual in data; SHACL-violating bundle rolls back with nothing in core; second approval adds no duplicate triples; proposal graph retained.
 
 ## 3. Proposal lifecycle: status, version bump, decision provenance
 
-- [ ] 3.1 Implement the version parser/bumper (parse major.minor.patch, drop pre-release suffix, minor++ / patch=0; current seed is `0.4.0` → `0.5.0`) and the scoped DELETE/INSERT of the single `owl:versionInfo` literal in `urn:msr:ontology`.
-- [ ] 3.2 Guard the bump and status flip on a genuine `pending → approved` transition (no double-bump on re-approval / restore-then-approve).
-- [ ] 3.3 Write the `urn:msr:run:approve/{id}` `prov:Activity` (wasAssociatedWith reviewer agent, request-supplied startedAtTime, link to the proposal) into `urn:msr:staging`, reusing the existing PROV-O TBox.
-- [ ] 3.4 Implement reject (status → rejected; no core copy, no version bump, proposal graph kept) and edit (replace `urn:msr:proposal/{id}` triples; status stays pending).
-- [ ] 3.5 Refuse invalid transitions (e.g. reject an approved proposal); no partial mutation.
-- [ ] 3.6 Tests: version parse/bump unit tests incl. `0.4.0`→`0.5.0` and `-seed` suffix; integration tests for reject-leaves-core-untouched, edit-persists-and-is-what-gets-promoted, no-second-bump, invalid-transition-refused, approval activity in staging (and nothing in urn:msr:provenance).
+- [x] 3.1 Implement the version parser/bumper (parse major.minor.patch, drop pre-release suffix, minor++ / patch=0; current seed is `0.4.0` → `0.5.0`) and the scoped DELETE/INSERT of the single `owl:versionInfo` literal in `urn:msr:ontology`.
+- [x] 3.2 Guard the bump and status flip on a genuine `pending → approved` transition (no double-bump on re-approval / restore-then-approve).
+- [x] 3.3 Write the `urn:msr:run:approve/{id}` `prov:Activity` (wasAssociatedWith reviewer agent, request-supplied startedAtTime, link to the proposal) into `urn:msr:staging`, reusing the existing PROV-O TBox.
+- [x] 3.4 Implement reject (status → rejected; no core copy, no version bump, proposal graph kept) and edit (replace `urn:msr:proposal/{id}` triples; status stays pending).
+- [x] 3.5 Refuse invalid transitions (e.g. reject an approved proposal); no partial mutation.
+- [x] 3.6 Tests: version parse/bump unit tests incl. `0.4.0`→`0.5.0` and `-seed` suffix; integration tests for reject-leaves-core-untouched, edit-persists-and-is-what-gets-promoted, no-second-bump, invalid-transition-refused, approval activity in staging (and nothing in urn:msr:provenance).
 
 ## 4. Checkpoint / restore engine (`internal/checkpoint`)
 
-- [ ] 4.1 Implement checkpoint: TriG export via `graph.ExportRepo` + SQLite `VACUUM INTO` on a dedicated (non-chat) connection + a manifest recording the ontology version, written under `data/checkpoints/{label}/`.
-- [ ] 4.2 Implement restore: `graph.ClearRepo` → `graph.ImportRepo(trig)` → replace the live `msr.db` with the checkpoint copy.
-- [ ] 4.3 Validate `{label}` against a conservative filesystem-safe charset before touching any path (reject path traversal).
-- [ ] 4.4 Tests (integration): checkpoint writes all three artifacts; checkpoint → approve → restore round-trip returns per-graph triple counts and SQLite content to the pre-checkpoint state and the version back; re-approval after restore reproduces the result; unsafe label rejected.
+- [x] 4.1 Implement checkpoint: TriG export via `graph.ExportRepo` + SQLite `VACUUM INTO` on a dedicated (non-chat) connection + a manifest recording the ontology version, written under `data/checkpoints/{label}/`.
+- [x] 4.2 Implement restore: `graph.ClearRepo` → `graph.ImportRepo(trig)` → replace the live `msr.db` with the checkpoint copy.
+- [x] 4.3 Validate `{label}` against a conservative filesystem-safe charset before touching any path (reject path traversal).
+- [x] 4.4 Tests (integration): checkpoint writes all three artifacts; checkpoint → approve → restore round-trip returns per-graph triple counts and SQLite content to the pre-checkpoint state and the version back; re-approval after restore reproduces the result; unsafe label rejected.
 
 ## 5. HTTP API + server wiring (`cmd/server`)
 
