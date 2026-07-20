@@ -46,6 +46,12 @@ class Config:
     # design.md D5) doesn't broaden precision risk the way lowering a
     # general-prose fuzzy floor would.
     fuzzy_min_token_length: int = 3
+    # Novelty miner's document-frequency salience cutoff (design D2/D9): the
+    # POC uses a fixed count threshold rather than tf-idf weighting (deferred).
+    # 50 is conservative — well below the demo targets `solubility` (280/637
+    # docs) and `graphite` (388/637 docs), so both clear it as salient, while
+    # still filtering out low-frequency OCR noise terms from the candidate set.
+    salience_threshold: int = 50
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> Config:
@@ -70,6 +76,9 @@ class Config:
             ),
             fuzzy_min_token_length=int(
                 env.get("MSR_FUZZY_MIN_TOKEN_LENGTH", cls.fuzzy_min_token_length)
+            ),
+            salience_threshold=int(
+                env.get("MSR_SALIENCE_THRESHOLD", cls.salience_threshold)
             ),
         )
 
