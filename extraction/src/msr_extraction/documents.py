@@ -3,13 +3,16 @@
 Emits ``msr:Document`` individuals keyed by report number into the shared
 ``urn:msr:data`` graph via SPARQL UPDATE (design.md D6). IRIs are
 deterministic and there are no blank nodes, so re-running the writer is a
-set-semantics no-op.
+set-semantics no-op. Each written document additionally gets a per-run
+generation edge into ``urn:msr:provenance`` (provenance-run-lineage
+design.md D1-D3): ``<document> prov:wasGeneratedBy <urn:msr:run:extraction/<ts>>``,
+one per document per invocation.
 """
 
 from __future__ import annotations
 
 from msr_extraction.manifest import ManifestRecord
-from msr_extraction.provenance import ACTIVITY_IRI
+from msr_extraction.provenance import ACTIVITY_IRI, run_activity_iri
 from msr_extraction.sparql import SparqlClient
 
 _PREFIXES = """\
@@ -17,6 +20,10 @@ PREFIX msr: <https://w3id.org/msr-kg/ontology#>
 PREFIX msrd: <https://w3id.org/msr-kg/data#>
 PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
 PREFIX dcterms: <http://purl.org/dc/terms/>
+PREFIX prov: <http://www.w3.org/ns/prov#>"""
+
+_PROVENANCE_PREFIXES = """\
+PREFIX msrd: <https://w3id.org/msr-kg/data#>
 PREFIX prov: <http://www.w3.org/ns/prov#>"""
 
 
@@ -85,13 +92,45 @@ def insert_data_update(records: list[ManifestRecord]) -> str:
     )
 
 
-def write_documents(records: list[ManifestRecord], client: SparqlClient) -> None:
-    """Build the INSERT DATA update for records and send it via client.
+def provenance_insert_data(records: list[ManifestRecord], run_ts: str) -> str:
+    """Return the INSERT DATA update writing per-run generation edges.
 
-    Builds the update via :func:`insert_data_update` and sends it with
-    ``client.update``. Additive and idempotent: deterministic IRIs mean
-    repeated calls with the same records are a no-op.
+    For each record, emits ``msrd:{report_number} prov:wasGeneratedBy
+    <urn:msr:run:extraction/{run_ts}>`` into ``GRAPH <urn:msr:provenance>``.
+    The subject reuses the exact ``msrd:{report_number}`` CURIE the stable
+    ``urn:msr:data`` block uses. Callers should only invoke this (and send
+    its result) when ``records`` is non-empty.
+    """
+    run_iri = run_activity_iri(run_ts)
+    lines = [
+        f"    msrd:{record.report_number} prov:wasGeneratedBy {run_iri} ."
+        for record in records
+    ]
+    body = "\n".join(lines)
+    return (
+        f"{_PROVENANCE_PREFIXES}\n"
+        "INSERT DATA {\n"
+        "  GRAPH <urn:msr:provenance> {\n"
+        f"{body}\n"
+        "  }\n"
+        "}"
+    )
+
+
+def write_documents(records: list[ManifestRecord], client: SparqlClient, run_ts: str) -> None:
+    """Build the ``urn:msr:data`` and ``urn:msr:provenance`` updates and send both.
+
+    Sends the existing ``urn:msr:data`` ``INSERT DATA`` (document triples,
+    unchanged — each still carries the stable ``prov:wasGeneratedBy
+    msrd:activity-extraction`` edge) via :func:`insert_data_update`, then a
+    second ``INSERT DATA`` into ``urn:msr:provenance`` via
+    :func:`provenance_insert_data` carrying one per-run generation edge per
+    document, keyed by ``run_ts`` (provenance-run-lineage design.md D1-D3).
+    Additive and idempotent for the ``urn:msr:data`` half: deterministic
+    IRIs mean repeated calls with the same records are a no-op there.
+    No-op (no writes at all) when ``records`` is empty.
     """
     if not records:
         return
     client.update(insert_data_update(records))
+    client.update(provenance_insert_data(records, run_ts))

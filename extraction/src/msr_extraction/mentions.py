@@ -4,14 +4,18 @@ Emits ``msr:Mention`` individuals for linked spans into the shared
 ``urn:msr:data`` graph via additive SPARQL UPDATE (design.md D7, D8).
 IRIs are deterministic (``msrd:mention-{report#}-{start}-{end}``) and
 there are no blank nodes, so re-running the writer over the same
-mentions is a set-semantics no-op.
+mentions is a set-semantics no-op. Each written mention additionally gets
+a per-run generation edge into ``urn:msr:provenance`` (provenance-run-lineage
+design.md D1-D3): ``<mention> prov:wasGeneratedBy <urn:msr:run:extraction/<ts>>``,
+one per mention per invocation, so per-run lineage accumulates without
+touching the idempotent ``urn:msr:data`` block.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 
-from msr_extraction.provenance import ACTIVITY_IRI
+from msr_extraction.provenance import ACTIVITY_IRI, run_activity_iri
 from msr_extraction.sparql import SparqlClient
 
 MSR = "https://w3id.org/msr-kg/ontology#"
@@ -23,6 +27,10 @@ PREFIX msr: <https://w3id.org/msr-kg/ontology#>
 PREFIX msrd: <https://w3id.org/msr-kg/data#>
 PREFIX prov: <http://www.w3.org/ns/prov#>
 PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>"""
+
+_PROVENANCE_PREFIXES = """\
+PREFIX msrd: <https://w3id.org/msr-kg/data#>
+PREFIX prov: <http://www.w3.org/ns/prov#>"""
 
 
 @dataclass(frozen=True)
@@ -114,13 +122,44 @@ def insert_data(triples_block: str) -> str:
     )
 
 
-def write_mentions(mentions: list[Mention], client: SparqlClient) -> None:
-    """Build one INSERT DATA update over all mentions and send it via client.
+def provenance_insert_data(mentions: list[Mention], run_ts: str) -> str:
+    """Return the INSERT DATA update writing per-run generation edges.
 
-    Mentions are sorted by ``(report, start, end)`` first so the emitted
-    update is deterministic. Additive and idempotent: deterministic IRIs
-    and no blank nodes mean repeated calls with the same mentions are a
-    graph no-op.
+    For each mention (sorted by ``(report, start, end)`` for determinism),
+    emits ``<mention-iri> prov:wasGeneratedBy <urn:msr:run:extraction/{run_ts}>``
+    into ``GRAPH <urn:msr:provenance>``. The subject reuses the exact
+    ``msrd:mention-...`` CURIE form produced by :func:`mention_iri` — the
+    same subject the stable ``urn:msr:data`` block uses. Callers should
+    only invoke this (and send its result) when ``mentions`` is non-empty.
+    """
+    ordered = sorted(mentions, key=lambda m: (m.report, m.start, m.end))
+    run_iri = run_activity_iri(run_ts)
+    lines = [
+        f"    {mention_iri(m.report, m.start, m.end)} prov:wasGeneratedBy {run_iri} ."
+        for m in ordered
+    ]
+    body = "\n".join(lines)
+    return (
+        f"{_PROVENANCE_PREFIXES}\n"
+        "INSERT DATA {\n"
+        "  GRAPH <urn:msr:provenance> {\n"
+        f"{body}\n"
+        "  }\n"
+        "}"
+    )
+
+
+def write_mentions(mentions: list[Mention], client: SparqlClient, run_ts: str) -> None:
+    """Build the ``urn:msr:data`` and ``urn:msr:provenance`` updates and send both.
+
+    Sends the existing ``urn:msr:data`` ``INSERT DATA`` (mention triples,
+    unchanged — each still carries the stable ``prov:wasGeneratedBy
+    msrd:activity-extraction`` edge) via :func:`insert_data`, then a second
+    ``INSERT DATA`` into ``urn:msr:provenance`` via
+    :func:`provenance_insert_data` carrying one per-run generation edge per
+    mention, keyed by ``run_ts`` (provenance-run-lineage design.md D1-D3).
+    Both updates order mentions by ``(report, start, end)`` for
+    determinism. No-op (no writes at all) when ``mentions`` is empty.
     """
     if not mentions:
         return
@@ -128,3 +167,4 @@ def write_mentions(mentions: list[Mention], client: SparqlClient) -> None:
     blocks = [mention_triples(m) for m in ordered]
     body = "\n\n".join(blocks)
     client.update(insert_data(body))
+    client.update(provenance_insert_data(mentions, run_ts))
