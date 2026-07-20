@@ -46,6 +46,19 @@ class Config:
     # design.md D5) doesn't broaden precision risk the way lowering a
     # general-prose fuzzy floor would.
     fuzzy_min_token_length: int = 3
+    # Mention-writer batch size (scale-mention-linking, D1): a report's
+    # mentions are written as multiple additive INSERT DATA POSTs of at most
+    # this many mentions each, keeping any single POST body well under
+    # GraphDB's Tomcat maxPostSize (a single unbatched POST of a large
+    # OCR-heavy report — e.g. NSRDS-NBS-61-p4's ~3.8k mentions — otherwise
+    # exceeds it and is rejected with an HTTP 500).
+    mention_write_batch_size: int = 500
+    # Layer-5 disambiguation concurrency (scale-mention-linking, D2): the
+    # bounded worker-pool size used to resolve a run's distinct unresolved
+    # surfaces in parallel. The DeepSeek/openai client is blocking I/O, so
+    # threads overlap the network round-trips that otherwise dominate the
+    # link wall-clock.
+    disambig_concurrency: int = 8
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> Config:
@@ -70,6 +83,12 @@ class Config:
             ),
             fuzzy_min_token_length=int(
                 env.get("MSR_FUZZY_MIN_TOKEN_LENGTH", cls.fuzzy_min_token_length)
+            ),
+            mention_write_batch_size=int(
+                env.get("MSR_MENTION_WRITE_BATCH_SIZE", cls.mention_write_batch_size)
+            ),
+            disambig_concurrency=int(
+                env.get("MSR_DISAMBIG_CONCURRENCY", cls.disambig_concurrency)
             ),
         )
 

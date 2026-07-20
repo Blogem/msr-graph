@@ -22,6 +22,12 @@ MSR = "https://w3id.org/msr-kg/ontology#"
 MSRD = "https://w3id.org/msr-kg/data#"
 XSD = "http://www.w3.org/2001/XMLSchema#"
 
+# Default mentions per INSERT DATA POST (scale-mention-linking D1). Each
+# mention block is a few hundred bytes, so 500 keeps a POST body well under
+# GraphDB's Tomcat maxPostSize; a single unbatched POST of a large report
+# (~3.8k mentions, ~1.9 MB) otherwise exceeds it and is rejected with a 500.
+DEFAULT_MENTION_BATCH_SIZE = 500
+
 _PREFIXES = """\
 PREFIX msr: <https://w3id.org/msr-kg/ontology#>
 PREFIX msrd: <https://w3id.org/msr-kg/data#>
@@ -149,22 +155,40 @@ def provenance_insert_data(mentions: list[Mention], run_ts: str) -> str:
     )
 
 
-def write_mentions(mentions: list[Mention], client: SparqlClient, run_ts: str) -> None:
-    """Build the ``urn:msr:data`` and ``urn:msr:provenance`` updates and send both.
+def write_mentions(
+    mentions: list[Mention],
+    client: SparqlClient,
+    run_ts: str,
+    *,
+    batch_size: int = DEFAULT_MENTION_BATCH_SIZE,
+) -> None:
+    """Build the ``urn:msr:data`` and ``urn:msr:provenance`` updates and send them.
 
-    Sends the existing ``urn:msr:data`` ``INSERT DATA`` (mention triples,
-    unchanged — each still carries the stable ``prov:wasGeneratedBy
-    msrd:activity-extraction`` edge) via :func:`insert_data`, then a second
-    ``INSERT DATA`` into ``urn:msr:provenance`` via
+    Sends the ``urn:msr:data`` ``INSERT DATA`` (mention triples, each carrying
+    the stable ``prov:wasGeneratedBy msrd:activity-extraction`` edge) via
+    :func:`insert_data`, then the ``urn:msr:provenance`` ``INSERT DATA`` via
     :func:`provenance_insert_data` carrying one per-run generation edge per
     mention, keyed by ``run_ts`` (provenance-run-lineage design.md D1-D3).
-    Both updates order mentions by ``(report, start, end)`` for
-    determinism. No-op (no writes at all) when ``mentions`` is empty.
+
+    To keep any single POST body under GraphDB's Tomcat ``maxPostSize``
+    (scale-mention-linking D1), the mentions are split into batches of at most
+    ``batch_size``: one ``urn:msr:data`` request per batch is sent first, then
+    one ``urn:msr:provenance`` request per batch. Every batch is additive
+    ``INSERT DATA`` over deterministic, blank-node-free IRIs, so the union of
+    batches is identical to a single unbatched write — batching changes only
+    the number of requests, never the resulting triples or the re-run
+    idempotency of ``urn:msr:data``. All batches order mentions by
+    ``(report, start, end)`` for determinism. No-op (no writes at all) when
+    ``mentions`` is empty.
     """
+    if batch_size < 1:
+        raise ValueError(f"batch_size must be >= 1, got {batch_size}")
     if not mentions:
         return
     ordered = sorted(mentions, key=lambda m: (m.report, m.start, m.end))
-    blocks = [mention_triples(m) for m in ordered]
-    body = "\n\n".join(blocks)
-    client.update(insert_data(body))
-    client.update(provenance_insert_data(mentions, run_ts))
+    batches = [ordered[i : i + batch_size] for i in range(0, len(ordered), batch_size)]
+    for batch in batches:
+        body = "\n\n".join(mention_triples(m) for m in batch)
+        client.update(insert_data(body))
+    for batch in batches:
+        client.update(provenance_insert_data(batch, run_ts))

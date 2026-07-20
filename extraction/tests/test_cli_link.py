@@ -18,6 +18,8 @@ from __future__ import annotations
 
 import json
 import re
+import threading
+import time
 from types import SimpleNamespace
 
 import pytest
@@ -76,6 +78,37 @@ class _CountingFlashClient:
     def complete(self, system_prompt: str, user_prompt: str) -> str:
         match = re.search(r'Mention: "([^"]*)"', user_prompt)
         self.surfaces.append(match.group(1) if match else "")
+        return json.dumps({"novel": True})
+
+
+class _LinkingFlashClient:
+    """Fake `Completer` that always links to a fixed IRI."""
+
+    def __init__(self, target_iri: str) -> None:
+        self.target_iri = target_iri
+
+    def complete(self, system_prompt: str, user_prompt: str) -> str:
+        return json.dumps({"link": self.target_iri})
+
+
+class _ConcurrencyTrackingFlashClient:
+    """Fake `Completer` recording the peak number of concurrent `complete()`
+    calls, to prove the pre-warm pool runs more than one at a time."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self.in_flight = 0
+        self.max_in_flight = 0
+        self.calls = 0
+
+    def complete(self, system_prompt: str, user_prompt: str) -> str:
+        with self._lock:
+            self.in_flight += 1
+            self.calls += 1
+            self.max_in_flight = max(self.max_in_flight, self.in_flight)
+        time.sleep(0.1)
+        with self._lock:
+            self.in_flight -= 1
         return json.dumps({"novel": True})
 
 
@@ -224,6 +257,85 @@ def test_cmd_link_memoizes_disambiguation_by_surface(tmp_path, monkeypatch) -> N
     assert fake_flash.surfaces.count("KF-ZrF4") == 1, fake_flash.surfaces
     assert len(fake_flash.surfaces) == len(set(fake_flash.surfaces)), (
         f"a surface was sent to Flash more than once (cache miss): {fake_flash.surfaces}"
+    )
+
+
+def test_cmd_link_prewarm_linked_outcome_flows_into_mentions(tmp_path, monkeypatch) -> None:
+    """A disambiguation that returns a link resolves the span in the real
+    pass: the concurrent pre-warm populates the cache, and the caching
+    disambiguator applies the linked outcome to the layer-5 mention record."""
+    monkeypatch.setenv("MSR_CORPUS_DIR", str(tmp_path))
+    monkeypatch.setattr(curated, "CURATED_REPORTS", [REPORT])
+
+    known = _known_entities()
+    monkeypatch.setattr(
+        cli, "GraphReader",
+        SimpleNamespace(from_config=lambda config: _FakeGraphReader(known)),
+    )
+    monkeypatch.setattr(
+        cli, "SparqlClient",
+        SimpleNamespace(from_config=lambda config: _FakeSparqlClient()),
+    )
+    monkeypatch.setattr(
+        cli, "FlashClient",
+        SimpleNamespace(from_config=lambda config: _LinkingFlashClient(SALT_IRI)),
+    )
+
+    report_dir = tmp_path / REPORT
+    report_dir.mkdir(parents=True)
+    text = "molten NaCl-KCl was tested."
+    segment = {"report": REPORT, "index": 0, "text": text, "char_start": 0, "char_end": len(text)}
+    (report_dir / "segments.jsonl").write_text(json.dumps(segment) + "\n", encoding="utf-8")
+
+    assert cli.main(["link"]) == 0
+
+    records = [
+        json.loads(line)
+        for line in (report_dir / "mentions.jsonl").read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    nacl = [r for r in records if r["surface_form"] == "NaCl-KCl"]
+    assert nacl, f"expected a NaCl-KCl record, got: {records}"
+    assert nacl[0]["status"] == "linked"
+    assert nacl[0]["target_iri"] == SALT_IRI
+    assert nacl[0]["layer"] == 5
+
+
+def test_cmd_link_prewarm_resolves_surfaces_concurrently(tmp_path, monkeypatch) -> None:
+    """Several distinct unresolved surfaces are resolved by the pre-warm pool
+    with more than one model call in flight at once (not strictly serial)."""
+    monkeypatch.setenv("MSR_CORPUS_DIR", str(tmp_path))
+    monkeypatch.setenv("MSR_DISAMBIG_CONCURRENCY", "8")
+    monkeypatch.setattr(curated, "CURATED_REPORTS", [REPORT])
+
+    known = _known_entities()
+    monkeypatch.setattr(
+        cli, "GraphReader",
+        SimpleNamespace(from_config=lambda config: _FakeGraphReader(known)),
+    )
+    monkeypatch.setattr(
+        cli, "SparqlClient",
+        SimpleNamespace(from_config=lambda config: _FakeSparqlClient()),
+    )
+    fake = _ConcurrencyTrackingFlashClient()
+    monkeypatch.setattr(
+        cli, "FlashClient",
+        SimpleNamespace(from_config=lambda config: fake),
+    )
+
+    report_dir = tmp_path / REPORT
+    report_dir.mkdir(parents=True)
+    # Four distinct salt-shaped spans, none in _known_entities -> all reach
+    # layer 5 and are pending together in the pre-warm pool.
+    text = "melts NaCl-KCl and KF-ZrF4 and MgF2-CaF2 and RbF-CsF were compared."
+    segment = {"report": REPORT, "index": 0, "text": text, "char_start": 0, "char_end": len(text)}
+    (report_dir / "segments.jsonl").write_text(json.dumps(segment) + "\n", encoding="utf-8")
+
+    assert cli.main(["link"]) == 0
+
+    assert fake.calls == 4, f"expected one call per distinct surface, got {fake.calls}"
+    assert fake.max_in_flight >= 2, (
+        f"expected concurrent resolution, peak in-flight was {fake.max_in_flight}"
     )
 
 
