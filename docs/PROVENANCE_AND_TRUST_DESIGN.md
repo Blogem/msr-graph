@@ -71,15 +71,45 @@ refactor) and demonstrates the principle directly: every node the agent touches 
 
 ### 1.2 Complementary mechanism — provenance by named graph (batch/audit dimension)
 
-Because GraphDB is a quad store and the pipelines already write per run, each **source or
-run** additionally gets its own named graph (`urn:msr:src:nist-srd27`,
-`urn:msr:run:extraction/<ts>`, …) with a single PROV `Activity` record attached to the graph
-IRI. This gives cheap coarse-grained audit ("show everything from source X / run Y is one
-query") and a natural rollback unit. It complements §1.1, does not replace it. Since POC data
-is disposable (replaced wholesale on every load), this is applied uniformly to all writes —
-there is no migration concern. (RDF-star statement-level annotation is available in GraphDB
-but is *not* adopted — it complicates the whole SPARQL surface for marginal gain at POC
-scale.)
+Because GraphDB is a quad store, per-run/per-source audit data lives in a single
+append-only graph, **`urn:msr:provenance`** — not a graph per run or per source. This
+complements §1.1, does not replace it, and is what gives true **per-run lineage**: "which
+run(s) produced fact F?" is answerable by a query, not just "a run happened at time T."
+
+Two activity IRIs split the idempotent (`urn:msr:data`) and audit (`urn:msr:provenance`)
+concerns:
+
+- A **stable, per-pipeline** `prov:Activity` — `msrd:activity-<pipeline>` — is typed once in
+  `urn:msr:data` (`prov:wasAssociatedWith` its `prov:Agent`, `owl:versionInfo`, no
+  timestamps), so it is a set-semantics no-op across re-runs. Every fact keeps its
+  deterministic `prov:wasGeneratedBy msrd:activity-<pipeline>` edge in `urn:msr:data` — this
+  single, stable edge is what the agent's core-scoped grounding sees.
+- Each run additionally mints a **per-run** `prov:Activity` **node** — the run identifier
+  `urn:msr:run:<pipeline>/<ts>` used as a node IRI, never a graph name — written into
+  `urn:msr:provenance` with `prov:wasAssociatedWith`, `prov:startedAtTime`/`endedAtTime`, and
+  `owl:versionInfo`. For every fact the run asserts (including facts already present in
+  `urn:msr:data` — "touched," not "first-created," semantics), the run also writes `<fact>
+  prov:wasGeneratedBy <urn:msr:run:<pipeline>/<ts>>` into `urn:msr:provenance`. The
+  generation edges a fact accumulates across runs — one per run that asserted it — *are*
+  its lineage.
+
+`urn:msr:provenance` is excluded from core reads (outside `graph.CoreGraphs`, exactly like
+`urn:msr:staging`), so grounding/answer-time queries are unaffected and continue to see
+exactly one `wasGeneratedBy` edge per fact; per-run lineage is opt-in via an explicit `GRAPH
+<urn:msr:provenance>` query. The graph is explicitly append-only/monotonic and persists
+across reseeds of `urn:msr:data` — that persistence is what makes cross-run lineage
+meaningful. Since POC data is disposable, a full teardown (`ensure-repo`) clears it along
+with everything else. (RDF-star statement-level annotation is available in GraphDB but is
+*not* adopted — it complicates the whole SPARQL surface for marginal gain at POC scale.)
+
+**Supersedes design D8.** This single-graph model (`provenance-run-lineage`, design
+D1–D2) replaces the archived `provenance-model` design D8, which gave each source or run
+its own named graph (`urn:msr:src:nist-srd27`, `urn:msr:run:extraction/<ts>`, …) holding a
+single `Activity` record. D8 could record only that a run happened, never *which* facts it
+touched, so per-run lineage was unrecoverable; it also left one new `urn:msr:run:*` graph
+per load cluttering the graph list. The `urn:msr:src:*` per-source graph is removed
+outright, not merged in: the `Dataset` node it duplicated already lives, self-contained, in
+`urn:msr:data`.
 
 ### 1.3 Three enforcement points
 
@@ -162,11 +192,14 @@ only has to layer the provenance invariant on top — no seed-coexistence hedgin
 `openspec/changes/provenance-model/design.md` D9). Within `provenance-model`, the `Activity`
 IRI a fact references via `wasGeneratedBy` is deterministic per pipeline/source, keeping that
 edge byte-stable across re-runs for fact-store idempotency; the wall-clock-timestamped
-`Activity` record (agent, timestamps, ontology version) is asserted separately in the per-run
-named graph `urn:msr:run:<pipeline>/<ts>` (design D8).
+`Activity` record (agent, timestamps, ontology version) is asserted separately as a per-run
+node in the single append-only `urn:msr:provenance` graph, alongside one
+`prov:wasGeneratedBy` lineage edge per fact the run asserts (`provenance-run-lineage`, §1.2,
+superseding design D8's per-run/per-source named-graph split).
 
 - **12 `provenance-model`** — PROV-O slice in the ontology; complete + required provenance on
-  all fact-bearing individuals; per-source/run named graphs + Activity records; retrofit the
+  all fact-bearing individuals; a single `urn:msr:provenance` audit graph with per-run
+  `Activity` nodes and generation-lineage edges (§1.2); retrofit the
   NIST loader (self-contained dataset/DOI + provenance edges — no `msr:citedIn`, deferred to
   chunk 7 per design D3) and seed; **answer-time** enforcement in the agent
   (grounded-vs-ungrounded stamp + provenance-chain SSE event, gated in the loop) and
