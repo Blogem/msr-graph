@@ -136,6 +136,24 @@ func (e *Engine) Create(ctx context.Context, label string) (Manifest, error) {
 // store.trig, and atomically replaces the live SQLite file with the
 // checkpoint's msr.db copy. label is validated before any path is
 // touched; an unknown label yields ErrNotFound.
+//
+// ClearRepo and ImportRepo are two separate REST calls, not one
+// transaction: if ImportRepo fails after ClearRepo already succeeded
+// (transient network error, a SHACL shape added since the checkpoint
+// was taken that now rejects its triples, disk error on GraphDB's
+// side), the repository would otherwise be left completely empty with
+// no way back -- strictly worse than the pre-restore state, on the
+// very feature meant to be the safety net. To guard against that,
+// Restore captures a full export of the CURRENT repository state
+// before calling ClearRepo, and if the checkpoint import fails,
+// attempts a best-effort re-import of that pre-clear snapshot so the
+// repository ends up back where it started rather than empty. The
+// returned error always distinguishes this partial-failure path from
+// an ordinary no-op failure, and states plainly whether the rollback
+// itself succeeded or the repository is now empty and needs manual
+// intervention. The SQLite swap only ever runs after a successful
+// graph import, so a graph-import failure (rolled back or not) never
+// also swaps the live SQLite file.
 func (e *Engine) Restore(ctx context.Context, label string) error {
 	if err := ValidateLabel(label); err != nil {
 		return err
@@ -154,11 +172,30 @@ func (e *Engine) Restore(ctx context.Context, label string) error {
 		return fmt.Errorf("checkpoint: read %s: %w", trigFileName, err)
 	}
 
+	// Snapshot the CURRENT repo state in memory before clearing it, so a
+	// failed checkpoint import can be rolled back rather than leaving the
+	// repository empty.
+	preClearSnapshot, err := e.gc.ExportRepo(ctx)
+	if err != nil {
+		return fmt.Errorf("checkpoint: snapshot pre-restore state: %w", err)
+	}
+
 	if err := e.gc.ClearRepo(ctx); err != nil {
 		return fmt.Errorf("checkpoint: clear repo: %w", err)
 	}
+
 	if err := e.gc.ImportRepo(ctx, trig); err != nil {
-		return fmt.Errorf("checkpoint: import repo: %w", err)
+		importErr := err
+		if rbErr := e.gc.ImportRepo(ctx, preClearSnapshot); rbErr != nil {
+			return fmt.Errorf(
+				"checkpoint: restore failed and the repository was cleared; rollback to the pre-restore state ALSO failed -- the repository is now EMPTY and requires manual intervention (restore import err: %v, rollback err: %w)",
+				importErr, rbErr,
+			)
+		}
+		return fmt.Errorf(
+			"checkpoint: restore failed after clearing the repository; attempted rollback to the pre-restore state and it succeeded, so the repository is unchanged from before this Restore call (restore import err: %w)",
+			importErr,
+		)
 	}
 
 	if err := e.swapSQLite(dir); err != nil {
