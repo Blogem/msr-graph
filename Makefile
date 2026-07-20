@@ -135,8 +135,8 @@ mine:
 	docker compose run --rm extraction mine
 
 test:
-	@echo "==> running go test with the GraphDB and sandbox Docker acceptance gates enabled (GRAPHDB_REQUIRED=1, SANDBOX_DOCKER_REQUIRED=1)"
-	GRAPHDB_REQUIRED=1 SANDBOX_DOCKER_REQUIRED=1 go test ./...
+	@echo "==> running go test with the GraphDB and sandbox Docker acceptance gates enabled (GRAPHDB_REQUIRED=1, SANDBOX_DOCKER_REQUIRED=1); -p 1 serializes package execution because the checkpoint/proposal integration tests share the live 'msr' repo and clobber each other under cross-package parallelism"
+	GRAPHDB_REQUIRED=1 SANDBOX_DOCKER_REQUIRED=1 go test -p 1 ./...
 
 chat:
 	@echo "==> starting chatcli REPL against http://localhost:8080/api/chat (run 'make up' first)"
