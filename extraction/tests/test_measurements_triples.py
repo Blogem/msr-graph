@@ -53,25 +53,24 @@ def _collapse_ws(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
-def _triples(**overrides: object) -> str:
+def _triples(*, equation: EquationParse = EQUATION_NO_RANGE, **overrides: object) -> str:
     """Build one ``measurement_triples(...)`` call with the canonical fixture.
 
-    ASSUMPTION (flagged for pass-2 reconciliation): ``measurement_triples``
-    takes the same keyword names as ``write_measurement`` (salt_iri,
-    property_iri, property_name, unit_curie, equation, uncertainty,
-    confidence, rationale, report) minus the writer-only ``client``/
-    ``conn``/``run_ts`` parameters -- there is no ``document_iri`` kwarg;
-    the document reference is derived from ``report`` (matching the
-    ``msrd:{report}`` CURIE convention already established by
-    ``mentions.py``/``edges.py``).
+    Reconciled to the merged ``measurement_triples`` signature: it takes an
+    explicit ``locator`` (derived here via ``build_locator``) plus the
+    equation *form* and the two temperature bounds separately (not an
+    ``EquationParse`` object). Callers may pass ``equation=`` to vary the
+    form/range; the document reference is derived from ``report`` as the
+    ``msrd:{report}`` CURIE.
     """
     fields: dict[str, object] = dict(
+        locator=build_locator(REPORT, PROPERTY_NAME, SALT_IRI),
         salt_iri=SALT_IRI,
         property_iri=PROPERTY_IRI,
-        property_name=PROPERTY_NAME,
         unit_curie=UNIT_CURIE,
-        equation=EQUATION_NO_RANGE,
-        uncertainty=None,
+        equation_form=equation.form,
+        t_min=equation.t_min,
+        t_max=equation.t_max,
         confidence=CONFIDENCE,
         rationale=RATIONALE,
         report=REPORT,

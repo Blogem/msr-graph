@@ -208,11 +208,10 @@ def test_write_measurement_leaves_no_wal_or_shm_sidecar_files(
 
 
 def test_measurement_provenance_insert_data_carries_the_per_run_edge() -> None:
-    """ASSUMPTION (flagged for pass-2 reconciliation): positional signature
-    ``measurement_provenance_insert_data(measurement_iri, run_ts)``,
-    mirroring ``provenance.run_activity_iri(run_ts)``/
-    ``mentions.provenance_insert_data``'s per-run-edge convention."""
-    update = measurement_provenance_insert_data(EXPECTED_MIRI, RUN_TS)
+    """Reconciled to the merged signature
+    ``measurement_provenance_insert_data(measurement_iris: list[str], run_ts)``
+    (a list of IRIs, mirroring ``mentions.provenance_insert_data``)."""
+    update = measurement_provenance_insert_data([EXPECTED_MIRI], RUN_TS)
     assert "GRAPH <urn:msr:provenance>" in update
     assert (
         f"{EXPECTED_MIRI} prov:wasGeneratedBy <urn:msr:run:extraction/{RUN_TS}>" in update
@@ -223,19 +222,18 @@ def test_measurement_provenance_insert_data_carries_the_per_run_edge() -> None:
 
 
 def test_to_row_maps_coefficients_positionally_and_pads_the_rest_with_none() -> None:
-    """ASSUMPTION (flagged for pass-2 reconciliation): ``to_row`` keyword
-    names mirror ``write_measurement``'s (``locator``, ``salt``,
-    ``property_name``, ``equation``, ``uncertainty``, ``report``) and
-    return a ``measurement_store.MeasurementRow``-shaped object (attributes
-    ``salt``/``property``/``equation_form``/``c0..c4``/``source``/``doc_id``,
-    per the measurement_store dataclass field names)."""
+    """Reconciled to the merged ``to_row`` signature: it takes ``salt_iri``
+    (the full salt IRI, from which the ``salt`` column slug is derived) and
+    ``doc_id`` (not ``salt``/``report``), returning a
+    ``measurement_store.MeasurementRow`` (attributes
+    ``salt``/``property``/``equation_form``/``c0..c4``/``source``/``doc_id``)."""
     row = to_row(
         locator=EXPECTED_LOCATOR,
-        salt="BeF2-LiF-34.0-66.0",
+        salt_iri=SALT_IRI,
         property_name=PROPERTY_NAME,
         equation=EQUATION,
         uncertainty=None,
-        report=REPORT,
+        doc_id=REPORT,
     )
     assert row.locator == EXPECTED_LOCATOR
     assert row.salt == "BeF2-LiF-34.0-66.0"
