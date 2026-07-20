@@ -14,6 +14,9 @@ type config struct {
 	ontologyDir string
 	// dbPath is the SQLite measurement store path (env MSR_DB_PATH).
 	dbPath string
+	// nistDir is the directory containing the vendored NIST SRD 27
+	// property CSV files (env MSR_NIST_DIR).
+	nistDir string
 }
 
 const (
@@ -21,6 +24,7 @@ const (
 	defaultGraphDBRepo = "msr"
 	defaultOntologyDir = "ontology"
 	defaultDBPath      = "data/msr.db"
+	defaultNistDir     = "data/nist"
 )
 
 // loadConfig reads config from env (via the injected lookup, ordinarily
@@ -31,6 +35,7 @@ func loadConfig(env func(string) string) config {
 		graphDBRepo: envOrDefault(env, "GRAPHDB_REPO", defaultGraphDBRepo),
 		ontologyDir: envOrDefault(env, "MSR_ONTOLOGY_DIR", defaultOntologyDir),
 		dbPath:      envOrDefault(env, "MSR_DB_PATH", defaultDBPath),
+		nistDir:     envOrDefault(env, "MSR_NIST_DIR", defaultNistDir),
 	}
 }
 

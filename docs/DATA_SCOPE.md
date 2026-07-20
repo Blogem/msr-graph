@@ -48,8 +48,10 @@ in T from the document, then pulls the coefficients from NIST to compute a numbe
 ### POC filter
 
 Keep only rows whose salt is a **pure or mixed fluoride** built from cations
-{Li, Be, Na, K, Zr, U, Th} (every component ends in `F`). Expected target set (exact
-rows to be confirmed on parse; not every salt has all four properties):
+{Li, Be, Na, K, Zr, U, Th} (every component ends in `F`). Confirmed on parse
+(see "Open items to verify on ingestion" below): **284 fluoride measurements
+kept across the 4 property files, 185 distinct canonical salts**; not every
+salt has all four properties:
 
 - **Pure:** `LiF`, `BeF2`, `NaF`, `KF` (and `ZrF4`/`UF4`/`ThF4` where present — these
   appear mainly inside mixtures).
@@ -212,15 +214,19 @@ Custom OWL ontology (RDF, loadable into GraphDB) with three layers:
   coefficient row in SQLite (the numbers stay external); provenance via
   `prov:wasDerivedFrom` / `citedIn`. Units via QUDT (`GM-PER-CentiM3`, `S-PER-CentiM`,
   `mN-PER-M`, `MilliPA-SEC`) — see `ONTOLOGY.md` for the materialized T-Box.
-- **Reactor:** `MoltenSaltReactor` (reuse DIAMOND), `MSRE` individual; components
-  `ReactorCore`, `Coolant`, `HeatExchanger`, `Pump`; salt roles `FuelSalt`,
-  `CoolantSalt`, `FlushSalt`.
+- **Reactor (deferred to chunk-7):** `MoltenSaltReactor` (reuse DIAMOND), an `MSRE`
+  individual, salt roles `FuelSalt`/`CoolantSalt`/`FlushSalt`, and reactor components
+  (`ReactorCore`, `Coolant`, `HeatExchanger`, `Pump`) are real, extractable facts —
+  `ORNL-TM-2316` states the 66-34 melt "has been used in the MSRE as the coolant" — but
+  nothing writes them into the graph until chunk-7 relation extraction derives them from
+  real text. The POC ontology does not carry a hand-curated reactor/role layer in the
+  meantime; the vocabulary still seeds NER with the corresponding SKOS concepts.
 - **Provenance (PROV-style):** `Document` nodes per ORNL report; entities/measurements
   link via `citedIn` / `wasDerivedFrom`.
 
-DIAMOND alignment is by `rdfs:seeAlso` / `skos:closeMatch` to the DIAMOND IRIs
-(namespace `https://github.com/idaholab/DIAMOND/`, opaque `nuclear:NNNNNN` classes) —
-we do **not** import `diamond.owl` (615 mostly-LWR classes, no unit layer).
+DIAMOND alignment is by `rdfs:seeAlso` to the DIAMOND IRIs (namespace
+`https://github.com/idaholab/DIAMOND/`, opaque `nuclear:NNNNNN` classes) — we do **not**
+import `diamond.owl` (615 mostly-LWR classes, no unit layer).
 
 ### Controlled vocabulary (SKOS)
 
@@ -233,8 +239,11 @@ Thesaurus RDF/SKOS derivative is a fallback.) **Deferred — build during the vo
 phase.** Seed concepts: `MOLTEN SALT REACTORS`
 (→ `molten salt cooled reactors` → `MSRE REACTOR`; → `molten salt fueled reactors`),
 `MOLTEN SALTS` (→ `flibe`), `molten salt fuels`, `metal transfer process`,
-`reductive extraction`, `coolants`, `fluorides`, + the four property terms. NER
-entities link to these via `skos:closeMatch`.
+`reductive extraction`, `coolants`, `fluorides`, + the four property terms. Concepts
+carry the friendly names (`skos:prefLabel`/`skos:altLabel`, e.g. "FLiBe") that seed the
+NER matcher; a recognized mention links to its resolved target (a concept, or — for a
+composed salt formula — the `msr:MoltenSalt` individual itself) via `msr:linksTo` on the
+`msr:Mention`, not via `skos:closeMatch`.
 
 ## 4. Stretch — IAEA safety (PUB2027)
 
@@ -266,11 +275,34 @@ substantial verbatim text.
 Each item is owned by an implementation chunk (see `IMPLEMENTATION_PLAN.md`) and appears
 in that chunk's acceptance criteria.
 
-1. Exact fluoride row counts per property file; confirm FLiNaK (`LiF-NaF-KF`) presence.
+1. **RESOLVED** on ingest (2026-07-19). Exact fluoride row counts per property file
+   (rows read → fluoride kept; 0 flagged for manual review in all four files):
+
+   | File | rows read | fluoride kept | out-of-scope (non-fluoride) |
+   |------|-----------|---------------|------------------------------|
+   | density | 3608 | 95 | 3513 |
+   | conductivity | 4085 | 85 | 4000 |
+   | s-tension | 1677 | 47 | 1630 |
+   | viscosity | 1414 | 57 | 1357 |
+
+   Totals: **284 measurements kept, 185 distinct canonical salts, 0 flagged**.
+   FLiNaK is **present** — `KF-LiF-NaF` at `42.0-46.5-11.5 mol%` (density, `P1`).
    → **chunk 2** (`load-nist-structured-data`)
-2. Confirm the MSRE coolant FLiBe (~66-34 `LiF-BeF2`) row exists. → **chunk 2**
-3. Verify the `+E`, `P2`, `P3`, `DP` equation forms against `molten-salt-data.pdf`.
-   → **chunk 2**
+2. **RESOLVED** on ingest (2026-07-19). The MSRE coolant FLiBe row is **present**:
+   NIST row `BeF2-LiF,34.0-66.0,P1,800,1080,,2.413,-4.88E-4` → canonical
+   `BeF2-LiF | 34.0-66.0`, salt `msrd:salt-BeF2-LiF-34.0-66.0`. Note: the raw file
+   already lists components byte-sorted as `BeF2-LiF` with BeF2=34/LiF=66 — the
+   earlier assumption above of a `LiF-BeF2,34.0-66.0` row is corrected against the
+   real data (composition is BeF2-major at this range, not LiF-major). → **chunk 2**
+3. **RESOLVED** on ingest (2026-07-19). Verified the equation forms actually present
+   in the fluoride subset against `molten-salt-data.pdf`, all now modeled in the
+   TBox: **Linear** (`P1`) = 130, **Arrhenius** (`+E`) = 131, **DiscretePoint**
+   (`DP`) = 16, **ExtendedArrhenius1** (`E1`) = 2, **Isotherm2** (`I2`) = 1,
+   **Isotherm3** (`I3`) = 2, **Isotherm4** (`I4`) = 2. The `I*` isotherm forms
+   (property-vs-composition at fixed T, e.g. `KF-ZrF4, 0.0-33.3 ZrF4`) and `E1`
+   are ingested as first-class measurements (range-composition salts for
+   isotherms), not skipped. (`P2`/`P3` do not occur in the fluoride subset — only
+   `P1` polynomials appear.) → **chunk 2**
 4. Finalize the 3–4 additional chemistry/corrosion docs from the manifest.
    → **chunk 5** (`ingest-archive-documents`). **RESOLVED (2026-07-19):** 4 additions
    picked (`ORNL-TM-2256`, `ORNL-4658`, `ORNL-4829`, `ORNL-3124`); 2 of the original 7

@@ -67,6 +67,36 @@ func TestRun_Dispatch(t *testing.T) {
 	}
 }
 
+// TestRun_NistSubcommandRecognized covers the "Subcommand is dispatched"
+// scenario from specs/nist-structured-loading/spec.md: `loader nist` must
+// be a recognized subcommand, not fall through to the "unknown subcommand"
+// default case. It may still fail at runtime (no vendored data files or no
+// GraphDB reachable from this pure unit-test environment) -- that failure
+// is a different, acceptable error, so this test asserts only that the
+// specific "unknown subcommand" sentinel is absent.
+func TestRun_NistSubcommandRecognized(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	err := run([]string{"nist"}, noEnv, &stdout, &stderr)
+
+	if err != nil && strings.Contains(err.Error(), `unknown subcommand "nist"`) {
+		t.Errorf("run([\"nist\"]) treated as unknown subcommand: %v", err)
+	}
+}
+
+// TestPrintUsage_ListsNist covers the same dispatch scenario from the
+// usage-text side: once `nist` is wired in, the subcommand listing printed
+// by `loader help` / `loader -h` must mention it, mirroring how `seed` and
+// `init-db` are already listed.
+func TestPrintUsage_ListsNist(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	if err := run([]string{"help"}, noEnv, &stdout, &stderr); err != nil {
+		t.Fatalf("run([\"help\"]) = %v, want no error", err)
+	}
+	if !strings.Contains(stdout.String(), "nist") {
+		t.Errorf("usage text does not list the nist subcommand:\n%s", stdout.String())
+	}
+}
+
 func TestLoadConfig_Defaults(t *testing.T) {
 	cfg := loadConfig(noEnv)
 

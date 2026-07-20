@@ -6,6 +6,19 @@ requires-python = ">=3.12"
 dependencies = [
     "pysbd==0.3.4",
     "httpx==0.28.1",
+    # NOTE: no statistical model (e.g. en_core_web_sm) is a dependency here.
+    # The pipeline is rules-first (design.md Open Question): it builds a
+    # `spacy.blank("en")` pipeline + EntityRuler (see seeding.py) and never
+    # calls `spacy.load(...)`, so a trained model would be dead weight.
+    "spacy==3.8.7",
+    # Pinned explicitly: spacy's `cli` submodule (imported unconditionally by
+    # `import spacy`) does `from click import NoSuchOption` directly, but its
+    # `typer<1.0.0,>=0.3.0` dependency resolves to typer>=0.16 by default,
+    # which no longer requires click transitively -> ModuleNotFoundError
+    # without this direct pin.
+    "click==8.1.8",
+    "rapidfuzz==3.10.1",
+    "openai==1.57.0",
 ]
 
 [project.optional-dependencies]

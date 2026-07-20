@@ -1,0 +1,42 @@
+{
+  "description": "Vendored QUDT unit/quantity-kind allowlist for the MSR KG POC. QUDT is referenced as values only (not imported/dereferenced). Consistent with msr:canonicalUnit in ontology/msr.ttl. Reused cross-language (Go loader chunk 2, Python chunk 8).",
+  "source": "https://data.nist.gov/od/id/mds2-2298 property units + ontology/msr.ttl TBox",
+  "prefixes": {
+    "unit": "http://qudt.org/vocab/unit/",
+    "qk": "http://qudt.org/vocab/quantitykind/"
+  },
+  "properties": {
+    "density": {
+      "quantityKind": "http://qudt.org/vocab/quantitykind/Density",
+      "canonicalUnit": "http://qudt.org/vocab/unit/GM-PER-CentiM3",
+      "unitCurie": "unit:GM-PER-CentiM3"
+    },
+    "viscosity": {
+      "quantityKind": "http://qudt.org/vocab/quantitykind/DynamicViscosity",
+      "canonicalUnit": "http://qudt.org/vocab/unit/MilliPA-SEC",
+      "unitCurie": "unit:MilliPA-SEC"
+    },
+    "surfaceTension": {
+      "quantityKind": "http://qudt.org/vocab/quantitykind/SurfaceTension",
+      "canonicalUnit": "http://qudt.org/vocab/unit/MilliN-PER-M",
+      "unitCurie": "unit:MilliN-PER-M"
+    },
+    "electricalConductivity": {
+      "quantityKind": "http://qudt.org/vocab/quantitykind/ElectricConductivity",
+      "canonicalUnit": "http://qudt.org/vocab/unit/S-PER-CentiM",
+      "unitCurie": "unit:S-PER-CentiM"
+    }
+  },
+  "allowedUnits": [
+    "http://qudt.org/vocab/unit/GM-PER-CentiM3",
+    "http://qudt.org/vocab/unit/MilliPA-SEC",
+    "http://qudt.org/vocab/unit/MilliN-PER-M",
+    "http://qudt.org/vocab/unit/S-PER-CentiM"
+  ],
+  "allowedQuantityKinds": [
+    "http://qudt.org/vocab/quantitykind/Density",
+    "http://qudt.org/vocab/quantitykind/DynamicViscosity",
+    "http://qudt.org/vocab/quantitykind/SurfaceTension",
+    "http://qudt.org/vocab/quantitykind/ElectricConductivity"
+  ]
+}

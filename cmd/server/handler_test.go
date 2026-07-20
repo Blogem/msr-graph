@@ -35,7 +35,7 @@ func TestHealthz(t *testing.T) {
 		},
 	}
 
-	mux := newMux()
+	mux := newMux(http.NotFoundHandler())
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

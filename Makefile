@@ -7,14 +7,24 @@
 #                   # extraction/sandbox images, wait for GraphDB, ensure the
 #                   # "msr" repository exists.
 #   make load-seed  # one-shot loader run: init-db then seed.
+#   make load-nist  # ingest the vendored NIST SRD 27 fluoride CSVs (chains
+#                   # after load-seed; additive, must run after seed).
 #   make ingest     # one-shot extraction run: acquire -> manifest ->
 #                   # normalize/segment -> documents (see
 #                   # openspec/changes/ingest-archive-documents/design.md).
+#   make link       # one-shot extraction run: link recognized spans to known
+#                   # entities; writes msr:Mention triples + data/corpus/{report#}/
+#                   # mentions.jsonl (see openspec/changes/ner-entity-linking/design.md).
 #   make test       # go test ./... with the GraphDB and sandbox Docker
 #                   # acceptance gates enabled.
 #   make down       # stop the stack and remove its volumes.
+#   make chat       # manual-verification REPL for POST /api/chat (cmd/chatcli),
+#                   # against the published http://localhost:8080/api/chat —
+#                   # run this against a stack already brought up with `make up`.
+#   make demo-density # one-shot chatcli run of the canonical FLiBe density
+#                     # question, for a quick smoke test of the same endpoint.
 
-.PHONY: up down load-seed ingest test
+.PHONY: up down load-seed load-nist ingest link test chat demo-density
 
 # GraphDB's published host port (see docker-compose.yml, service "graphdb").
 GRAPHDB_URL ?= http://localhost:7200
@@ -37,8 +47,12 @@ up:
 	fi
 	@echo "==> starting graphdb + server"
 	docker compose up -d
-	@echo "==> building extraction and sandbox base images"
-	docker compose build server extraction
+	@echo "==> building server, extraction, loader, and sandbox base images"
+	@# `loader` is in the "tools" profile, so it is skipped by a bare
+	@# `docker compose build`; naming it explicitly keeps its image fresh on
+	@# every `make up` (otherwise `docker compose run loader` reuses a stale
+	@# image and never picks up loader code changes, e.g. new subcommands).
+	docker compose build server extraction loader
 	@# Tag must match the server's MSR_SANDBOX_IMAGE default (internal/sandbox,
 	@# see docker-compose.yml "server" service) so the pool's configured image
 	@# reference resolves to this build.
@@ -65,10 +79,26 @@ load-seed:
 	@echo "==> running loader seed"
 	docker compose run --rm loader /app/loader seed
 
+load-nist: load-seed
+	@echo "==> running loader nist"
+	docker compose run --rm -e MSR_NIST_DIR=/data/nist loader /app/loader nist
+
 ingest:
 	@echo "==> running extraction ingest (acquire -> manifest -> normalize/segment -> documents)"
 	docker compose run --rm extraction ingest
 
+link:
+	@echo "==> running extraction link (seed matcher -> link segments -> disambiguate -> write mentions + mentions.jsonl)"
+	docker compose run --rm extraction link
+
 test:
 	@echo "==> running go test with the GraphDB and sandbox Docker acceptance gates enabled (GRAPHDB_REQUIRED=1, SANDBOX_DOCKER_REQUIRED=1)"
 	GRAPHDB_REQUIRED=1 SANDBOX_DOCKER_REQUIRED=1 go test ./...
+
+chat:
+	@echo "==> starting chatcli REPL against http://localhost:8080/api/chat (run 'make up' first)"
+	go run ./cmd/chatcli
+
+demo-density:
+	@echo "==> running chatcli one-shot: canonical FLiBe density question"
+	go run ./cmd/chatcli -q "What is the density of FLiBe (the LiF-BeF2 66-34 mol% melt) at 900 K?"
