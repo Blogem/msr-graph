@@ -426,6 +426,16 @@ func newProposalEditHandler(ps proposalService) http.HandlerFunc {
 			writeBadRequest(w, "malformed request body: "+err.Error())
 			return
 		}
+		if strings.TrimSpace(req.Triples) == "" {
+			// A body with no (or empty/whitespace-only) "triples" field is
+			// well-formed JSON but not a valid triples body: calling Edit
+			// with it would DROP the proposal graph and replace it with
+			// nothing, silently destroying the staged proposal. Reject it
+			// the same way a malformed body is rejected -- before Edit is
+			// ever called -- so the proposal graph is left unchanged.
+			writeBadRequest(w, "missing or empty \"triples\" field")
+			return
+		}
 
 		if err := ps.Edit(r.Context(), id, req.Triples); err != nil {
 			mapEngineError(w, err)
