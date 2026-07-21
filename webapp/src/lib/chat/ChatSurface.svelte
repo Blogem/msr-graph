@@ -12,6 +12,7 @@
 	// message is already "appended to history" for the next turn -- no
 	// separate history array to keep in sync.
 	import { streamChat } from '$lib/sse';
+	import { renderMarkdown } from '$lib/markdown';
 	import type { ChatMessage, TraceEvent } from '$lib/types';
 	import TraceTimeline from './TraceTimeline.svelte';
 	import './chat.css';
@@ -23,19 +24,37 @@
 		 * that turn (design D4 "events are appended as they arrive"). */
 		trace?: TraceEvent[];
 		expanded?: boolean;
+		/** True from the moment the assistant turn is created until its
+		 * stream completes or errors (chat-ui spec "In-progress streaming
+		 * affordance"). Drives the `streaming-indicator` caret and gates
+		 * the per-answer copy action, which only makes sense once the
+		 * answer text is final. */
+		streaming?: boolean;
 	}
+
+	// Realistic molten-salt domain prompts (chat-ui spec "Empty conversation
+	// shows onboarding prompts"), drawn from the demo queries already
+	// grounded in the real corpus (see openspec/specs/analysis-agent/spec.md
+	// and docs/DATA_SCOPE.md) rather than invented placeholders.
+	const EXAMPLE_PROMPTS = [
+		'What is the density of FLiBe (LiF-BeF₂, 66-34 mol%) at 900 K?',
+		'What is the solubility of PuF₃ in a LiF-BeF₂ solvent?',
+		"Which document mentions FLiBe's density measurement?"
+	];
 
 	let turns = $state<Turn[]>([]);
 	let input = $state('');
 	let sending = $state(false);
 	let errorMessage = $state<string | null>(null);
+	let copiedIndex = $state<number | null>(null);
+	let copyResetTimer: ReturnType<typeof setTimeout> | undefined;
 
 	function toHistory(items: Turn[]): ChatMessage[] {
 		return items.map((turn) => ({ role: turn.role, content: turn.content }));
 	}
 
-	async function sendMessage() {
-		const text = input.trim();
+	async function sendMessage(overrideText?: string) {
+		const text = (overrideText ?? input).trim();
 		if (!text || sending) return;
 
 		errorMessage = null;
@@ -48,7 +67,7 @@
 		// the outgoing request body.
 		const requestMessages = toHistory(turns);
 
-		turns.push({ role: 'assistant', content: '', trace: [], expanded: true });
+		turns.push({ role: 'assistant', content: '', trace: [], expanded: true, streaming: true });
 		// Re-obtain the just-pushed turn from the reactive `turns` array
 		// itself rather than holding onto the plain object literal above:
 		// in Svelte 5, pushing a plain object into a `$state` array wraps
@@ -80,6 +99,11 @@
 			errorMessage = err instanceof Error ? err.message : 'Chat request failed.';
 		} finally {
 			sending = false;
+			// The turn completes or errors here (chat-ui spec "In-progress
+			// streaming affordance" scenario "Completed turn is not marked
+			// in progress") -- both the success and error paths land in
+			// this `finally`, so the caret always clears.
+			assistantTurn.streaming = false;
 		}
 	}
 
@@ -87,20 +111,82 @@
 		event.preventDefault();
 		void sendMessage();
 	}
+
+	function sendExamplePrompt(prompt: string) {
+		void sendMessage(prompt);
+	}
+
+	async function copyAnswer(turn: Turn, index: number) {
+		if (typeof navigator === 'undefined' || !navigator.clipboard?.writeText) {
+			// No Clipboard API available (unsupported browser/insecure
+			// context) -- silently skip rather than throwing.
+			return;
+		}
+		try {
+			await navigator.clipboard.writeText(turn.content);
+		} catch {
+			return;
+		}
+		copiedIndex = index;
+		if (copyResetTimer) clearTimeout(copyResetTimer);
+		copyResetTimer = setTimeout(() => {
+			copiedIndex = null;
+		}, 2000);
+	}
 </script>
 
 <div class="chat-surface">
-	<ol class="chat-message-list">
-		{#each turns as turn, index (index)}
-			<li class="chat-message" data-testid="chat-message" data-role={turn.role}>
-				<div class="message-role">{turn.role}</div>
-				<p class="message-content">{turn.content}</p>
-				{#if turn.role === 'assistant' && turn.trace}
-					<TraceTimeline events={turn.trace} bind:expanded={turn.expanded} />
-				{/if}
-			</li>
-		{/each}
-	</ol>
+	{#if turns.length === 0}
+		<div class="chat-onboarding" data-testid="chat-onboarding">
+			<p class="onboarding-heading">Ask a question about molten-salt reactor materials.</p>
+			<ul class="example-prompt-list">
+				{#each EXAMPLE_PROMPTS as prompt (prompt)}
+					<li>
+						<button
+							type="button"
+							class="example-prompt"
+							data-testid="example-prompt"
+							onclick={() => sendExamplePrompt(prompt)}
+						>
+							{prompt}
+						</button>
+					</li>
+				{/each}
+			</ul>
+		</div>
+	{:else}
+		<ol class="chat-message-list">
+			{#each turns as turn, index (index)}
+				<li class="chat-message" data-testid="chat-message" data-role={turn.role}>
+					<div class="message-role">{turn.role}</div>
+					{#if turn.role === 'assistant'}
+						<div class="message-content">{@html renderMarkdown(turn.content)}</div>
+						{#if turn.streaming}
+							<span class="streaming-indicator" data-testid="streaming-indicator" aria-hidden="true"
+							></span>
+						{/if}
+					{:else}
+						<p class="message-content">{turn.content}</p>
+					{/if}
+					{#if turn.role === 'assistant' && turn.trace}
+						<TraceTimeline events={turn.trace} bind:expanded={turn.expanded} />
+					{/if}
+					{#if turn.role === 'assistant' && !turn.streaming}
+						<div class="message-actions">
+							<button
+								type="button"
+								class="copy-answer-btn"
+								data-testid="copy-answer"
+								onclick={() => copyAnswer(turn, index)}
+							>
+								{copiedIndex === index ? 'Copied' : 'Copy answer'}
+							</button>
+						</div>
+					{/if}
+				</li>
+			{/each}
+		</ol>
+	{/if}
 
 	{#if errorMessage}
 		<p class="chat-error" data-testid="chat-error" role="alert">{errorMessage}</p>
@@ -114,8 +200,14 @@
 			bind:value={input}
 			disabled={sending}
 		/>
-		<button type="submit" data-testid="chat-send" disabled={sending || input.trim() === ''}>
-			Send
+		<button
+			type="submit"
+			class="chat-send-btn"
+			data-testid="chat-send"
+			aria-label="Send message"
+			disabled={sending || input.trim() === ''}
+		>
+			<span aria-hidden="true">→</span>
 		</button>
 	</form>
 </div>
