@@ -655,6 +655,35 @@ def _terms_in_text(text: str) -> list[str]:
     return _ngrams(_tokenize(text))
 
 
+def _term_multiset(text: str) -> list[str]:
+    """Normalize `text` into its n-gram terms WITHOUT deduplication (design D5).
+
+    Identical tokenization/n-gram construction to :func:`_terms_in_text`
+    (same :func:`_tokenize` + the same :data:`_NGRAM_SIZES` sliding window),
+    but omits :func:`_ngrams`'s ``seen`` dedup filter, so a term repeated in
+    `text` appears once per occurrence rather than once total. This is what
+    makes a :class:`collections.Counter` built over this function's output a
+    true per-document **term frequency** count (:func:`score_document_observations`)
+    instead of the presence-only count :func:`_terms_in_text` intentionally
+    produces for :func:`score_document_frequency`'s document-frequency scan
+    (that scan must stay presence-based -- deduplication there is
+    deliberate, not a bug: it lets a single ``doc_terms & terms`` hash-set
+    intersection count each document at most once toward DF, regardless of
+    how many times a term recurs within it). Because both functions share
+    the exact same :func:`_tokenize` + sliding-window construction, a
+    candidate term produced by the deduped path keys into a
+    ``Counter(_term_multiset(text))`` built from the same text identically.
+    """
+    tokens = _tokenize(text)
+    terms: list[str] = []
+    for n in _NGRAM_SIZES:
+        if n > len(tokens):
+            continue
+        for i in range(len(tokens) - n + 1):
+            terms.append(" ".join(tokens[i : i + n]))
+    return terms
+
+
 def enumerate_lexical_terms(
     reports: list[str], config: Config, *, genre: str = "chemistry"
 ) -> dict[str, list[Evidence]]:
@@ -1038,16 +1067,22 @@ def score_document_observations(
     (non-``None``) for ``genre="safety"``; it is ignored for
     ``genre="chemistry"``.
 
-    For each document, builds a :class:`collections.Counter` of that
-    document's normalized n-gram terms (:func:`_terms_in_text` -- the exact
-    same normalization the DF scan's ``set(...)`` membership test uses) and
-    intersects its keys against `terms` in one hash-set operation (mirrors
-    `score_document_frequency`'s ``doc_terms & terms``, so this stays
-    O(doc_ngrams) per document, not a substring scan). Every matched term
-    gets one :class:`~msr_extraction.mining_types.Observation` for that
-    document, carrying the document's full IRI, its corpus CURIE, and the
-    counter's occurrence count for that term (per-document **term
-    frequency**, design D5 -- not mere presence).
+    For each document, builds a :class:`collections.Counter` of
+    :func:`_term_multiset` -- the same :func:`_tokenize` + sliding-window
+    n-gram construction :func:`_terms_in_text` uses for the DF scan, but
+    WITHOUT its dedup filter, so a term repeated in the document is counted
+    once per occurrence rather than once total (:func:`_terms_in_text`'s
+    dedup is correct and unchanged for `score_document_frequency`'s
+    presence-only DF scan; it is simply the wrong input for a *frequency*
+    count). Intersecting the counter's keys against `terms` in one hash-set
+    operation (mirrors `score_document_frequency`'s ``doc_terms & terms``,
+    so this stays O(doc_ngrams) per document, not a substring scan) and
+    reading ``counter[term]`` for each match gives the term's true
+    occurrence count in that document. Every matched term gets one
+    :class:`~msr_extraction.mining_types.Observation` for that document,
+    carrying the document's full IRI, its corpus CURIE, and that
+    occurrence count (per-document **term frequency**, design D5 -- not
+    mere presence).
 
     Returns ``term -> [Observation, ...]``; a term with zero matching
     documents is simply absent from the returned dict (callers should use
@@ -1086,7 +1121,7 @@ def score_document_observations(
     )
     observations: dict[str, list[Observation]] = {}
     for doc_index, (document_iri, text) in enumerate(indexed_docs, start=1):
-        counter = Counter(_terms_in_text(text))
+        counter = Counter(_term_multiset(text))
         for term in counter.keys() & terms:
             observations.setdefault(term, []).append(
                 Observation(
