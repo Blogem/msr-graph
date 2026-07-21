@@ -96,12 +96,21 @@ make mine       # one-shot Compose run of the extraction container: enumerate
                 # governance T-Box lives in ontology/msr.ttl) as well as
                 # `make link` (mentions to mine candidates from).
 
-make test       # GRAPHDB_REQUIRED=1 SANDBOX_DOCKER_REQUIRED=1 go test -p 1 ./...
+make test-repo  # resets + creates the disposable, SHACL-enabled `msr-test`
+                # GraphDB repository (scripts/ensure-repo.sh
+                # REPO_ID=msr-test REPO_RESET=1) and seeds ontology/vocab
+                # into it. Runs automatically as a dependency of `make
+                # test`; NEVER touches the production `msr` repository.
+
+make test       # depends on `make test-repo`; GRAPHDB_REQUIRED=1
+                # SANDBOX_DOCKER_REQUIRED=1 GRAPHDB_TEST_REPO=msr-test
+                # go test -p 1 ./...
                 # integration tests FAIL (not skip) if the stack isn't up;
-                # -p 1 serializes package execution because the checkpoint/
-                # proposal integration tests share the live `msr` repo and
-                # would otherwise clobber each other under cross-package
-                # parallelism
+                # they run against the throwaway `msr-test` repo, never the
+                # live `msr` repo; -p 1 serializes package execution because
+                # the checkpoint/proposal integration tests share the
+                # `msr-test` repo and would otherwise clobber each other
+                # under cross-package parallelism
 
 make checkpoint LABEL=demo  # POST /api/checkpoints against the running
                 # server: writes a labelled whole-store checkpoint —
@@ -128,6 +137,13 @@ therefore harmless to already-mined candidates and accepted instances.
 
 A bare `go test ./...` (without `GRAPHDB_REQUIRED=1` and without the stack
 running) stays green by **skipping** the integration tests.
+
+Integration tests target `GRAPHDB_TEST_REPO` (default `msr-test`) — the
+disposable repository `make test-repo` provisions — never `GRAPHDB_REPO`/
+`msr`. Do not point `GRAPHDB_TEST_REPO` at `msr`: `scripts/ensure-repo.sh`
+hard-refuses `REPO_ID=msr` combined with `REPO_RESET=1` (exits non-zero
+rather than dropping the production repo), so `make test-repo` can never
+reset `msr` even if misconfigured.
 
 To tear the stack down (e.g. to reset for a clean re-bootstrap), use
 `make down` (`docker compose down -v`).
