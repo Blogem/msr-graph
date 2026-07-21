@@ -785,6 +785,34 @@ def _run_safety_relations(
     logger.info("safety relations: complete")
 
 
+def _cmd_safety_mine(config: Config) -> int:
+    """Re-run mining for the safety genre alone (post-chunk-11 follow-up).
+
+    Thin wrapper around `mine_runner.run_mine(config, genre="safety")`,
+    mirroring `_cmd_mine`'s shape but scoped to the safety genre and
+    standalone (unlike `_cmd_safety_ingest`'s `safety ingest` umbrella,
+    this does not re-run `safety extract`/`safety documents`/
+    `safety link` first) -- so a reviewer can re-mine against
+    already-written safety `segments.jsonl`/`mentions.jsonl` (e.g. after
+    tuning `MSR_SAFETY_SALIENCE_THRESHOLD`) without paying for a full
+    `safety ingest` re-run. Prints the same run-summary line shape
+    `_cmd_safety_ingest`'s mine stage logs.
+    """
+    summary = mine_runner.run_mine(config, genre="safety")
+    by_kind = summary["proposals_by_kind"]
+    kind_summary = " ".join(f"{kind}={count}" for kind, count in sorted(by_kind.items()))
+    line = (
+        f"safety mine: candidates={summary['candidates']} "
+        f"proposals=[{kind_summary}] "
+        f"auto_accepted={summary['auto_accepted']} "
+        f"rejected={summary['rejected']} "
+        f"dropped={summary['dropped']}"
+    )
+    logger.info(line)
+    print(line)
+    return 0
+
+
 def _cmd_safety_ingest(config: Config) -> int:
     """The `safety ingest` umbrella (design.md D8): extract -> documents ->
     link -> mine -> the second-phase relations, in order, over the fixed
@@ -841,6 +869,7 @@ _SAFETY_HANDLERS = {
     "fetch": _cmd_safety_fetch,
     "extract": _cmd_safety_extract,
     "documents": _cmd_safety_documents,
+    "mine": _cmd_safety_mine,
     "ingest": _cmd_safety_ingest,
 }
 
@@ -941,6 +970,13 @@ def _build_parser() -> argparse.ArgumentParser:
     safety_subparsers.add_parser(
         "documents",
         help="Write the four attributed safety Document provenance nodes to the graph.",
+    )
+    safety_subparsers.add_parser(
+        "mine",
+        help=(
+            "Re-run mining for the safety genre against already-written "
+            "segments/mentions, without re-running extract/link."
+        ),
     )
     safety_subparsers.add_parser(
         "ingest",
