@@ -63,4 +63,4 @@
 
 - [x] 9.1 `cd webapp && npm run test` passes; `go test ./cmd/server/...` passes; `go build ./...` succeeds with the frontend embedded
 - [x] 9.2 Rebase on chunk 9 (`worktree-apply-ontology-changes`) and confirm all `/api/proposals*` and `/api/checkpoints*` routes plus the static handler coexist on `newMux`
-- [ ] 9.3 Manual (requires chunks 4 + 9 merged and services up): the density question renders a full trace incl. script source and provenance chips; the reviewer sees the `solubility` proposal as a visual diff, sets its unit to mole fraction, and approves; the `graphite` proposal shows the new class + `moderatedBy`; restoring a pre-demo checkpoint from admin lets the evolution demo re-run end-to-end
+- [x] 9.3 Manual (requires chunks 4 + 9 merged and services up): the density question renders a full trace incl. script source and provenance chips; the reviewer sees the `solubility` proposal as a visual diff, sets its unit to mole fraction, and approves; the `graphite` proposal shows the new class + `moderatedBy`; restoring a pre-demo checkpoint from admin lets the evolution demo re-run end-to-end
