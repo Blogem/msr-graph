@@ -184,6 +184,15 @@ func (a *Agent) Run(ctx context.Context, req RunRequest, emit Emitter) error {
 			return fmt.Errorf("agent: llm completion failed: %w", err)
 		}
 
+		// Reasoning (chain-of-thought) is emitted as its own event before
+		// the answer text. completion.Content is already reasoning-free
+		// (the LLM client split it out), so the EventText below and every
+		// msgs append in this loop carry only the answer -- reasoning
+		// never re-enters the conversation.
+		if completion.Reasoning != "" {
+			wrappedEmit(Event{Type: EventReasoning, Reasoning: completion.Reasoning})
+		}
+
 		if completion.Content != "" {
 			wrappedEmit(Event{Type: EventText, Text: completion.Content})
 		}

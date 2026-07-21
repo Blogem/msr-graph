@@ -39,12 +39,31 @@ func TestDeepSeekClient_Complete(t *testing.T) {
 		name          string
 		responseBody  string
 		wantContent   string
+		wantReasoning string
 		wantToolCalls []agent.ToolCall
 	}{
 		{
 			name:         "plain final message",
 			responseBody: `{"choices":[{"message":{"role":"assistant","content":"hello world"}}]}`,
 			wantContent:  "hello world",
+		},
+		{
+			name:          "inline think block is split out",
+			responseBody:  `{"choices":[{"message":{"role":"assistant","content":"<think>step one</think>the answer"}}]}`,
+			wantContent:   "the answer",
+			wantReasoning: "step one",
+		},
+		{
+			name:          "reasoning_content field is surfaced",
+			responseBody:  `{"choices":[{"message":{"role":"assistant","content":"the answer","reasoning_content":"deliberating"}}]}`,
+			wantContent:   "the answer",
+			wantReasoning: "deliberating",
+		},
+		{
+			name:          "both channels combine",
+			responseBody:  `{"choices":[{"message":{"role":"assistant","content":"<think>inline</think>the answer","reasoning_content":"field"}}]}`,
+			wantContent:   "the answer",
+			wantReasoning: "inline\n\nfield",
 		},
 		{
 			name: "tool calls",
@@ -112,6 +131,9 @@ func TestDeepSeekClient_Complete(t *testing.T) {
 
 			if got.Content != tc.wantContent {
 				t.Errorf("Completion.Content = %q, want %q", got.Content, tc.wantContent)
+			}
+			if got.Reasoning != tc.wantReasoning {
+				t.Errorf("Completion.Reasoning = %q, want %q", got.Reasoning, tc.wantReasoning)
 			}
 			if len(got.ToolCalls) == 0 && len(tc.wantToolCalls) == 0 {
 				return

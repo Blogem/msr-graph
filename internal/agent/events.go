@@ -11,6 +11,10 @@ const (
 	// EventText carries assistant text tokens (commentary or the final
 	// answer).
 	EventText EventType = "text"
+	// EventReasoning carries the model's chain-of-thought, surfaced
+	// separately from the answer so it never pollutes the answer text and
+	// is never fed back into the conversation (see splitReasoning).
+	EventReasoning EventType = "reasoning"
 	// EventToolCall carries the tool name and arguments the model
 	// requested.
 	EventToolCall EventType = "tool_call"
@@ -42,6 +46,7 @@ const (
 type Event struct {
 	Type       EventType        `json:"type"`
 	Text       string           `json:"text,omitempty"`
+	Reasoning  string           `json:"reasoning,omitempty"`
 	ToolCall   *ToolCallEvent   `json:"tool_call,omitempty"`
 	ToolResult *ToolResultEvent `json:"tool_result,omitempty"`
 	ScriptRun  *ScriptRunEvent  `json:"script_run,omitempty"`

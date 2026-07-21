@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -62,9 +63,13 @@ type ToolSpec struct {
 
 // Completion is one assistant turn returned by the LLM: either final
 // text content, one or more requested tool calls, or both (a model may
-// emit commentary alongside tool calls).
+// emit commentary alongside tool calls). Reasoning holds the model's
+// chain-of-thought when present -- separated out of Content so it is
+// never shown as, or fed back as, the answer (see splitReasoning and the
+// deepSeekClient.Complete reasoning handling).
 type Completion struct {
 	Content   string
+	Reasoning string
 	ToolCalls []ToolCall
 }
 
@@ -144,11 +149,16 @@ type oaToolCall struct {
 }
 
 // oaMessage is one message in the request/response "messages" arrays.
+// ReasoningContent is response-only: DeepSeek reasoning models return
+// chain-of-thought in this dedicated field alongside Content. It is never
+// sent on a request (DeepSeek rejects it as input), so it stays
+// omitempty and toOAMessage never sets it.
 type oaMessage struct {
-	Role       string       `json:"role"`
-	Content    string       `json:"content,omitempty"`
-	ToolCalls  []oaToolCall `json:"tool_calls,omitempty"`
-	ToolCallID string       `json:"tool_call_id,omitempty"`
+	Role             string       `json:"role"`
+	Content          string       `json:"content,omitempty"`
+	ReasoningContent string       `json:"reasoning_content,omitempty"`
+	ToolCalls        []oaToolCall `json:"tool_calls,omitempty"`
+	ToolCallID       string       `json:"tool_call_id,omitempty"`
 }
 
 // oaRequest is the /chat/completions request body.
@@ -261,7 +271,21 @@ func (c *deepSeekClient) Complete(ctx context.Context, system string, msgs []Mes
 	}
 
 	choice := oaResp.Choices[0].Message
-	out := Completion{Content: choice.Content}
+
+	// Separate any chain-of-thought from the answer. Two channels may
+	// carry it: inline <think>...</think> blocks embedded in Content, and
+	// DeepSeek's dedicated reasoning_content field. Strip the inline
+	// blocks out of the answer, then fold the dedicated field in, so
+	// Content is reasoning-free and Reasoning holds whatever was present.
+	cleanContent, inlineReasoning := splitReasoning(choice.Content)
+	out := Completion{Content: cleanContent, Reasoning: inlineReasoning}
+	if rc := strings.TrimSpace(choice.ReasoningContent); rc != "" {
+		if out.Reasoning != "" {
+			out.Reasoning += "\n\n" + rc
+		} else {
+			out.Reasoning = rc
+		}
+	}
 	for _, tc := range choice.ToolCalls {
 		out.ToolCalls = append(out.ToolCalls, ToolCall{
 			ID:        tc.ID,

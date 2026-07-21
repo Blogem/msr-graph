@@ -62,6 +62,61 @@ func eventTypes(events []agent.Event) []agent.EventType {
 	return out
 }
 
+func TestRun_EmitsReasoningBeforeAnswerAndKeepsItOutOfHistory(t *testing.T) {
+	// A final-answer turn carrying reasoning: the loop emits a reasoning
+	// event before the answer text, and the reasoning never appears in
+	// the answer text or the recorded message history.
+	llm := &stubLLM{completions: []agent.Completion{
+		{Content: "the answer", Reasoning: "chain of thought"},
+	}}
+
+	var events []agent.Event
+	a := agent.New(llm, nil, agent.DefaultConfig())
+	if err := a.Run(context.Background(), agent.RunRequest{SystemPrompt: "sys"}, func(e agent.Event) {
+		events = append(events, e)
+	}); err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+
+	wantTypes := []agent.EventType{
+		agent.EventReasoning, agent.EventText, agent.EventAnswer, agent.EventDone,
+	}
+	gotTypes := eventTypes(events)
+	if len(gotTypes) != len(wantTypes) {
+		t.Fatalf("event sequence = %v, want %v", gotTypes, wantTypes)
+	}
+	for i, want := range wantTypes {
+		if gotTypes[i] != want {
+			t.Fatalf("event[%d].Type = %q, want %q (full sequence: %v)", i, gotTypes[i], want, gotTypes)
+		}
+	}
+
+	if events[0].Reasoning != "chain of thought" {
+		t.Errorf("reasoning event text = %q, want %q", events[0].Reasoning, "chain of thought")
+	}
+	if events[1].Text != "the answer" {
+		t.Errorf("text event = %q, want %q (reasoning must not leak in)", events[1].Text, "the answer")
+	}
+}
+
+func TestRun_NoReasoningEventWhenAbsent(t *testing.T) {
+	llm := &stubLLM{completions: []agent.Completion{{Content: "just the answer"}}}
+
+	var events []agent.Event
+	a := agent.New(llm, nil, agent.DefaultConfig())
+	if err := a.Run(context.Background(), agent.RunRequest{SystemPrompt: "sys"}, func(e agent.Event) {
+		events = append(events, e)
+	}); err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+
+	for _, e := range events {
+		if e.Type == agent.EventReasoning {
+			t.Fatalf("unexpected reasoning event in sequence %v", eventTypes(events))
+		}
+	}
+}
+
 func TestRun_ExecutesToolCallsThenReturnsFinalAnswer(t *testing.T) {
 	llm := &stubLLM{completions: []agent.Completion{
 		{ToolCalls: []agent.ToolCall{{ID: "1", Name: "tool_a", Arguments: `{}`}}},
