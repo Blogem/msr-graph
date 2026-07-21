@@ -245,15 +245,52 @@ NER matcher; a recognized mention links to its resolved target (a concept, or �
 composed salt formula — the `msr:MoltenSalt` individual itself) via `msr:linksTo` on the
 `msr:Mention`, not via `skos:closeMatch`.
 
-## 4. Stretch — IAEA safety (PUB2027)
+## 4. IAEA/GIF/ORNL safety sources (chunk 11, `ingest-iaea-safety`)
 
-Deferred, not in the core build. When added: ingest only the MSR-relevant sections of
-*Safety Reports Series No. 123 / PUB2027* — §2.1.2.5 (MSR types), §3.2 (Design), §5.1.8
-(safeguards). Machine-readable text-layer PDF, 292 pp. Drives a new `Safety` ontology
-branch (`SafetyFunction`, `Confinement`, `DefenceInDepth`, `DesignBasis`, `Requirement`)
-as the headline self-evolving-ontology demo. Licensing: © IAEA, all rights reserved —
-fine to ingest/quote with attribution for a non-commercial POC; do not redistribute
-substantial verbatim text.
+Finalized, no longer a stretch/deferred item. The feasibility spike in
+[`docs/SAFETY_THREAD_SPIKE.md`](SAFETY_THREAD_SPIKE.md) proved one grounded thread —
+requirement → safety function → property → measurement → salt — end to end on real
+sources, nothing fabricated; the `ingest-iaea-safety` change realizes that thread (the
+`Safety` ontology branch, the digital-thread linking edges, and the six stakeholder
+questions the spike identifies). See that doc for the full thread and questions; this
+section records the finalized data scope.
+
+**Finalized ingested set — four sources:**
+
+| Source | Role | Section scope |
+|---|---|---|
+| **IAEA SRS-123 / PUB2027** — *Applicability of IAEA Safety Standards to Non-Water Cooled Reactors and SMRs* | requirement anchor: the three fundamental safety functions (confinement of radioactive material, control of reactivity, heat removal) | §2.1.2.5 (MSRs) / §3.2 (Design) / §5.1.8 (safeguards) only — not the full 292 pp |
+| **GIF (Holcomb) — *Molten Salt Reactor Safety Analysis - A U.S. Perspective*** (2020) | ties the fundamental safety functions to salt thermophysical properties | whole document (32 pp, entirely MSR-specific; the public stand-in for a not-yet-published GIF MSR-specific Safety Design Criteria report) |
+| **ORNL/TM-2006/12** — *Assessment of Candidate Molten Salt Coolants for the Advanced High-Temperature Reactor (AHTR)* | coolant-selection criteria organized by melting point / vapor pressure / viscosity / thermal conductivity / heat capacity | whole document |
+| **ORNL — *Molten Salt Reactor Technical and Safety Considerations Outside of Guidance Documents*** | secondary requirement-layer context | whole document |
+
+The exact page ranges backing each scope (and how they were located in the cached PDF)
+are recorded as the tracked, structured manifest in
+`extraction/src/msr_extraction/safety_manifest.py`.
+
+Drives the `Safety` ontology branch (`SafetyFunction`, `Confinement`, `DefenceInDepth`,
+`DesignBasis`, `Requirement`) **grown, not seeded** — mined as change proposals from the
+safety genre through the same chunk-8/chunk-9 evolution loop that grows the chemistry
+branch, then linked to the existing `PhysicalProperty` individuals (`vaporPressure`,
+`specificHeat`, `thermalConductivity`, `meltingPoint`) already in the seed T-Box via
+evidence-bearing `msr:servedByProperty` (`SafetyFunction → PhysicalProperty`) and
+`msr:addressesFunction` (`Requirement → SafetyFunction`) edges. No safety→salt or
+safety→numeric-value edge is asserted directly — the tie to a salt is transitive through
+the shared `PhysicalProperty`, since no source states a direct requirement→value link.
+This is the headline self-evolving-ontology demo on a second, higher-stakes genre.
+
+**Attribution & rights:** IAEA SRS-123 is © all rights reserved; the GIF and ORNL sources
+are public/US-government works. No PDF or full extracted text is committed for any of
+the four sources — only `scripts/fetch-safety-sources.sh` (reproduces the gitignored
+`data/safety/` cache) and the attributed manifest above (source id, title, publisher,
+rights statement, `dcterms:source` URL, date, and the exact ingested section/page scope)
+are tracked. Every safety `msr:Document` node additionally carries
+`dcterms:publisher`/`dcterms:rights`/`dcterms:source`, so any evidence quote the agent
+surfaces is attributable back to its licensed source.
+
+The out-of-scope notes below (in particular the INIS-thesaurus exclusion, which
+preserves the novelty-mining demo the safety branch also depends on) are unchanged and
+apply to the safety genre too.
 
 ## Out of scope
 
