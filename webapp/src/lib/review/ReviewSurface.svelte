@@ -18,12 +18,14 @@
 	} from '$lib/api';
 	import DiffView from './DiffView.svelte';
 	import EvidencePanel from './EvidencePanel.svelte';
+	import ObservationBreakdown from './ObservationBreakdown.svelte';
 	import LoadingState from '$lib/ui/LoadingState.svelte';
 	import EmptyState from '$lib/ui/EmptyState.svelte';
 	import { pushToast } from '$lib/ui/toast.svelte';
 	import {
 		applyPlacementEdit,
 		applyUnitEdit,
+		corpusLabel,
 		placementValueOf,
 		serializeTriples,
 		unitValueOf
@@ -40,6 +42,20 @@
 	 * rather than a bare number. */
 	function humanizeDocFrequency(count: number): string {
 		return `seen in ${count} document${count === 1 ? '' : 's'}`;
+	}
+
+	/** Formats a proposal's total occurrence count for the queue row
+	 * (review-ui spec "cross-corpus support summary"). */
+	function humanizeOccurrences(count: number): string {
+		return `${count} occurrence${count === 1 ? '' : 's'}`;
+	}
+
+	/** Friendly, comma-joined corpus labels for a proposal's cross-corpus
+	 * badge (review-ui spec "Cross-corpus proposals render without
+	 * duplicate rows" -- a single row carries a cross-corpus indicator
+	 * naming every corpus it was observed in). */
+	function humanizeCorpora(corpora: string[]): string {
+		return corpora.map(corpusLabel).join(', ');
 	}
 
 	let statusFilter = $state('pending');
@@ -291,6 +307,15 @@
 							<span class="row-line row-line-1">
 								<span class="field term">{p.term}</span>
 								<span class="row-pills">
+									{#if p.corpusCount > 1}
+										<span
+											class="field cross-corpus pill"
+											data-testid="cross-corpus-badge"
+											title={humanizeCorpora(p.corpora)}
+										>
+											cross-corpus: {humanizeCorpora(p.corpora)}
+										</span>
+									{/if}
 									<span class="field kind pill">{p.kind}</span>
 									<span
 										class="field status pill"
@@ -303,7 +328,11 @@
 								</span>
 							</span>
 							<span class="row-line row-line-2">
-								<span class="field doc-frequency">{humanizeDocFrequency(p.docFrequency)}</span>
+								<span class="field doc-frequency"
+									>{humanizeDocFrequency(p.documentFrequency)} ({humanizeOccurrences(
+										p.totalOccurrences
+									)})</span
+								>
 								<span class="field id identifier">{p.id}</span>
 							</span>
 						</button>
@@ -329,6 +358,8 @@
 					<DiffView triples={detail.triples} neighborhood={detail.neighborhood} />
 
 					<EvidencePanel evidence={detail.evidence} />
+
+					<ObservationBreakdown observations={detail.observations} />
 
 					<div class="edit-fields">
 						<label>
@@ -497,6 +528,12 @@
 	.field.status.pill-rejected {
 		background: var(--error-bg);
 		color: var(--error-text);
+	}
+
+	.field.cross-corpus {
+		background: var(--accent);
+		color: var(--accent-contrast);
+		text-transform: none;
 	}
 
 	.row-line-2 {

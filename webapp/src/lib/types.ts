@@ -142,13 +142,25 @@ export interface ChatMessage {
 
 // --- Proposal review + checkpoint API shapes (chunk-9, design D7) ---
 
-/** One row of `GET /api/proposals` (cmd/server/proposals.go proposalSummary). */
+/** One row of `GET /api/proposals` (cmd/server/proposals.go proposalSummary).
+ * `documentFrequency`/`totalOccurrences`/`corpusCount`/`corpora` are
+ * aggregates derived server-side from the proposal's (possibly zero,
+ * possibly many) observations -- there is exactly one summary per
+ * proposal id even when it has been observed across multiple corpora or
+ * mining runs (design D3/D7, review-ui spec "One row per proposal despite
+ * multi-corpus/multi-run observations"). `corpora` holds corpus IRIs
+ * (e.g. `https://w3id.org/msr-kg/data#corpus-chemistry`); render a
+ * friendly label via `corpusLabel` (review/triples.ts) rather than the
+ * raw IRI. */
 export interface ProposalSummary {
 	id: string;
 	kind: string;
 	status: string;
 	term: string;
-	docFrequency: number;
+	documentFrequency: number;
+	totalOccurrences: number;
+	corpusCount: number;
+	corpora: string[];
 }
 
 /** `GET /api/proposals[?status=]` response (proposalQueueResponse). */
@@ -182,11 +194,37 @@ export interface NeighborhoodTriple {
 	object: string;
 }
 
+/** One document's latest observation within a corpus (cmd/server/proposals.go
+ * documentObservationJSON). `occurrenceCount`/`lastObserved` reflect the
+ * most recently generated observation for that document; `firstObserved`
+ * is the earliest one seen. */
+export interface DocumentObservation {
+	documentId: string;
+	occurrenceCount: number;
+	firstObserved: string;
+	lastObserved: string;
+}
+
+/** One corpus's grouped document observations (cmd/server/proposals.go
+ * corpusObservationsJSON). `corpus` is a corpus IRI (e.g.
+ * `https://w3id.org/msr-kg/data#corpus-chemistry`). */
+export interface CorpusObservations {
+	corpus: string;
+	documents: DocumentObservation[];
+}
+
+/** The full observation breakdown on `GET /api/proposals/{id}` (design D7):
+ * grouped by corpus, one entry per corpus the proposal has been observed
+ * in, each with its per-document occurrence history. Empty when the
+ * proposal predates the observation model or has never been re-observed. */
+export type ObservationBreakdown = CorpusObservations[];
+
 /** `GET /api/proposals/{id}` response (proposalDetailResponse). */
 export interface ProposalDetail {
 	id: string;
 	triples: Triple[];
 	evidence: Evidence[];
+	observations: ObservationBreakdown;
 	neighborhood: NeighborhoodTriple[];
 }
 

@@ -21,6 +21,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from msr_extraction import (
     acquisition,
+    backfill_observations,
     curated,
     disambig_cache,
     documents,
@@ -502,6 +503,30 @@ def _cmd_extract(config: Config, reports: list[str] = curated.CURATED_REPORTS) -
     return 0
 
 
+def _cmd_backfill_observations(config: Config) -> int:
+    """Run the deterministic, inference-free observation backfill and print a summary.
+
+    Thin wrapper (proposal-observation-provenance design.md D4/D6, task
+    4.4) mirroring `_cmd_mine`'s shape: all orchestration -- reading staged
+    proposals, re-scanning both cached corpora, writing per-document/
+    per-corpus observations, tagging scanned documents, and removing the
+    stale `msr:docFrequency` scalars -- lives in
+    `backfill_observations.run_backfill`. No LLM/triage call is made and no
+    corpus is re-acquired; re-running is idempotent (fixed backfill run
+    token, see that module's docstring).
+    """
+    summary = backfill_observations.run_backfill(config)
+    line = (
+        f"backfill-observations: proposals_processed={summary.proposals_processed} "
+        f"observations_written={summary.observations_written} "
+        f"documents_tagged={summary.documents_tagged} "
+        f"doc_frequency_scalars_removed={summary.doc_frequency_scalars_removed}"
+    )
+    logger.info(line)
+    print(line)
+    return 0
+
+
 # --- `safety` subcommand group (design.md D8, OpenSpec task 7.1) -----------
 #
 # Wires the already-merged safety-genre modules (`safety_manifest`,
@@ -883,6 +908,7 @@ _HANDLERS = {
     "link": _cmd_link,
     "mine": _cmd_mine,
     "extract": _cmd_extract,
+    "backfill-observations": _cmd_backfill_observations,
 }
 
 
@@ -947,6 +973,16 @@ def _build_parser() -> argparse.ArgumentParser:
         type=int,
         metavar="N",
         help="Process only the first N of the (possibly --report-filtered) selection.",
+    )
+
+    subparsers.add_parser(
+        "backfill-observations",
+        help=(
+            "Deterministic, inference-free backfill: re-scan both cached "
+            "corpora and rebuild per-document/per-corpus observations for "
+            "already-staged proposals, then remove the stale docFrequency "
+            "scalars (proposal-observation-provenance D4)."
+        ),
     )
 
     safety_parser = subparsers.add_parser(
