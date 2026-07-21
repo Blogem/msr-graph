@@ -46,6 +46,17 @@ vi.mock('$lib/api', async (importOriginal) => {
 });
 
 import { ApiError } from '$lib/api';
+// The shared toast display is mounted once app-wide in `+layout.svelte`
+// (design D5), not inside ReviewSurface itself -- ReviewSurface only calls
+// `pushToast(...)` into the shared `$lib/ui/toast.svelte` store. Rendering
+// ReviewSurface alone therefore never puts a `toast-region`/`toast` node in
+// the DOM even though the push happens correctly. The toast-feedback tests
+// below additionally render `Toaster` (via the same `$lib` alias
+// ReviewSurface itself already imports it through) alongside ReviewSurface
+// so the real region and its testids are exercised, mirroring how the app
+// shell composes them in production.
+import Toaster from '$lib/ui/Toaster.svelte';
+import { toasts } from '$lib/ui/toast.svelte';
 import ReviewSurface from './ReviewSurface.svelte';
 
 function queueResponse(proposals: ProposalSummary[]) {
@@ -364,8 +375,34 @@ describe('ReviewSurface - keyboard navigation (redesign 5.3)', () => {
 });
 
 describe('ReviewSurface - toast feedback (redesign 5.3)', () => {
+	// `toasts` (the `$lib/ui/toast.svelte` module-level `$state` array) is
+	// shared, live, singleton state across the whole test file/process --
+	// it is not reset by `@testing-library/svelte`'s `cleanup()` (that only
+	// unmounts DOM, it does not touch application-level stores). Without
+	// clearing it, a toast pushed by one test would still be present (and
+	// not yet auto-dismissed -- the default dismiss delay is 4s, far longer
+	// than a test) when the next test asserts, breaking the "exactly one
+	// toast" queries below. Clear it before each test in this block so every
+	// test starts from an empty toast region.
+	beforeEach(() => {
+		toasts.splice(0, toasts.length);
+	});
+
+	/** Renders ReviewSurface alongside the shared `Toaster` display
+	 * component. In the real app `Toaster` is mounted once in
+	 * `+layout.svelte` (design D5), not inside ReviewSurface -- ReviewSurface
+	 * only pushes into the shared store. `@testing-library/svelte`'s
+	 * `render()` appends into `document.body`, and `screen` queries against
+	 * `document.body`, so two separate `render()` calls compose exactly like
+	 * the real app shell does: `Toaster` renders whatever `ReviewSurface`'s
+	 * `pushToast(...)` calls push into the shared store. */
+	function renderWithToaster() {
+		render(Toaster);
+		return render(ReviewSurface);
+	}
+
 	it('shows a success toast when approve succeeds', async () => {
-		render(ReviewSurface);
+		renderWithToaster();
 		await waitFor(() => expect(listProposalsMock).toHaveBeenCalled());
 
 		const detail = await openProposal(solubilityProposal);
@@ -375,13 +412,14 @@ describe('ReviewSurface - toast feedback (redesign 5.3)', () => {
 		const region = await screen.findByTestId('toast-region');
 		const toast = await within(region).findByTestId('toast');
 		expect(toast).toBeInTheDocument();
+		expect(toast.getAttribute('data-kind')).toBe('success');
 		expect(toast).toHaveTextContent(/approved|success/i);
 	});
 
 	it('shows a failure toast when approve fails (non-validation error) and the proposal stays pending', async () => {
 		approveProposalMock.mockRejectedValue(new Error('network error'));
 
-		render(ReviewSurface);
+		renderWithToaster();
 		await waitFor(() => expect(listProposalsMock).toHaveBeenCalled());
 
 		const detail = await openProposal(solubilityProposal);
@@ -391,6 +429,7 @@ describe('ReviewSurface - toast feedback (redesign 5.3)', () => {
 		const region = await screen.findByTestId('toast-region');
 		const toast = await within(region).findByTestId('toast');
 		expect(toast).toBeInTheDocument();
+		expect(toast.getAttribute('data-kind')).toBe('error');
 		expect(toast).toHaveTextContent(/fail|error/i);
 
 		// Prior state preserved -- still pending, approve control still present.
@@ -400,7 +439,7 @@ describe('ReviewSurface - toast feedback (redesign 5.3)', () => {
 	it('shows a failure toast when reject fails and the proposal stays in its prior state', async () => {
 		rejectProposalMock.mockRejectedValue(new Error('network error'));
 
-		render(ReviewSurface);
+		renderWithToaster();
 		await waitFor(() => expect(listProposalsMock).toHaveBeenCalled());
 
 		const detail = await openProposal(graphiteProposal);
@@ -410,6 +449,7 @@ describe('ReviewSurface - toast feedback (redesign 5.3)', () => {
 		const region = await screen.findByTestId('toast-region');
 		const toast = await within(region).findByTestId('toast');
 		expect(toast).toBeInTheDocument();
+		expect(toast.getAttribute('data-kind')).toBe('error');
 		expect(toast).toHaveTextContent(/fail|error/i);
 		expect(within(detail).getByTestId('reject-btn')).toBeInTheDocument();
 	});
