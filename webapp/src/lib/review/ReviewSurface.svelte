@@ -18,6 +18,9 @@
 	} from '$lib/api';
 	import DiffView from './DiffView.svelte';
 	import EvidencePanel from './EvidencePanel.svelte';
+	import LoadingState from '$lib/ui/LoadingState.svelte';
+	import EmptyState from '$lib/ui/EmptyState.svelte';
+	import { pushToast } from '$lib/ui/toast.svelte';
 	import {
 		applyPlacementEdit,
 		applyUnitEdit,
@@ -31,9 +34,19 @@
 	// `{reviewer, timestamp}` body always carries this constant name.
 	const REVIEWER = 'reviewer';
 
+	/** Humanizes a raw document-frequency count for the queue row (review-ui
+	 * spec "Document frequency is humanized", design D3): "seen in 1
+	 * document" / "seen in 47 documents" with correct singular/plural,
+	 * rather than a bare number. */
+	function humanizeDocFrequency(count: number): string {
+		return `seen in ${count} document${count === 1 ? '' : 's'}`;
+	}
+
 	let statusFilter = $state('pending');
 	let proposals = $state<ProposalSummary[]>([]);
+	let queueLoading = $state(false);
 	let queueError = $state<string | null>(null);
+	let queueEl: HTMLUListElement | undefined = $state();
 
 	let selectedId = $state<string | null>(null);
 	let selectedStatus = $state<string | null>(null);
@@ -50,11 +63,14 @@
 
 	async function loadQueue() {
 		queueError = null;
+		queueLoading = true;
 		try {
 			const res = await listProposals(statusFilter || undefined);
 			proposals = res.proposals;
 		} catch (err) {
 			queueError = err instanceof ApiError ? err.message : 'Failed to load proposals';
+		} finally {
+			queueLoading = false;
 		}
 	}
 
@@ -144,8 +160,10 @@
 		try {
 			const res = await approveProposal(detail.id, REVIEWER, new Date().toISOString());
 			applyStatus(detail.id, res.status);
+			pushToast({ message: `Proposal ${detail.id} approved`, kind: 'success' });
 		} catch (err) {
 			handleActionError(err);
+			pushToast({ message: actionError ?? 'Approve failed', kind: 'error' });
 		}
 	}
 
@@ -156,8 +174,68 @@
 		try {
 			const res = await rejectProposal(detail.id);
 			applyStatus(detail.id, res.status);
+			pushToast({ message: `Proposal ${detail.id} rejected`, kind: 'success' });
 		} catch (err) {
 			handleActionError(err);
+			pushToast({ message: actionError ?? 'Reject failed', kind: 'error' });
+		}
+	}
+
+	// --- Keyboard navigation (review-ui spec "Proposal queue is
+	// keyboard-navigable", task 3.3) --- PINNED keys: j/ArrowDown = next,
+	// k/ArrowUp = previous, a = approve selected, r = reject selected.
+	// Reuses the same approve()/reject() handlers as the buttons so their
+	// confirmation/validation (incl. SHACL 422) paths are unchanged. The
+	// listener is bound to the proposal-queue container itself (it is
+	// focusable -- tabindex + role="listbox" -- so "the queue is focused"
+	// from the spec's scenario is literally true), with a defensive
+	// input/textarea/select guard kept in case focus is ever routed into an
+	// editable control from within the queue's subtree (editing
+	// placement/unit must never be hijacked).
+	function isEditableTarget(target: EventTarget | null): boolean {
+		if (!(target instanceof HTMLElement)) return false;
+		const tag = target.tagName;
+		return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT';
+	}
+
+	function focusRow(id: string) {
+		const button = queueEl?.querySelector<HTMLButtonElement>(`button[data-id="${id}"]`);
+		button?.focus();
+	}
+
+	function moveSelection(delta: number) {
+		if (proposals.length === 0) return;
+		const currentIndex = proposals.findIndex((p) => p.id === selectedId);
+		const nextIndex =
+			currentIndex === -1 ? 0 : (currentIndex + delta + proposals.length) % proposals.length;
+		const nextId = proposals[nextIndex].id;
+		void selectProposal(nextId);
+		focusRow(nextId);
+	}
+
+	function handleSurfaceKeydown(event: KeyboardEvent) {
+		if (isEditableTarget(event.target) || event.ctrlKey || event.metaKey || event.altKey) return;
+		switch (event.key) {
+			case 'j':
+			case 'ArrowDown':
+				event.preventDefault();
+				moveSelection(1);
+				break;
+			case 'k':
+			case 'ArrowUp':
+				event.preventDefault();
+				moveSelection(-1);
+				break;
+			case 'a':
+				if (!detail) return;
+				event.preventDefault();
+				void approve();
+				break;
+			case 'r':
+				if (!detail) return;
+				event.preventDefault();
+				void reject();
+				break;
 		}
 	}
 
@@ -185,26 +263,53 @@
 	{/if}
 
 	<div class="layout">
-		<ul data-testid="proposal-queue">
-			{#each proposals as p (p.id)}
-				<li>
-					<button
-						type="button"
-						data-testid="proposal-row"
-						data-id={p.id}
-						class:selected={p.id === selectedId}
-						onclick={() => selectProposal(p.id)}
-					>
-						<span class="field id">{p.id}</span>
-						<span class="field kind">{p.kind}</span>
-						<span class="field status">{p.status}</span>
-						<span class="field term">{p.term}</span>
-						<span class="field doc-frequency">{p.docFrequency}</span>
-					</button>
-				</li>
+		<ul
+			data-testid="proposal-queue"
+			bind:this={queueEl}
+			tabindex="0"
+			role="listbox"
+			aria-label="Proposal queue"
+			onkeydown={handleSurfaceKeydown}
+		>
+			{#if queueLoading}
+				<li class="queue-status"><LoadingState label="Loading proposals…" /></li>
+			{:else if proposals.length === 0}
+				<li class="queue-status empty"><EmptyState message="No proposals." /></li>
 			{:else}
-				<li class="empty">No proposals.</li>
-			{/each}
+				{#each proposals as p (p.id)}
+					<li>
+						<button
+							type="button"
+							data-testid="proposal-row"
+							data-id={p.id}
+							class="proposal-row"
+							class:selected={p.id === selectedId}
+							role="option"
+							aria-selected={p.id === selectedId}
+							onclick={() => selectProposal(p.id)}
+						>
+							<span class="row-line row-line-1">
+								<span class="field term">{p.term}</span>
+								<span class="row-pills">
+									<span class="field kind pill">{p.kind}</span>
+									<span
+										class="field status pill"
+										class:pill-pending={p.status === 'pending'}
+										class:pill-approved={p.status === 'approved'}
+										class:pill-rejected={p.status === 'rejected'}
+									>
+										{p.status}
+									</span>
+								</span>
+							</span>
+							<span class="row-line row-line-2">
+								<span class="field doc-frequency">{humanizeDocFrequency(p.docFrequency)}</span>
+								<span class="field id identifier">{p.id}</span>
+							</span>
+						</button>
+					</li>
+				{/each}
+			{/if}
 		</ul>
 
 		{#if selectedId}
@@ -212,7 +317,7 @@
 				{#if notFound}
 					<p data-testid="not-found">Proposal {selectedId} was not found.</p>
 				{:else if detailLoading}
-					<p>Loading…</p>
+					<LoadingState label="Loading proposal…" />
 				{:else if detailError}
 					<p class="error">{detailError}</p>
 				{:else if detail}
@@ -287,13 +392,13 @@
 	.toolbar {
 		display: flex;
 		align-items: center;
-		gap: 0.5rem;
-		margin-bottom: 0.75rem;
+		gap: var(--space-2);
+		margin-bottom: var(--space-3);
 	}
 
 	.layout {
 		display: flex;
-		gap: 1.5rem;
+		gap: var(--space-5);
 		align-items: flex-start;
 	}
 
@@ -303,31 +408,111 @@
 		padding: 0;
 		display: flex;
 		flex-direction: column;
-		gap: 0.25rem;
+		gap: var(--space-1);
 		min-width: 20rem;
+		min-height: 3rem;
 	}
 
-	ul[data-testid='proposal-queue'] button {
+	ul[data-testid='proposal-queue']:focus-visible {
+		outline: 2px solid var(--accent);
+		outline-offset: 2px;
+	}
+
+	.queue-status {
+		border: 1px solid var(--border);
+		border-radius: var(--radius-2);
+		background: var(--surface-2);
+	}
+
+	/* Card-style row (design D3): two lines -- term headline + kind/status
+	   pills on line 1, humanized doc-frequency + de-emphasized id on line 2. */
+	button.proposal-row {
 		display: flex;
-		gap: 0.5rem;
+		flex-direction: column;
+		gap: var(--space-1);
 		width: 100%;
+		min-width: 0;
 		text-align: left;
-		padding: 0.4rem 0.5rem;
-		border: 1px solid #ccc;
-		border-radius: 0.25rem;
-		background: none;
+		padding: var(--space-2) var(--space-3);
+		border: 1px solid var(--border);
+		border-radius: var(--radius-2);
+		background: var(--surface-2);
+		box-shadow: var(--shadow-1);
 		font: inherit;
 		cursor: pointer;
 	}
 
-	ul[data-testid='proposal-queue'] button.selected {
-		border-color: currentColor;
-		background: rgba(0, 0, 0, 0.06);
+	button.proposal-row.selected {
+		border-color: var(--accent);
+		background: var(--surface-3);
 	}
 
-	.field.kind,
-	.field.status {
-		opacity: 0.7;
+	.row-line {
+		display: flex;
+		align-items: baseline;
+		gap: var(--space-2);
+		min-width: 0;
+	}
+
+	.row-line-1 {
+		justify-content: space-between;
+	}
+
+	.row-pills {
+		display: flex;
+		gap: var(--space-1);
+		flex-shrink: 0;
+	}
+
+	.field.term {
+		font-size: var(--font-size-1);
+		font-weight: 700;
+		color: var(--text);
+		min-width: 0;
+		overflow-wrap: anywhere;
+	}
+
+	.field.pill {
+		display: inline-block;
+		font-size: var(--font-size-0);
+		line-height: 1;
+		border-radius: var(--radius-1);
+		padding: var(--space-1) var(--space-2);
+		background: var(--surface-3);
+		color: var(--text-muted);
+		text-transform: capitalize;
+		white-space: nowrap;
+	}
+
+	.field.status.pill-pending {
+		background: var(--warning-bg);
+		color: var(--warning-text);
+	}
+
+	.field.status.pill-approved {
+		background: var(--grounded-bg);
+		color: var(--grounded-text);
+	}
+
+	.field.status.pill-rejected {
+		background: var(--error-bg);
+		color: var(--error-text);
+	}
+
+	.row-line-2 {
+		justify-content: space-between;
+		font-size: var(--font-size-0);
+		color: var(--text-muted);
+	}
+
+	.field.doc-frequency {
+		flex-shrink: 0;
+		white-space: nowrap;
+	}
+
+	.field.id {
+		text-align: right;
+		font-family: var(--font-mono);
 	}
 
 	[data-testid='proposal-detail'] {
@@ -336,63 +521,65 @@
 	}
 
 	.badge {
-		font-size: 0.7rem;
-		border-radius: 0.75rem;
-		padding: 0.1rem 0.5rem;
+		font-size: var(--font-size-0);
+		border-radius: var(--radius-3);
+		padding: var(--space-1) var(--space-2);
 		border: 1px solid currentColor;
 		vertical-align: middle;
-		margin-left: 0.5rem;
+		margin-left: var(--space-2);
 		text-transform: uppercase;
 	}
 
 	.edit-fields {
 		display: flex;
-		gap: 1rem;
+		gap: var(--space-4);
 		align-items: flex-end;
 		flex-wrap: wrap;
-		margin: 0.75rem 0;
+		margin: var(--space-3) 0;
 	}
 
 	.edit-fields label {
 		display: flex;
 		flex-direction: column;
-		font-size: 0.85rem;
-		gap: 0.2rem;
+		font-size: var(--font-size-0);
+		gap: var(--space-1);
 	}
 
 	.actions {
 		display: flex;
-		gap: 0.5rem;
-		margin-bottom: 0.75rem;
+		gap: var(--space-2);
+		margin-bottom: var(--space-3);
 	}
 
 	[data-testid='shacl-error'] {
-		border: 1px solid #b00020;
-		color: #b00020;
-		border-radius: 0.25rem;
-		padding: 0.5rem 0.75rem;
-		margin-bottom: 0.75rem;
+		border: 1px solid var(--error-text);
+		color: var(--error-text);
+		background: var(--error-bg);
+		border-radius: var(--radius-1);
+		padding: var(--space-2) var(--space-3);
+		margin-bottom: var(--space-3);
 	}
 
 	[data-testid='shacl-error'] ul {
-		margin: 0.4rem 0 0;
+		margin: var(--space-1) 0 0;
 		padding-left: 1.1rem;
 	}
 
 	[data-testid='shacl-error'] .path,
 	[data-testid='shacl-error'] .constraint {
 		font-weight: 600;
-		margin-right: 0.4rem;
+		margin-right: var(--space-1);
 	}
 
 	[data-testid='raw-triples'] {
-		background: rgba(0, 0, 0, 0.05);
-		padding: 0.5rem;
+		background: var(--surface-3);
+		border-radius: var(--radius-1);
+		padding: var(--space-2);
 		overflow: auto;
 		max-height: 20rem;
 	}
 
 	.error {
-		color: #b00020;
+		color: var(--error-text);
 	}
 </style>
