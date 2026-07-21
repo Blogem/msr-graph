@@ -87,18 +87,21 @@ only artifacts already on disk (``segments.jsonl``/``mentions.jsonl``/OCR
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import logging
 import re
+from collections import Counter
 from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from msr_extraction.config import Config
+from msr_extraction.corpora import corpus_for_genre
 from msr_extraction.curated import CURATED_REPORTS
 from msr_extraction.graph_reader import GraphReader
-from msr_extraction.mining_types import Candidate, Evidence
+from msr_extraction.mining_types import Candidate, Evidence, Observation
 
 logger = logging.getLogger(__name__)
 
@@ -845,15 +848,63 @@ def build_exclusion_set(
     return ExclusionIndex(sequences)
 
 
-def _build_corpus_index(archive_dir: Path) -> list[str]:
-    """Case-folded text of every `*.txt` OCR sidecar under `archive_dir`, read once."""
-    texts: list[str] = []
+def _build_corpus_index_with_ids(archive_dir: Path) -> list[tuple[str, str]]:
+    """``(document_iri, case-folded text)`` of every `*.txt` OCR sidecar under `archive_dir`.
+
+    The document id is the sidecar's filename **stem** (``path.stem``),
+    spelled as a full IRI the same way :attr:`~msr_extraction.mining_types.Evidence.document_iri`
+    is (``f"{MSRD}{id}"``) -- shared by :func:`_build_corpus_index` (the DF
+    scan, ids discarded) and :func:`score_document_observations` (the
+    per-document observation scan, D5/2.1), so the two scans can never see
+    a different document set.
+    """
+    docs: list[tuple[str, str]] = []
     for path in sorted(archive_dir.rglob("*.txt")):
         try:
-            texts.append(path.read_text(encoding="utf-8", errors="ignore").casefold())
+            text = path.read_text(encoding="utf-8", errors="ignore").casefold()
         except OSError:
             logger.warning("could not read OCR sidecar %s; excluding from corpus index", path)
-    return texts
+            continue
+        docs.append((f"{MSRD}{path.stem}", text))
+    return docs
+
+
+def _build_corpus_index(archive_dir: Path) -> list[str]:
+    """Case-folded text of every `*.txt` OCR sidecar under `archive_dir`, read once."""
+    return [text for (_document_iri, text) in _build_corpus_index_with_ids(archive_dir)]
+
+
+def _build_safety_corpus_index_with_ids(config: Config, reports: list[str]) -> list[tuple[str, str]]:
+    """``(document_iri, case-folded normalized text)`` per safety source, one per `report`.
+
+    Shares the same "exactly one text per source" discipline as
+    :func:`_build_safety_corpus_index` (see that function's docstring for
+    why an ``rglob`` over ``config.safety_dir`` double-counts): the document
+    id is the `report` id passed in, spelled as a full IRI (``f"{MSRD}{report}"``,
+    matching :attr:`~msr_extraction.mining_types.Evidence.document_iri`).
+    Shared by :func:`_build_safety_corpus_index` (the DF scan, ids
+    discarded) and :func:`score_document_observations` (the per-document
+    observation scan, D5/2.1) so the two scans can never see a different
+    document set.
+    """
+    docs: list[tuple[str, str]] = []
+    for report in reports:
+        path = config.safety_normalized_path(report)
+        if not path.exists():
+            logger.warning(
+                "normalized.txt missing for safety source %s at %s; excluding "
+                "from document-frequency corpus",
+                report,
+                path,
+            )
+            continue
+        try:
+            text = path.read_text(encoding="utf-8", errors="ignore").casefold()
+        except OSError:
+            logger.warning("could not read normalized text %s; excluding from corpus index", path)
+            continue
+        docs.append((f"{MSRD}{report}", text))
+    return docs
 
 
 def _build_safety_corpus_index(config: Config, reports: list[str]) -> list[str]:
@@ -877,22 +928,7 @@ def _build_safety_corpus_index(config: Config, reports: list[str]) -> list[str]:
     skipped, not an error (mirrors every other per-report read in this
     module).
     """
-    texts: list[str] = []
-    for report in reports:
-        path = config.safety_normalized_path(report)
-        if not path.exists():
-            logger.warning(
-                "normalized.txt missing for safety source %s at %s; excluding "
-                "from document-frequency corpus",
-                report,
-                path,
-            )
-            continue
-        try:
-            texts.append(path.read_text(encoding="utf-8", errors="ignore").casefold())
-        except OSError:
-            logger.warning("could not read normalized text %s; excluding from corpus index", path)
-    return texts
+    return [text for (_document_iri, text) in _build_safety_corpus_index_with_ids(config, reports)]
 
 
 def score_document_frequency(
@@ -974,6 +1010,96 @@ def score_document_frequency(
     return counts
 
 
+def score_document_observations(
+    terms: set[str],
+    config: Config,
+    *,
+    genre: str = "chemistry",
+    reports: list[str] | None = None,
+) -> dict[str, list[Observation]]:
+    """Per-document, per-corpus occurrence observations for `terms` (design.md D1/D5, task 2.1).
+
+    The **Pass B** of the two-pass structure `score_document_frequency` is
+    Pass A for: intended to be called with a small, already-floor/ceiling-
+    bounded survivor term set (`mine_candidates` calls it only after the
+    ceiling cut), never the full candidate set, so it stays cheap even
+    though it counts *occurrences* (term frequency) rather than short-
+    circuiting on presence like the DF scan does.
+
+    Reuses the identical document index each genre's DF scan uses --
+    :func:`_build_corpus_index_with_ids` (``config.archive_dir``, an
+    ``rglob("*.txt")``, document id = the sidecar's filename stem) for
+    ``genre="chemistry"``, or :func:`_build_safety_corpus_index_with_ids`
+    (exactly one ``config.safety_normalized_path(report)`` text per
+    `reports` entry, document id = the report id) for ``genre="safety"`` --
+    so a document's identity and the corpus it belongs to
+    (:func:`msr_extraction.corpora.corpus_for_genre`) can never drift from
+    what `score_document_frequency` scored. `reports` is required
+    (non-``None``) for ``genre="safety"``; it is ignored for
+    ``genre="chemistry"``.
+
+    For each document, builds a :class:`collections.Counter` of that
+    document's normalized n-gram terms (:func:`_terms_in_text` -- the exact
+    same normalization the DF scan's ``set(...)`` membership test uses) and
+    intersects its keys against `terms` in one hash-set operation (mirrors
+    `score_document_frequency`'s ``doc_terms & terms``, so this stays
+    O(doc_ngrams) per document, not a substring scan). Every matched term
+    gets one :class:`~msr_extraction.mining_types.Observation` for that
+    document, carrying the document's full IRI, its corpus CURIE, and the
+    counter's occurrence count for that term (per-document **term
+    frequency**, design D5 -- not mere presence).
+
+    Returns ``term -> [Observation, ...]``; a term with zero matching
+    documents is simply absent from the returned dict (callers should use
+    ``.get(term, [])``). If the genre's corpus root is missing/empty
+    (chemistry) or no source has a readable normalized text (safety), logs
+    a warning and returns ``{}`` rather than raising.
+    """
+    if not terms:
+        return {}
+
+    if genre == "safety":
+        indexed_docs = _build_safety_corpus_index_with_ids(config, reports or [])
+    else:
+        corpus_dir = config.archive_dir
+        if not corpus_dir.exists():
+            logger.warning(
+                "corpus dir %s does not exist; observation scoring returns no observations",
+                corpus_dir,
+            )
+            return {}
+        indexed_docs = _build_corpus_index_with_ids(corpus_dir)
+
+    if not indexed_docs:
+        logger.warning(
+            "genre=%s corpus has no readable text; observation scoring returns no observations",
+            genre,
+        )
+        return {}
+
+    corpus = corpus_for_genre(genre)
+    total_docs = len(indexed_docs)
+    logger.info(
+        "scoring %d survivor terms for per-document observations over %d documents",
+        len(terms),
+        total_docs,
+    )
+    observations: dict[str, list[Observation]] = {}
+    for doc_index, (document_iri, text) in enumerate(indexed_docs, start=1):
+        counter = Counter(_terms_in_text(text))
+        for term in counter.keys() & terms:
+            observations.setdefault(term, []).append(
+                Observation(
+                    document_iri=document_iri,
+                    corpus=corpus,
+                    occurrence_count=counter[term],
+                )
+            )
+        if doc_index % 100 == 0:
+            logger.info("scored %d/%d documents for observations", doc_index, total_docs)
+    return observations
+
+
 def mine_candidates(
     config: Config,
     reader: GraphReader,
@@ -1033,6 +1159,20 @@ def mine_candidates(
        evidence collected during enumeration (plus, for spaCy candidates,
        the chunk's original `surface_form`); miss candidates keep the
        evidence/`surface_form` they were built with.
+    5. **Attach per-document observations (proposal-observation-provenance
+       design.md D1/D5, task 2.1/2.2).** A second, targeted scan
+       (:func:`score_document_observations`) over ONLY the terms that
+       survived steps 2-3 above (never the full enumerated set) records
+       each surviving term's per-document occurrence count and corpus.
+       Each candidate is then rebuilt (``dataclasses.replace``) with
+       ``observations`` set to that term's observations and
+       ``doc_frequency`` **derived** from them (the count of distinct
+       documents) rather than kept as step 3's raw scalar -- the two can
+       never disagree, since both come from the identical document index
+       and the identical :func:`_terms_in_text` matching. For
+       ``genre="chemistry"`` this reproduces step 3's document-frequency
+       numbers exactly (same corpus, same matching); observations are
+       purely additive.
 
     Returns the retained candidates sorted by ``term`` for determinism, and
     emits exactly one summary log line: candidates enumerated / excluded /
@@ -1139,6 +1279,30 @@ def mine_candidates(
         scored.sort(key=lambda candidate: (-candidate.doc_frequency, candidate.term))
         cut_by_ceiling_count = len(scored) - config.mine_max_candidates
         scored = scored[: config.mine_max_candidates]
+
+    # Pass B (design.md D1/D5, task 2.1/2.2): a targeted per-document
+    # observation scan over ONLY the final (floor+ceiling) survivor terms --
+    # never the full enumerated candidate set -- so this stays cheap despite
+    # counting occurrences rather than short-circuiting on presence like
+    # Pass A (`score_document_frequency` above) does. `documentFrequency` is
+    # then DERIVED from the observations (count of distinct `document_iri`
+    # values) rather than kept as the Pass-A scalar, so a candidate's
+    # `doc_frequency` and `observations` can never disagree (the
+    # proposal-observation-provenance root-cause fix, D3): re-mining a term
+    # already seen in another corpus can no longer collide into a
+    # duplicated/ambiguous stored count.
+    survivor_terms = {candidate.term for candidate in scored}
+    observations_by_term = score_document_observations(
+        survivor_terms, config, genre=genre, reports=reports
+    )
+    scored = [
+        dataclasses.replace(
+            candidate,
+            observations=tuple(observations_by_term.get(candidate.term, [])),
+            doc_frequency=len(observations_by_term.get(candidate.term, [])),
+        )
+        for candidate in scored
+    ]
 
     scored.sort(key=lambda candidate: candidate.term)
 
