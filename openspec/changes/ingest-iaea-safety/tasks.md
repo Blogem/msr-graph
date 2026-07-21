@@ -33,14 +33,14 @@
 
 ## 5. Provenance & SHACL (extends chunks 12–13)
 
-- [ ] 5.1 Confirm safety documents/mentions/individuals/edge-reification-nodes carry the chunk-12 provenance edges (reuse the shared `provenance.py` writer; no new provenance model)
+- [x] 5.1 Confirm safety documents/mentions/individuals/edge-reification-nodes carry the chunk-12 provenance edges (reuse the shared `provenance.py` writer; no new provenance model)
 - [x] 5.2 Extend the `shacl-validation` catalogue Turtle (reserved shapes graph): add `SafetyFunction`/`Requirement` provenance shapes (`wasDerivedFrom` + `wasGeneratedBy`), a `servedByProperty`-target-must-be-`PhysicalProperty` shape, and an `addressesFunction`-target-must-be-`SafetyFunction` shape. **No new mention shape** — safety `Mention`s are already covered by the landed `Mention` shape. No threshold/satisfaction shape
 
 ## 6. Agent safety answers (`analysis-agent`)
 
-- [ ] 6.1 Verify the KG-schema prompt rebuild on the post-approval version bump includes the Safety branch (chunk-4 mechanism; no hardcoded safety terms)
+- [x] 6.1 Verify the KG-schema prompt rebuild on the post-approval version bump includes the Safety branch (chunk-4 mechanism; no hardcoded safety terms)
 - [x] 6.2 Add SPARQL query patterns for the evidence-chain traversal and the evidence-gap (`FILTER NOT EXISTS`) query as agent-usable examples/tests
-- [ ] 6.3 Verify requirement-satisfaction is computed in a sandbox script (threshold vs measurement → margin) and the answer carries the soft-criterion caveat; an ungrounded safety claim is stamped ungrounded
+- [x] 6.3 Verify requirement-satisfaction is computed in a sandbox script (threshold vs measurement → margin) and the answer carries the soft-criterion caveat; an ungrounded safety claim is stamped ungrounded
 
 ## 7. Extraction CLI & run model
 
