@@ -47,6 +47,7 @@ from msr_extraction.mining_types import (
     safe_type_ref,
     term_slug,
 )
+from msr_extraction.safety_manifest import SAFETY_SOURCES
 from msr_extraction.sparql import SparqlClient
 
 logger = logging.getLogger(__name__)
@@ -186,7 +187,11 @@ def run_mine(
     unchanged to `novelty.mine_candidates` (candidate enumeration) and to
     every triage call (`_triage_all`/`triage.triage_candidate`); the
     `genre="chemistry"` default reproduces this function's pre-chunk-11
-    behavior exactly. Orchestration:
+    behavior exactly. `genre="safety"` additionally passes `reports=` as
+    the safety-manifest source ids (`safety_manifest.SAFETY_SOURCES`)
+    instead of `novelty.mine_candidates`' `CURATED_REPORTS` default, so
+    enumeration/scoring reads the safety corpus's own documents rather than
+    silently falling back to the chemistry corpus's report ids. Orchestration:
 
     1. Build/accept collaborators, the cached KG-schema prompt prefix, and
        the known-IRI set.
@@ -237,12 +242,23 @@ def run_mine(
     # monkeypatched `novelty.mine_candidates` with a fixed 2-positional-arg
     # test double (as the chemistry-genre test suite does) keeps working
     # unmodified -- the extra keyword is never sent on the byte-identical
-    # `genre="chemistry"` default path.
-    candidates = (
-        novelty.mine_candidates(config, reader, genre=genre)
-        if genre != "chemistry"
-        else novelty.mine_candidates(config, reader)
-    )
+    # `genre="chemistry"` default path. `genre="safety"` additionally passes
+    # `reports=` as the safety-manifest source ids -- otherwise
+    # `novelty.mine_candidates` would default `reports` to
+    # `curated.CURATED_REPORTS` (the chemistry corpus's report ids) even
+    # though `genre="safety"` -- so enumeration/scoring would look up those
+    # chemistry ids in the safety cache and silently enumerate nothing.
+    if genre == "chemistry":
+        candidates = novelty.mine_candidates(config, reader)
+    elif genre == "safety":
+        candidates = novelty.mine_candidates(
+            config,
+            reader,
+            reports=[source.id for source in SAFETY_SOURCES],
+            genre=genre,
+        )
+    else:
+        candidates = novelty.mine_candidates(config, reader, genre=genre)
     logger.info("mine: %d candidate(s) surviving novelty scoring", len(candidates))
 
     proposals_by_kind: dict[str, int] = {}
