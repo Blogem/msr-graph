@@ -139,31 +139,46 @@ func bindingsResult(rows ...map[string]graph.Binding) *graph.Results {
 	return r
 }
 
-// queueCanned returns three msr:ChangeProposal rows spanning all three
-// review statuses (pending/approved/rejected), each keyed under several
-// plausible SPARQL variable-name aliases for the resource identifier
-// ("id", the deterministic short slug; "proposal"/"s", the full
-// msrd:proposal-{id} IRI) so the test exercises the handler's actual
-// status-filtering/rendering logic regardless of which alias it reads.
+// queueCanned returns three msr:ChangeProposal proposals spanning all
+// three review statuses (pending/approved/rejected), reshaped for the
+// observation-aggregation queue query (proposal-observation-provenance,
+// spec proposal-review-api "One row per proposal despite multi-corpus/
+// multi-run observations"): the real proposalQueueQuery
+// (cmd/server/proposals.go) selects `?s ?kind ?status ?term ?document
+// ?occurrenceCount ?corpus ?generatedAtTime` via an OPTIONAL
+// msr:hasObservation join, so a proposal with N distinct documents comes
+// back as N raw rows sharing the same `?s`/`?kind`/`?status`/`?term`
+// -- the handler is what collapses them into one documentFrequency-N
+// summary row. Each proposal below is given a distinct-document count
+// matching what the pre-observation-model `docFrequency` scalar fixture
+// used (5/12/3), so the same magnitudes are still exercised.
 func queueCanned() *graph.Results {
-	row := func(id, kind, status, term, freq string) map[string]graph.Binding {
+	proposalRows := func(id, kind, status, term string, docCount int) []map[string]graph.Binding {
 		full := "https://w3id.org/msr-kg/data#proposal-" + id
-		return map[string]graph.Binding{
-			"id":           {Type: "literal", Value: id},
-			"proposal":     {Type: "uri", Value: full},
-			"s":            {Type: "uri", Value: full},
-			"kind":         {Type: "literal", Value: kind},
-			"status":       {Type: "literal", Value: status},
-			"term":         {Type: "literal", Value: term},
-			"docFrequency": {Type: "literal", Value: freq, Datatype: xsdInteger},
-			"frequency":    {Type: "literal", Value: freq, Datatype: xsdInteger},
+		rows := make([]map[string]graph.Binding, 0, docCount)
+		for i := 0; i < docCount; i++ {
+			doc := fmt.Sprintf("https://w3id.org/msr-kg/data#doc-%s-%d", id, i)
+			rows = append(rows, map[string]graph.Binding{
+				"id":              {Type: "literal", Value: id},
+				"proposal":        {Type: "uri", Value: full},
+				"s":               {Type: "uri", Value: full},
+				"kind":            {Type: "literal", Value: kind},
+				"status":          {Type: "literal", Value: status},
+				"term":            {Type: "literal", Value: term},
+				"document":        {Type: "uri", Value: doc},
+				"occurrenceCount": {Type: "literal", Value: "1", Datatype: xsdInteger},
+				"corpus":          {Type: "uri", Value: "https://w3id.org/msr-kg/data#corpus-chemistry"},
+				"generatedAtTime": {Type: "literal", Value: "2026-01-01T00:00:00Z", Datatype: "http://www.w3.org/2001/XMLSchema#dateTime"},
+			})
 		}
+		return rows
 	}
-	return bindingsResult(
-		row("property-solubility", "property", "pending", "solubility", "5"),
-		row("property-density", "property", "approved", "density", "12"),
-		row("instance-flibe", "instance", "rejected", "FLiBe", "3"),
-	)
+
+	var rows []map[string]graph.Binding
+	rows = append(rows, proposalRows("property-solubility", "property", "pending", "solubility", 5)...)
+	rows = append(rows, proposalRows("property-density", "property", "approved", "density", 12)...)
+	rows = append(rows, proposalRows("instance-flibe", "instance", "rejected", "FLiBe", 3)...)
+	return bindingsResult(rows...)
 }
 
 const detailKnownID = "property-solubility"
@@ -292,13 +307,13 @@ func TestProposalsQueue_FiltersByStatusAndListsAll(t *testing.T) {
 		name    string
 		query   string
 		wantIDs map[string]struct {
-			kind, status, term, freq string
+			kind, status, term, documentFrequency string
 		}
 	}{
 		{
 			name:  "no filter returns every status",
 			query: "",
-			wantIDs: map[string]struct{ kind, status, term, freq string }{
+			wantIDs: map[string]struct{ kind, status, term, documentFrequency string }{
 				"property-solubility": {"property", "pending", "solubility", "5"},
 				"property-density":    {"property", "approved", "density", "12"},
 				"instance-flibe":      {"instance", "rejected", "FLiBe", "3"},
@@ -307,21 +322,21 @@ func TestProposalsQueue_FiltersByStatusAndListsAll(t *testing.T) {
 		{
 			name:  "status=pending narrows to pending only",
 			query: "?status=pending",
-			wantIDs: map[string]struct{ kind, status, term, freq string }{
+			wantIDs: map[string]struct{ kind, status, term, documentFrequency string }{
 				"property-solubility": {"property", "pending", "solubility", "5"},
 			},
 		},
 		{
 			name:  "status=approved narrows to approved only",
 			query: "?status=approved",
-			wantIDs: map[string]struct{ kind, status, term, freq string }{
+			wantIDs: map[string]struct{ kind, status, term, documentFrequency string }{
 				"property-density": {"property", "approved", "density", "12"},
 			},
 		},
 		{
 			name:  "status=rejected narrows to rejected only",
 			query: "?status=rejected",
-			wantIDs: map[string]struct{ kind, status, term, freq string }{
+			wantIDs: map[string]struct{ kind, status, term, documentFrequency string }{
 				"instance-flibe": {"instance", "rejected", "FLiBe", "3"},
 			},
 		},
@@ -370,8 +385,8 @@ func TestProposalsQueue_FiltersByStatusAndListsAll(t *testing.T) {
 				if got := entry["term"]; got != want.term {
 					t.Errorf("proposal %q term = %v, want %q", id, got, want.term)
 				}
-				if got := numString(entry["docFrequency"]); got != want.freq {
-					t.Errorf("proposal %q docFrequency = %v, want %q", id, got, want.freq)
+				if got := numString(entry["documentFrequency"]); got != want.documentFrequency {
+					t.Errorf("proposal %q documentFrequency = %v, want %q", id, got, want.documentFrequency)
 				}
 			}
 			for id := range tt.wantIDs {
