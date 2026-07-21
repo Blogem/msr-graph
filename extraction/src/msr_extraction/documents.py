@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from msr_extraction.manifest import ManifestRecord
 from msr_extraction.provenance import ACTIVITY_IRI, run_activity_iri
+from msr_extraction.safety_manifest import SafetySource
 from msr_extraction.sparql import SparqlClient
 
 _PREFIXES = """\
@@ -134,3 +135,109 @@ def write_documents(records: list[ManifestRecord], client: SparqlClient, run_ts:
         return
     client.update(insert_data_update(records))
     client.update(provenance_insert_data(records, run_ts))
+
+
+def safety_document_triples(source: SafetySource) -> str:
+    """Return the Turtle body describing one safety-source Document node.
+
+    Produces (with proper literal escaping)::
+
+        msrd:{id} a msr:Document ;
+            rdfs:label "{title}" ;
+            dcterms:identifier "{id}" ;
+            dcterms:date "{date}" ;
+            dcterms:publisher "{publisher}" ;
+            dcterms:rights "{rights}" ;
+            dcterms:source <{url}> ;
+            prov:wasGeneratedBy msrd:activity-extraction .
+
+    Mirrors :func:`document_triples` (design.md D2/D6), adding the
+    safety-genre attribution predicates mandated by D2:
+    ``dcterms:publisher``, ``dcterms:rights``, and ``dcterms:source`` (an
+    IRI in angle brackets, not a literal, since it is the source URL).
+    Safety Document nodes are derivation roots exactly like their corpus
+    counterparts, so no ``prov:wasDerivedFrom`` is asserted here.
+    """
+    source_id = source.id
+    title = _escape_literal(source.title)
+    date = _escape_literal(source.date)
+    publisher = _escape_literal(source.publisher)
+    rights = _escape_literal(source.rights)
+    return (
+        f"msrd:{source_id} a msr:Document ;\n"
+        f'    rdfs:label "{title}" ;\n'
+        f'    dcterms:identifier "{source_id}" ;\n'
+        f'    dcterms:date "{date}" ;\n'
+        f'    dcterms:publisher "{publisher}" ;\n'
+        f'    dcterms:rights "{rights}" ;\n'
+        f"    dcterms:source <{source.url}> ;\n"
+        f"    prov:wasGeneratedBy {ACTIVITY_IRI} ."
+    )
+
+
+def safety_insert_data_update(sources: list[SafetySource]) -> str:
+    """Wrap safety Document triples for all sources in an INSERT DATA update.
+
+    Mirrors :func:`insert_data_update`: wraps the concatenated output of
+    :func:`safety_document_triples` for every source in
+    ``INSERT DATA { GRAPH <urn:msr:data> { ... } }``, with the same prefix
+    declarations.
+    """
+    blocks = []
+    for source in sources:
+        triples = safety_document_triples(source)
+        indented = "\n".join(f"    {line}" for line in triples.splitlines())
+        blocks.append(indented)
+    body = "\n\n".join(blocks)
+    return (
+        f"{_PREFIXES}\n"
+        "INSERT DATA {\n"
+        "  GRAPH <urn:msr:data> {\n"
+        f"{body}\n"
+        "  }\n"
+        "}"
+    )
+
+
+def safety_provenance_insert_data(sources: list[SafetySource], run_ts: str) -> str:
+    """Return the INSERT DATA update writing per-run generation edges.
+
+    Mirrors :func:`provenance_insert_data`: for each source, emits
+    ``msrd:{id} prov:wasGeneratedBy <urn:msr:run:extraction/{run_ts}>`` into
+    ``GRAPH <urn:msr:provenance>``. Callers should only invoke this (and
+    send its result) when ``sources`` is non-empty.
+    """
+    run_iri = run_activity_iri(run_ts)
+    lines = [
+        f"    msrd:{source.id} prov:wasGeneratedBy {run_iri} ."
+        for source in sources
+    ]
+    body = "\n".join(lines)
+    return (
+        f"{_PROVENANCE_PREFIXES}\n"
+        "INSERT DATA {\n"
+        "  GRAPH <urn:msr:provenance> {\n"
+        f"{body}\n"
+        "  }\n"
+        "}"
+    )
+
+
+def write_safety_documents(
+    sources: list[SafetySource], client: SparqlClient, run_ts: str
+) -> None:
+    """Build the ``urn:msr:data`` and ``urn:msr:provenance`` updates and send both.
+
+    Mirrors :func:`write_documents` for the safety genre: sends the
+    ``urn:msr:data`` ``INSERT DATA`` (safety Document triples) via
+    :func:`safety_insert_data_update`, then a second ``INSERT DATA`` into
+    ``urn:msr:provenance`` via :func:`safety_provenance_insert_data`
+    carrying one per-run generation edge per document, keyed by ``run_ts``.
+    Additive and idempotent for the ``urn:msr:data`` half: deterministic
+    IRIs mean repeated calls with the same sources are a no-op there.
+    No-op (no writes at all) when ``sources`` is empty.
+    """
+    if not sources:
+        return
+    client.update(safety_insert_data_update(sources))
+    client.update(safety_provenance_insert_data(sources, run_ts))
