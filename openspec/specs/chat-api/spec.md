@@ -21,6 +21,7 @@ The server SHALL expose `POST /api/chat` that accepts the full conversation in t
 The response to `POST /api/chat` SHALL be a Server-Sent Events stream of typed trace events emitted as the turn progresses. The event types and payloads SHALL be:
 
 - `text` — assistant text tokens.
+- `reasoning` — assistant chain-of-thought, surfaced separately from the answer's `text`.
 - `tool_call` — tool name and arguments.
 - `tool_result` — result bindings/rows, truncated inline with the full payload retrievable.
 - `script_run` — script source, stdout, stderr, exit code, sandbox id, and the `dataLocator`(s) the script read.
@@ -49,6 +50,21 @@ This request and event schema is the contract consumed by the chunk-10 frontend.
 #### Scenario: An ungrounded answer is marked
 - **WHEN** the turn returns a final answer with no provenance surfaced
 - **THEN** the `answer` event carries `grounded: false` so the client can flag the answer as unsourced
+
+### Requirement: Reasoning is separated from the answer text
+The server SHALL NOT emit a model's chain-of-thought as `text`. When a model turn carries reasoning — either inline `<think>…</think>` blocks embedded in the message content or a separate `reasoning_content` field — the server SHALL strip it out of the answer content and emit it as a distinct `reasoning` event. Reasoning SHALL NOT be written back into the conversation history sent to the model on subsequent turns.
+
+#### Scenario: Inline `<think>` reasoning is emitted separately
+- **WHEN** the model returns content containing a `<think>…</think>` block
+- **THEN** the `text` event carries only the answer with the block removed, and a `reasoning` event carries the block's contents
+
+#### Scenario: `reasoning_content` field is surfaced
+- **WHEN** the model response carries a separate `reasoning_content` field
+- **THEN** its contents are emitted as a `reasoning` event rather than dropped
+
+#### Scenario: Reasoning is not re-fed to the model
+- **WHEN** a subsequent turn sends the conversation history
+- **THEN** the prior assistant messages contain only the reasoning-free answer content
 
 ### Requirement: Traces are ephemeral
 The server SHALL NOT persist chat traces; the stream is live per turn and nothing is stored for replay. Consistent with statelessness, an interrupted stream requires no server-side recovery — the client re-sends the conversation.

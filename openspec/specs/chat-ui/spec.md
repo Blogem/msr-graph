@@ -45,7 +45,8 @@ Each assistant turn SHALL present an expandable trace timeline that renders ever
 event type: `text` (assistant tokens streamed into the answer), `tool_call` (tool name and
 arguments), `tool_result` (result bindings/rows, truncated with an expand affordance),
 `script_run` (script source plus stdout, stderr, exit code, and sandbox id), `provenance`, and
-`answer`. Events SHALL be shown in stream order.
+`answer`. Events SHALL be shown in stream order. The `reasoning` event is not part of the trace
+timeline â€” it has its own affordance (see "Model reasoning shown in a collapsible section").
 
 #### Scenario: All event types are visible in a completed trace
 - **WHEN** a turn grounds via SPARQL, reads SQL, runs a script, and answers
@@ -102,6 +103,17 @@ The chat surface SHALL render the assistant answer body as formatted markdown â€
 #### Scenario: Incomplete streamed markdown does not break rendering
 - **WHEN** the answer is mid-stream and contains partial/unterminated markdown (e.g. an unclosed code fence)
 - **THEN** rendering succeeds without throwing and completes correctly once the remaining tokens arrive
+
+### Requirement: Model reasoning shown in a collapsible section
+When a turn carries `reasoning` events, the chat surface SHALL accumulate their text and present it in a collapsed disclosure ("Thinking") shown above the answer, visually distinct from the answer body. Reasoning SHALL NOT be concatenated into the answer bubble.
+
+#### Scenario: Reasoning appears under a collapsed disclosure
+- **WHEN** the stream carries `reasoning` events for a turn
+- **THEN** a collapsed "Thinking" section holds the reasoning and the answer bubble contains only the answer `text`
+
+#### Scenario: A turn with no reasoning shows no disclosure
+- **WHEN** a turn carries no `reasoning` events
+- **THEN** no "Thinking" disclosure is rendered
 
 ### Requirement: In-progress streaming affordance
 While an assistant turn is still streaming, the chat surface SHALL show a visible in-progress affordance (such as a caret or pulse) on that turn, and SHALL remove it when the turn completes or errors, so it is always clear whether the assistant is still responding.
