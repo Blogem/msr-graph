@@ -31,6 +31,10 @@
 #                   # score -> triage -> write msr:ChangeProposal proposals +
 #                   # auto-accepted instances (see
 #                   # openspec/changes/mine-ontology-candidates/design.md).
+#   make ingest-safety # one-shot extraction run: fetch -> extract ->
+#                      # normalize/segment -> documents -> NER -> relations ->
+#                      # mine over the IAEA safety-report genre (see
+#                      # openspec/changes/ingest-iaea-safety/design.md).
 #   make test       # go test ./... with the GraphDB and sandbox Docker
 #                   # acceptance gates enabled.
 #   make down       # stop the stack and remove its volumes.
@@ -49,7 +53,7 @@
 #                     # running server — clears and re-imports the graph and
 #                     # swaps the SQLite file back to the checkpointed copy.
 
-.PHONY: up down load-seed load-nist ingest link extract mine test chat demo-density checkpoint restore
+.PHONY: up down load-seed load-nist ingest link extract mine ingest-safety test chat demo-density checkpoint restore
 
 # GraphDB's published host port (see docker-compose.yml, service "graphdb").
 GRAPHDB_URL ?= http://localhost:7200
@@ -133,6 +137,10 @@ extract:
 mine:
 	@echo "==> running extraction mine (enumerate novel candidates -> score -> triage -> write proposals + auto-accepted instances)"
 	docker compose run --rm extraction mine
+
+ingest-safety:
+	@echo "==> running extraction safety ingest (fetch -> extract -> normalize/segment -> documents -> NER -> relations -> mine over the IAEA safety-report genre)"
+	docker compose run --rm extraction safety ingest
 
 test:
 	@echo "==> running go test with the GraphDB and sandbox Docker acceptance gates enabled (GRAPHDB_REQUIRED=1, SANDBOX_DOCKER_REQUIRED=1); -p 1 serializes package execution because the checkpoint/proposal integration tests share the live 'msr' repo and clobber each other under cross-package parallelism"
