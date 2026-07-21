@@ -83,6 +83,37 @@ _RELATION_RE = re.compile(
     re.IGNORECASE,
 )
 
+# -- Genre-aware triage (chunk 11 / ingest-iaea-safety D3, task 3.2) --
+
+#: Appended to the base user prompt only for ``genre="safety"``
+#: (:func:`_build_user_prompt`). Does NOT add a new triage kind -- the fixed
+#: kind set (`property`/`class`/`instance`/`relation`/`reject`) is unchanged
+#: (design.md D3, `candidate-triage`); this text only (a) keeps the Flash
+#: classifier from rejecting domain-shaped safety phrases as boilerplate,
+#: (b) steers a confirmed `class`-kind safety concept toward a Safety
+#: broader-class placement, and (c) steers a confirmed `relation`-kind
+#: linking edge toward the digital-thread domain/range.
+_SAFETY_GENRE_GUIDANCE = (
+    " This candidate was mined from the SAFETY genre (nuclear safety-standard "
+    "text: IAEA/GIF/ORNL safety-function and requirement documents), not the "
+    "chemistry corpus. Safety-domain concepts are often multi-word "
+    'prepositional phrases (e.g. "confinement of radioactive material", '
+    '"removal of residual heat", "control of reactivity", "defence in '
+    'depth") -- do NOT reject a domain-shaped safety phrase merely because '
+    "it reads like standards boilerplate; reject only genuine non-concepts "
+    "(OCR fragments, acronyms, proper nouns, bare citation/section-numbering "
+    'text). If the confirmed kind is "class", set `broaderClass` to a Safety '
+    "broader-class placement -- one of SafetyFunction, Requirement, "
+    "Confinement, DefenceInDepth, or DesignBasis, whichever the candidate "
+    "names or specializes. If the candidate is a linking relation between a "
+    "safety function/requirement and a coolant physical property, or "
+    'between a requirement and a safety function, confirm kind "relation" '
+    "and set `domain`/`range` accordingly (e.g. domain SafetyFunction, range "
+    "PhysicalProperty for a servedByProperty-shaped candidate; domain "
+    "Requirement, range SafetyFunction for an addressesFunction-shaped "
+    "candidate)."
+)
+
 
 def signal_kind(candidate: Candidate) -> str | None:
     """Propose a cheap, lexical context-signal kind for ``candidate``, or ``None``.
@@ -123,7 +154,9 @@ def signal_kind(candidate: Candidate) -> str | None:
     return None
 
 
-def _build_user_prompt(candidate: Candidate, signal: str | None) -> str:
+def _build_user_prompt(
+    candidate: Candidate, signal: str | None, *, genre: str = "chemistry"
+) -> str:
     """Build the per-candidate user prompt appended to the cached KG-schema prefix.
 
     Includes the literal word "json" (DeepSeek's JSON output mode requires
@@ -133,15 +166,31 @@ def _build_user_prompt(candidate: Candidate, signal: str | None) -> str:
     refine-mine-salience) for a candidate that is NOT a genuine novel
     ontology concept — candidate enumeration is precision-limited on noisy
     OCR, so the classifier is the semantic filter of last resort.
+
+    ``genre`` (chunk 11 / ingest-iaea-safety D3, task 3.2) is keyword-only,
+    defaulting to ``"chemistry"`` — a candidate's genre changes only the
+    prompt text, never the fixed kind set or the JSON response shape below.
+    For ``genre="safety"``, :data:`_SAFETY_GENRE_GUIDANCE` is appended to
+    the introductory instruction so the classifier (a) does not reject
+    domain-shaped safety phrases as boilerplate, (b) proposes a Safety
+    broader-class placement for a `class`-kind safety concept, and (c)
+    proposes domain/range for a `relation`-kind linking edge. The
+    ``genre="chemistry"`` (default) prompt is byte-identical to before this
+    parameter existed.
     """
     sentences = "\n".join(
         f'- "{evidence.sentence_text}"' for evidence in candidate.evidence
     )
     signal_line = signal if signal is not None else "unclear"
-    return (
+    intro = (
         "Triage the following candidate term against the knowledge graph "
         "schema above and classify it into exactly one primary kind, or "
-        "reject it if it is not a genuine novel ontology concept.\n\n"
+        "reject it if it is not a genuine novel ontology concept."
+    )
+    if genre == "safety":
+        intro += _SAFETY_GENRE_GUIDANCE
+    return (
+        f"{intro}\n\n"
         f'Candidate term: "{candidate.term}"\n'
         f"Context-signal hint: {signal_line}\n"
         f"Evidence sentences:\n{sentences}\n\n"
@@ -201,10 +250,14 @@ def classify(
     signal: str | None,
     prompt_prefix: str,
     client: Completer,
+    *,
+    genre: str = "chemistry",
 ) -> TriagedCandidate | None:
     """Confirm ``candidate``'s kind and proposed placement via Flash.
 
-    Builds a user prompt from ``candidate``/``signal``, calls
+    Builds a user prompt from ``candidate``/``signal``/``genre``
+    (:func:`_build_user_prompt`; ``genre`` keyword-only, default
+    ``"chemistry"`` — chunk 11 / ingest-iaea-safety D3, task 3.2), calls
     ``client.complete(prompt_prefix, user_prompt)``, and validates the
     result app-side (shape check only — the QUDT/INIS-allowlist guard
     lives downstream in ``proposals.py``, not here). There are exactly
@@ -230,7 +283,7 @@ def classify(
     :func:`msr_extraction.disambiguation.disambiguate`'s never-raise
     style). Does not dereference any external ref.
     """
-    user_prompt = _build_user_prompt(candidate, signal)
+    user_prompt = _build_user_prompt(candidate, signal, genre=genre)
 
     try:
         raw = client.complete(prompt_prefix, user_prompt)
@@ -260,10 +313,14 @@ def triage_candidate(
     candidate: Candidate,
     prompt_prefix: str,
     client: Completer,
+    *,
+    genre: str = "chemistry",
 ) -> TriagedCandidate | None:
     """Triage ``candidate`` end-to-end: cheap signal, then Flash confirmation.
 
-    Computes :func:`signal_kind` and delegates to :func:`classify`,
+    Computes :func:`signal_kind` and delegates to :func:`classify`
+    (threading ``genre`` through unchanged; keyword-only, default
+    ``"chemistry"`` — chunk 11 / ingest-iaea-safety D3, task 3.2),
     propagating whichever of the three outcomes it returns unchanged: a
     routable :class:`TriagedCandidate` (``kind`` in
     :data:`~msr_extraction.mining_types.VALID_KINDS`), a reject
@@ -272,4 +329,4 @@ def triage_candidate(
     malformed drop).
     """
     signal = signal_kind(candidate)
-    return classify(candidate, signal, prompt_prefix, client)
+    return classify(candidate, signal, prompt_prefix, client, genre=genre)
