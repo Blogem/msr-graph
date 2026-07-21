@@ -275,6 +275,45 @@ writes the accepted relations as:
   relation (accepted or rejected), regenerated wholesale on each run like
   `mentions.jsonl`, for inspection/debugging of the extraction pass.
 
+## Safety-source ingest (chunk 11, `ingest-iaea-safety`)
+
+A second NER genre — real IAEA/GIF/ORNL safety documentation, feeding a `Safety`
+ontology branch grown through the same evolution loop as the chemistry branch — is
+finalized in [`docs/DATA_SCOPE.md` §4](docs/DATA_SCOPE.md#4-iaeagifornl-safety-sources-chunk-11-ingest-iaea-safety)
+and proved end to end by [`docs/SAFETY_THREAD_SPIKE.md`](docs/SAFETY_THREAD_SPIKE.md)
+(see `openspec/changes/ingest-iaea-safety/design.md` for the full design).
+
+- **`scripts/fetch-safety-sources.sh`** downloads the four cached sources (IAEA SRS-123
+  / PUB2027, GIF Holcomb MSR safety analysis, ORNL/TM-2006/12, ORNL MSR technical &
+  safety considerations) into the gitignored `data/safety/` cache, skipping any file
+  already present. The four sources' attribution (publisher, rights, `dcterms:source`
+  URL, date) and their ingested section/page scope are the tracked, structured manifest
+  in `extraction/src/msr_extraction/safety_manifest.py`.
+- **`data/safety/` layout:**
+  - `data/safety/{pdf_filename}` — the cached PDF as fetched (filename per source, from
+    the manifest — e.g. `PUB2027_SRS-123.pdf`), gitignored.
+  - `data/safety/{id}.txt` — pypdf-extracted raw text, honoring the manifest's declared
+    page scope (`msr_extraction.safety_acquire.extract_pdf_text`).
+  - `data/safety/{id}/normalized.txt` + `data/safety/{id}/segments.jsonl` — the
+    extracted text run through the unchanged chunk-5 normalizer/segmenter
+    (`msr_extraction.safety_acquire.normalize_and_segment`), landing in the identical
+    format `make link`/`make extract` already consume for the corpus genre.
+  - `data/safety/{id}/mentions.jsonl` / `data/safety/{id}/relations.jsonl` — reserved
+    paths (`Config.safety_mentions_path`/`safety_relations_path`) for the shared
+    linking/relation-extraction stages once they run over the safety genre.
+- **Attribution & licensing rule:** IAEA SRS-123 is © all rights reserved; the GIF and
+  ORNL sources are public. No PDF or full extracted text for any of the four sources is
+  ever committed — only the fetch script and the attributed manifest are tracked, and
+  every safety `msr:Document` node written to the graph carries
+  `dcterms:publisher`/`dcterms:rights`/`dcterms:source` so any evidence quote the agent
+  surfaces stays attributable. Re-running `scripts/fetch-safety-sources.sh` reproduces
+  the cache from scratch.
+- **Current status:** the acquisition/extraction/normalization/document-writing stages
+  above are implemented and covered by `extraction/tests/test_safety_*.py`; a `safety`
+  extraction-CLI subcommand group and a `make ingest-safety` target (mirroring `make
+  ingest`) are planned but not yet wired (`openspec/changes/ingest-iaea-safety/tasks.md`,
+  section 7) — until then, the stages are driven directly via the Python API.
+
 ## `data/` bind-mount ownership
 
 `./data` is a host bind mount shared into containers, which all run as a
