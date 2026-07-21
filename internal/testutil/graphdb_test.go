@@ -15,6 +15,23 @@ func fakeEnv(vars map[string]string) func(string) string {
 	}
 }
 
+func TestTestRepo(t *testing.T) {
+	t.Run("defaults to msr-test when GRAPHDB_TEST_REPO is unset", func(t *testing.T) {
+		got := TestRepo(fakeEnv(nil))
+		if got != defaultTestRepo {
+			t.Fatalf("TestRepo() = %q, want %q", got, defaultTestRepo)
+		}
+	})
+
+	t.Run("honors an explicit GRAPHDB_TEST_REPO", func(t *testing.T) {
+		env := fakeEnv(map[string]string{"GRAPHDB_TEST_REPO": "custom-repo"})
+		got := TestRepo(env)
+		if got != "custom-repo" {
+			t.Fatalf("TestRepo() = %q, want %q", got, "custom-repo")
+		}
+	})
+}
+
 func TestRequireGraphDB_RepoResolution(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasSuffix(r.URL.Path, "/repositories/custom-repo/size") {

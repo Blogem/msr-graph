@@ -184,6 +184,16 @@ func RequireGraphDB(getenv func(string) string) Decision {
 	}
 }
 
+// TestRepo returns the resolved integration-test repo name (GRAPHDB_TEST_REPO,
+// default "msr-test") -- the same repo RequireGraphDB targets. Test helpers
+// that shell out to cmd/loader must forward this as GRAPHDB_REPO in the
+// subprocess environment so the loader writes to the disposable test repo
+// instead of falling back to its own "msr" default, which would silently
+// pollute production.
+func TestRepo(getenv func(string) string) string {
+	return graphDBTestRepo(getenv)
+}
+
 // graphDBBaseURL returns the configured GRAPHDB_URL, defaulting to
 // http://localhost:7200 per D1.
 func graphDBBaseURL(getenv func(string) string) string {
