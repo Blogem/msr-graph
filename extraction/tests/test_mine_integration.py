@@ -84,8 +84,19 @@ GRAPHITE_SENTENCE = "Graphite was used as the moderator material in the reactor 
 
 # Deliberately fictitious -- never appears in the real corpus or the live
 # graph, so cleanup-by-IRI is exact and there is no risk of colliding with
-# real data.
-SALT_SURFACE = "TestMineSaltA9F2"
+# real data. Pure-alphabetic (no digits): `score_document_frequency`'s
+# `_tokenize` matches only `[A-Za-z]+` runs, so a digit anywhere inside this
+# surface form (the original fixture used "TestMineSaltA9F2") would split it
+# into multiple sub-3-char/digit-truncated tokens and the miss candidate's
+# raw-casefolded term (from `read_miss_candidates`, never itself
+# re-tokenized) could then never exactly match any n-gram
+# `score_document_frequency` derives from `doc-salt.txt` below -- permanently
+# zeroing its document frequency and dropping it below `salience_threshold`
+# regardless of the live repo's state. camelCase is not split by that same
+# `_tokenize` pass (it matches maximal letter runs, not case boundaries), so
+# this whole compound word still normalizes to one exact unigram token on
+# both sides of the miss-candidate/doc-frequency comparison.
+SALT_SURFACE = "TestMineSaltZephyrion"
 SALT_TERM = SALT_SURFACE.casefold()
 SALT_SLUG = term_slug(SALT_TERM)
 SALT_SENTENCE = f"A new compound {SALT_SURFACE} was observed forming a stable salt."
@@ -302,6 +313,38 @@ def _build_mine_config(tmp_path: Path) -> tuple[Config, dict]:
     return config, {"solubility": sol_seg, "graphite": graphite_seg}
 
 
+def _empty_known_entities_select(query: str) -> list[dict]:
+    """A `GraphReader` select_fn stand-in returning an empty result set for
+    every query -- decouples 8.8's candidate enumeration/exclusion (and the
+    `KGSchemaPromptCache` prefix build) from the live `msr` repo's actual
+    contents.
+
+    The live repo is shared, non-ephemeral state (this module's own
+    docstring, "TEARDOWN" section): prior mine invocations against it
+    accumulate `skos:Concept`s over time, and this test's fixture
+    deliberately proposes "solubility"/"graphite" -- exactly the kind of
+    common term that ends up already modeled after enough runs. A real
+    `GraphReader.from_config(config)` would then correctly exclude them as
+    already-known, starving `run_mine`'s exclusion-set input of the two
+    novel-schema candidates this test asserts on, even though nothing about
+    the *write path* under test (staging, proposal-graph axioms,
+    auto-accept, provenance, idempotency, core-invisibility) actually
+    depends on the live repo's known-entity contents.
+
+    Returning zero rows for every query (`read_known_entities`,
+    `read_role_reactor_labels`, `read_version`) makes `build_exclusion_set`
+    produce an always-empty exclusion index and `known_iris()` an empty
+    set, regardless of what the live repo happens to contain today or
+    accumulates tomorrow. This is safe for the auto-accepted salt
+    individual too: its asserted type (`msr:MoltenSalt`, the
+    `StubClassifier`'s `broaderClass`) is a member of
+    `auto_accept.CORE_TYPES` -- a small, fixed CURIE set checked *before*
+    `known_iris` in `auto_accept.resolves_in_core` -- so the auto-accept
+    path fires correctly without any live-repo-sourced known IRI at all.
+    """
+    return []
+
+
 def _teardown_mine_run(config: Config, evidence_curies: list[str]) -> None:
     """Remove every triple/graph the 8.8 test could have written.
 
@@ -372,7 +415,14 @@ def test_mine_run_stages_proposals_auto_accepts_instance_and_is_idempotent(
     from msr_extraction.graph_reader import GraphReader
 
     config, segments = _build_mine_config(tmp_path)
-    reader = GraphReader.from_config(config)
+    # A controlled reader (real query endpoint, empty select_fn), NOT
+    # `GraphReader.from_config(config)` -- decouples candidate
+    # enumeration/exclusion from the live `msr` repo's accumulated state
+    # (see `_empty_known_entities_select`'s docstring). All *writes* still
+    # go through the real `SparqlClient` below, so every write-path/SHACL/
+    # provenance/idempotency/core-invisibility assertion in this test still
+    # exercises the live, SHACL-enabled repository exactly as before.
+    reader = GraphReader(config.sparql_query_endpoint, select_fn=_empty_known_entities_select)
     sparql = SparqlClient.from_config(config)
     classifier = StubClassifier()
 
