@@ -31,6 +31,10 @@
 #                   # score -> triage -> write msr:ChangeProposal proposals +
 #                   # auto-accepted instances (see
 #                   # openspec/changes/mine-ontology-candidates/design.md).
+#   make ingest-safety # one-shot extraction run: fetch -> extract ->
+#                      # normalize/segment -> documents -> NER -> relations ->
+#                      # mine over the IAEA safety-report genre (see
+#                      # openspec/changes/ingest-iaea-safety/design.md).
 #   make test-repo  # provisions (resets+creates) the disposable, SHACL-
 #                   # enabled "msr-test" GraphDB repository and seeds
 #                   # ontology/vocab into it (scripts/ensure-repo.sh
@@ -66,7 +70,7 @@
 #                     # compose build server` always embeds a fresh frontend;
 #                     # run this target directly for a host-side Go build.
 
-.PHONY: up down load-seed load-nist ingest link extract mine test-repo test chat demo-density checkpoint restore frontend
+.PHONY: up down load-seed load-nist ingest link extract mine ingest-safety test-repo test chat demo-density checkpoint restore frontend
 
 # GraphDB's published host port (see docker-compose.yml, service "graphdb").
 GRAPHDB_URL ?= http://localhost:7200
@@ -150,6 +154,10 @@ extract:
 mine:
 	@echo "==> running extraction mine (enumerate novel candidates -> score -> triage -> write proposals + auto-accepted instances)"
 	docker compose run --rm extraction mine
+
+ingest-safety:
+	@echo "==> running extraction safety ingest (fetch -> extract -> normalize/segment -> documents -> NER -> relations -> mine over the IAEA safety-report genre)"
+	docker compose run --rm extraction safety ingest
 
 test-repo:
 	@echo "==> resetting + creating the disposable, SHACL-enabled 'msr-test' GraphDB repository (never touches 'msr')"

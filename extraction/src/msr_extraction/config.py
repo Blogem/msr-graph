@@ -105,6 +105,26 @@ class Config:
     # re-resolve every layer-5 surface via the model, rewriting the store
     # (persist-disambiguation-cache D4). Env MSR_DISAMBIG_REFRESH.
     disambig_cache_refresh: bool = False
+    # Chunk 11 (ingest-iaea-safety D3, task 3.1) — the safety genre's
+    # noun-chunk candidate window for the novelty miner. Safety concepts are
+    # longer prepositional phrases ("confinement of radioactive material",
+    # "removal of residual heat") than the chemistry default of 3 surviving
+    # content tokens allows, so this genre gets its own (relaxed) window.
+    # Override with MSR_SAFETY_MAX_CHUNK_TOKENS.
+    safety_max_chunk_tokens: int = 6
+    # Post-chunk-11 mine-calibration fix — the safety genre's OWN
+    # document-frequency floor. `salience_threshold` (50) is sized for the
+    # 637-document msr-archive chemistry corpus; the safety corpus is a
+    # handful of curated IAEA/GIF/ORNL sources (as few as 4), so a
+    # candidate's document frequency there is bounded by the source count
+    # and never approaches 50 — reusing the chemistry floor for both genres
+    # zeroed every safety mining run's candidate set (every candidate fell
+    # below it). 1 means "appears in at least one safety document" is
+    # enough to reach triage: this genre's precision gate is the LLM triage
+    # step (design D3/D4), not the DF floor, mirroring the validated
+    # low-floor + LLM-triage-reject path from refine-mine-salience's own
+    # POC. Override with MSR_SAFETY_SALIENCE_THRESHOLD.
+    safety_salience_threshold: int = 1
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> Config:
@@ -153,6 +173,14 @@ class Config:
             disambig_cache_refresh=(
                 env.get("MSR_DISAMBIG_REFRESH", "").strip().lower()
                 in ("1", "true", "yes")
+            ),
+            safety_max_chunk_tokens=int(
+                env.get("MSR_SAFETY_MAX_CHUNK_TOKENS", cls.safety_max_chunk_tokens)
+            ),
+            safety_salience_threshold=int(
+                env.get(
+                    "MSR_SAFETY_SALIENCE_THRESHOLD", cls.safety_salience_threshold
+                )
             ),
         )
 
@@ -216,3 +244,37 @@ class Config:
     def qudt_units_path(self) -> Path:
         """Path to the QUDT unit allowlist consulted by relation extraction."""
         return self.ontology_dir / "qudt-units.json"
+
+    @property
+    def safety_dir(self) -> Path:
+        """The gitignored safety-source cache dir (chunk 11 D1).
+
+        Rooted alongside ``corpus_dir`` off the shared data root (mirroring
+        how :attr:`archive_dir` is rooted off ``corpus_dir``), so overriding
+        ``MSR_CORPUS_DIR`` moves both caches together.
+        """
+        return self.corpus_dir.parent / "safety"
+
+    def safety_text_path(self, source_id: str) -> Path:
+        """Path to the pypdf-extracted raw text for a safety source (D1/1.3)."""
+        return self.safety_dir / f"{source_id}.txt"
+
+    def safety_report_dir(self, source_id: str) -> Path:
+        """Directory holding the processed artifacts for a safety source."""
+        return self.safety_dir / source_id
+
+    def safety_normalized_path(self, source_id: str) -> Path:
+        """Path to the chunk-5 normalized text for a safety source."""
+        return self.safety_report_dir(source_id) / "normalized.txt"
+
+    def safety_segments_path(self, source_id: str) -> Path:
+        """Path to the chunk-5 segmented-text artifact for a safety source."""
+        return self.safety_report_dir(source_id) / "segments.jsonl"
+
+    def safety_mentions_path(self, source_id: str) -> Path:
+        """Path to the chunk-6 mention/miss artifact for a safety source."""
+        return self.safety_report_dir(source_id) / "mentions.jsonl"
+
+    def safety_relations_path(self, source_id: str) -> Path:
+        """Path to the chunk-7 relation-extraction artifact for a safety source."""
+        return self.safety_report_dir(source_id) / "relations.jsonl"

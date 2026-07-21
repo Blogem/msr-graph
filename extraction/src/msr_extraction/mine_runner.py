@@ -47,6 +47,7 @@ from msr_extraction.mining_types import (
     safe_type_ref,
     term_slug,
 )
+from msr_extraction.safety_manifest import SAFETY_SOURCES
 from msr_extraction.sparql import SparqlClient
 
 logger = logging.getLogger(__name__)
@@ -110,7 +111,11 @@ def _default_qudt_path() -> Path:
 
 
 def _triage_worker(
-    candidate: Candidate, prompt_prefix: str, client: FlashClient
+    candidate: Candidate,
+    prompt_prefix: str,
+    client: FlashClient,
+    *,
+    genre: str = "chemistry",
 ) -> TriagedCandidate | None:
     """Run :func:`triage.triage_candidate` for one candidate, defensively.
 
@@ -119,10 +124,11 @@ def _triage_worker(
     other unexpected exception (e.g. a transient network error the retry
     logic in `FlashClient` didn't absorb) and treats it the same way -- the
     candidate is dropped, never propagated to crash the thread pool or
-    `run_mine` itself.
+    `run_mine` itself. `genre` (chunk 11 / ingest-iaea-safety D3, task 3.2)
+    is threaded through unchanged to `triage.triage_candidate`.
     """
     try:
-        return triage.triage_candidate(candidate, prompt_prefix, client)
+        return triage.triage_candidate(candidate, prompt_prefix, client, genre=genre)
     except Exception:  # noqa: BLE001 - triage anomalies must never crash the pool
         logger.warning("mine: candidate=%r triage raised unexpectedly; dropped", candidate.term)
         return None
@@ -133,12 +139,16 @@ def _triage_all(
     prompt_prefix: str,
     client: FlashClient,
     max_workers: int,
+    *,
+    genre: str = "chemistry",
 ) -> list[tuple[Candidate, TriagedCandidate | None]]:
     """Triage every candidate concurrently, returning results in `candidates`
     order (mirrors `_cmd_link`'s `prewarm_report` concurrency pattern:
     `ThreadPoolExecutor` + `as_completed`, `Completer.complete` calls are
     blocking network I/O so threads -- not processes -- are the right tool,
-    and `FlashClient` is a shared thread-safe pooled client).
+    and `FlashClient` is a shared thread-safe pooled client). `genre`
+    (chunk 11 / ingest-iaea-safety D3, task 3.2) is threaded through
+    unchanged to every :func:`_triage_worker` call.
 
     Results are collected into a list pre-sized to `candidates` and written
     back by index, so completion order (which is non-deterministic under
@@ -150,7 +160,7 @@ def _triage_all(
     results: list[TriagedCandidate | None] = [None] * len(candidates)
     with ThreadPoolExecutor(max_workers=max_workers) as pool:
         future_to_index = {
-            pool.submit(_triage_worker, candidate, prompt_prefix, client): index
+            pool.submit(_triage_worker, candidate, prompt_prefix, client, genre=genre): index
             for index, candidate in enumerate(candidates)
         }
         for future in as_completed(future_to_index):
@@ -166,12 +176,22 @@ def run_mine(
     client: FlashClient | None = None,
     sparql: SparqlClient | None = None,
     qudt_path: Path | None = None,
+    genre: str = "chemistry",
 ) -> dict:
     """Run the full mine pipeline once and return a summary dict.
 
     Collaborators (`reader`/`client`/`sparql`) are injectable for testing;
     any left `None` is built from `config` (mirrors `_cmd_link`'s
-    collaborator-construction style). Orchestration:
+    collaborator-construction style). `genre` (keyword-only, default
+    `"chemistry"` -- chunk 11 / ingest-iaea-safety D3, task 3.2) is threaded
+    unchanged to `novelty.mine_candidates` (candidate enumeration) and to
+    every triage call (`_triage_all`/`triage.triage_candidate`); the
+    `genre="chemistry"` default reproduces this function's pre-chunk-11
+    behavior exactly. `genre="safety"` additionally passes `reports=` as
+    the safety-manifest source ids (`safety_manifest.SAFETY_SOURCES`)
+    instead of `novelty.mine_candidates`' `CURATED_REPORTS` default, so
+    enumeration/scoring reads the safety corpus's own documents rather than
+    silently falling back to the chemistry corpus's report ids. Orchestration:
 
     1. Build/accept collaborators, the cached KG-schema prompt prefix, and
        the known-IRI set.
@@ -218,7 +238,27 @@ def run_mine(
 
     allowlist = proposals.load_qudt_allowlist(qudt_path or _default_qudt_path())
 
-    candidates = novelty.mine_candidates(config, reader)
+    # NOTE: `genre` is passed only when non-default so that a caller who has
+    # monkeypatched `novelty.mine_candidates` with a fixed 2-positional-arg
+    # test double (as the chemistry-genre test suite does) keeps working
+    # unmodified -- the extra keyword is never sent on the byte-identical
+    # `genre="chemistry"` default path. `genre="safety"` additionally passes
+    # `reports=` as the safety-manifest source ids -- otherwise
+    # `novelty.mine_candidates` would default `reports` to
+    # `curated.CURATED_REPORTS` (the chemistry corpus's report ids) even
+    # though `genre="safety"` -- so enumeration/scoring would look up those
+    # chemistry ids in the safety cache and silently enumerate nothing.
+    if genre == "chemistry":
+        candidates = novelty.mine_candidates(config, reader)
+    elif genre == "safety":
+        candidates = novelty.mine_candidates(
+            config,
+            reader,
+            reports=[source.id for source in SAFETY_SOURCES],
+            genre=genre,
+        )
+    else:
+        candidates = novelty.mine_candidates(config, reader, genre=genre)
     logger.info("mine: %d candidate(s) surviving novelty scoring", len(candidates))
 
     proposals_by_kind: dict[str, int] = {}
@@ -237,7 +277,7 @@ def run_mine(
     # results in the original `candidates` order regardless of completion
     # order, so Phase 2 below stays byte-for-byte deterministic.
     triaged_candidates = _triage_all(
-        candidates, prompt_prefix, client, config.disambig_concurrency
+        candidates, prompt_prefix, client, config.disambig_concurrency, genre=genre
     )
 
     # Phase 2 (serial, unchanged logic): route each triage result through

@@ -52,7 +52,7 @@ import json
 import logging
 import re
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Callable
+from typing import TYPE_CHECKING, Callable, Literal
 
 from msr_extraction import formula
 
@@ -469,11 +469,23 @@ def link_segment(
     return resolved
 
 
-def _read_segments(report: str, config: Config) -> list[Segment]:
-    """Read `config.segments_path(report)` JSONL into `Segment` objects,
-    in file order (which is already sentence/report order)."""
+def _read_segments(
+    report: str, config: Config, *, genre: Literal["chemistry", "safety"] = "chemistry"
+) -> list[Segment]:
+    """Read a report's `segments.jsonl` into `Segment` objects, in file order
+    (which is already sentence/report order).
+
+    ``genre`` (chunk 11, ingest-iaea-safety D8) selects which of the two
+    parallel artifact layouts to read: the default ``"chemistry"`` reads
+    `config.segments_path(report)` (the chunk-5 corpus layout, byte-for-byte
+    unchanged); ``"safety"`` reads `config.safety_segments_path(report)`
+    instead, so the safety genre is "just another corpus" downstream
+    (design.md D1/D8), mirroring `relations.select_sentences`'s identical
+    genre switch.
+    """
+    path = config.safety_segments_path(report) if genre == "safety" else config.segments_path(report)
     segments: list[Segment] = []
-    with config.segments_path(report).open("r", encoding="utf-8") as fh:
+    with path.open("r", encoding="utf-8") as fh:
         for line in fh:
             line = line.strip()
             if not line:
@@ -501,17 +513,25 @@ def link_report(
     prompt_prefix: str = "",
     disambiguator: Disambiguator | None = None,
     known_compounds: frozenset[str] | None = None,
+    genre: Literal["chemistry", "safety"] = "chemistry",
 ) -> list[MentionRecord]:
     """Link every segment of `report`'s `segments.jsonl`, report-ordered.
 
     Computes the `known_compounds` set (see `_build_known_compounds`) once
     for the whole report -- not per segment -- unless the caller already
     supplies one.
+
+    ``genre`` (chunk 11, ingest-iaea-safety D8) is keyword-only and
+    defaults to ``"chemistry"`` -- every existing caller is therefore
+    unaffected byte-for-byte. ``genre="safety"`` reads `report`'s segments
+    from `config.safety_segments_path(report)` instead of
+    `config.segments_path(report)` (see `_read_segments`); the linking
+    logic itself (`link_segment`) is genre-agnostic and reused unchanged.
     """
     if known_compounds is None:
         known_compounds = _build_known_compounds(known_entities)
     records: list[MentionRecord] = []
-    for seg in _read_segments(report, config):
+    for seg in _read_segments(report, config, genre=genre):
         records.extend(
             link_segment(
                 seg,
@@ -527,16 +547,27 @@ def link_report(
     return records
 
 
-def write_mentions_jsonl(report: str, records: list[MentionRecord], config: Config) -> None:
-    """Write `config.mentions_path(report)`: one JSON object per record.
+def write_mentions_jsonl(
+    report: str,
+    records: list[MentionRecord],
+    config: Config,
+    *,
+    genre: Literal["chemistry", "safety"] = "chemistry",
+) -> None:
+    """Write a report's mention artifact: one JSON object per record.
 
     Deterministic: `records` are already sorted (per segment, and callers
     concatenate segments in report order via `link_report`), so re-running
     over the same inputs produces byte-identical output (design.md D7's
     "regenerated wholesale per run"). UTF-8, ``ensure_ascii=False``, one
     object per line, keys in the artifact's documented order.
+
+    ``genre`` (chunk 11, ingest-iaea-safety D8) selects the output path:
+    ``"safety"`` writes `config.safety_mentions_path(report)` instead of
+    the chemistry-genre default `config.mentions_path(report)`, mirroring
+    `relations.write_relations_jsonl`'s identical genre switch.
     """
-    path = config.mentions_path(report)
+    path = config.safety_mentions_path(report) if genre == "safety" else config.mentions_path(report)
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8") as fh:
         for record in records:
