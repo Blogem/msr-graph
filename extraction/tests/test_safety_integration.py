@@ -20,11 +20,18 @@ corpus integration" bullet, tasks.md 8.9):
 
 How to run it
 --------------
-Bring up a seeded, catalogued stack, run the safety ingest pipeline, then
-approve the mined SafetyFunction/Requirement proposals (and the two
-linking relations) via the chunk-9 approval API, then re-run the safety
-pipeline so the second-phase linking relations resolve::
+Provision the disposable ``msr-test`` repo first via ``make test-repo``
+(docs/plans/isolate-integration-test-repo.md D1-D3): this module always
+targets the repo resolved from ``GRAPHDB_TEST_REPO`` (default
+``msr-test``), never the production ``msr`` repo, and hard-refuses (skips
+loudly, before any network call) if that resolution lands on the
+production repo -- mirroring ``internal/testutil.RequireGraphDB``'s D1/D2
+guard on the Go side. Export ``GRAPHDB_REPO=msr-test`` for the manual
+pipeline steps too, so `safety ingest` itself writes to the same disposable
+repo this test reads from::
 
+    make test-repo
+    export GRAPHDB_REPO=msr-test
     make up && make load-nist
     (cd extraction && uv run python -m msr_extraction safety ingest)
     # ... review + approve the mined safety branch via the chunk-9 API ...
@@ -32,8 +39,9 @@ pipeline so the second-phase linking relations resolve::
 
 Then, from the repo root::
 
-    MSR_SAFETY_CORPUS_TEST=1 GRAPHDB_URL=http://localhost:7200 \\
-        pytest extraction/tests/test_safety_integration.py
+    MSR_SAFETY_CORPUS_TEST=1 GRAPHDB_TEST_REPO=msr-test \\
+        GRAPHDB_URL=http://localhost:7200 \\
+        uv run --extra test python -m pytest tests/test_safety_integration.py
 
 Any other ``GRAPHDB_*``/``MSR_*`` variables :class:`~msr_extraction.config.Config`
 understands may also be set to point at a non-default stack.
@@ -47,19 +55,38 @@ file) even though its tests are meant to be skipped by default.
 
 from __future__ import annotations
 
+import dataclasses
 import os
 
 import pytest
 
-pytestmark = pytest.mark.skipif(
-    not os.environ.get("MSR_SAFETY_CORPUS_TEST"),
-    reason=(
-        "guarded safety-corpus integration test skipped: set "
-        "MSR_SAFETY_CORPUS_TEST=1 (after `make up && make load-nist` and "
-        "running `safety ingest` twice, with a manual approval of the "
-        "mined safety branch in between) to run it"
+# Repo isolation (docs/plans/isolate-integration-test-repo.md D1/D2, mirroring
+# internal/testutil.RequireGraphDB on the Go side): resolve the disposable
+# test repo from GRAPHDB_TEST_REPO (default "msr-test"), never a hardcoded
+# "msr", and hard-refuse before any network call if that resolution lands on
+# the production repo (literally "msr", or whatever GRAPHDB_REPO names).
+_TEST_REPO = os.environ.get("GRAPHDB_TEST_REPO", "msr-test")
+_PROD_REPO = os.environ.get("GRAPHDB_REPO", "msr")
+
+pytestmark = [
+    pytest.mark.skipif(
+        not os.environ.get("MSR_SAFETY_CORPUS_TEST"),
+        reason=(
+            "guarded safety-corpus integration test skipped: set "
+            "MSR_SAFETY_CORPUS_TEST=1 (after `make test-repo` and `make up "
+            "&& make load-nist` and running `safety ingest` twice, with a "
+            "manual approval of the mined safety branch in between) to run it"
+        ),
     ),
-)
+    pytest.mark.skipif(
+        _TEST_REPO == "msr" or _TEST_REPO == _PROD_REPO,
+        reason=(
+            f"refusing to run destructive safety integration tests against "
+            f"the production repo {_TEST_REPO!r}; set GRAPHDB_TEST_REPO to a "
+            "disposable repo (see make test-repo)"
+        ),
+    ),
+]
 
 from msr_extraction import safety_manifest
 from msr_extraction.config import Config
@@ -82,6 +109,36 @@ _FUNDAMENTAL_SAFETY_FUNCTION_TERMS = (
 # the approved msr:SafetyFunction individual for "heat removal".
 _SF_HEAT_REMOVAL_IRI = f"{MSRD}sf-heat-removal"
 _SPECIFIC_HEAT_IRI = f"{MSR}specificHeat"
+
+
+def _config() -> Config:
+    """Build a Config targeting the resolved disposable ``_TEST_REPO``, never
+    the production default.
+
+    ``Config`` is a frozen dataclass, so this calls ``Config.from_env()``
+    (to pick up any other env vars, e.g. ``GRAPHDB_URL``) and overrides
+    ``graphdb_repo`` via ``dataclasses.replace`` -- the module-level guard
+    above has already refused to run if ``_TEST_REPO`` resolves to the
+    production repo, so this is always safe to use directly.
+    """
+    return dataclasses.replace(Config.from_env(), graphdb_repo=_TEST_REPO)
+
+
+@pytest.fixture(autouse=True)
+def _pin_graphdb_repo_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Pin ``GRAPHDB_REPO`` to the resolved disposable ``_TEST_REPO`` for the
+    duration of each test.
+
+    ``_run_safety_ingest_cli`` invokes ``msr_extraction.cli.main`` in-process,
+    which builds its own ``Config.from_env()`` internally (it does not accept
+    an injected ``Config``) -- so without this, the CLI-driven ingest run
+    would silently target whatever ``GRAPHDB_REPO`` resolves to in the real
+    process environment instead of the same disposable repo this module's
+    direct SPARQL helpers (via ``_config()``) read from. Scoped to each test
+    via ``monkeypatch`` so it never leaks into the rest of the process
+    environment/suite.
+    """
+    monkeypatch.setenv("GRAPHDB_REPO", _TEST_REPO)
 
 
 def _sparql_select(config: Config, query: str) -> list[dict[str, dict[str, str]]]:
@@ -149,7 +206,7 @@ def test_four_safety_documents_present_with_attribution() -> None:
     ``dcterms:source`` (confirmed against ``documents.write_safety_documents``'s
     triple shape).
     """
-    config = Config.from_env()
+    config = _config()
 
     assert len(safety_manifest.SAFETY_SOURCES) == 4, (
         "expected exactly four safety sources in the manifest"
@@ -202,7 +259,7 @@ def test_three_fundamental_safety_functions_surfaced_as_proposals() -> None:
     safety Documents (confirmed against `proposals._staging_resource_block`'s
     real triple shape).
     """
-    config = Config.from_env()
+    config = _config()
     safety_document_iris = {f"{MSRD}{source.id}" for source in safety_manifest.SAFETY_SOURCES}
 
     for words in _FUNDAMENTAL_SAFETY_FUNCTION_TERMS:
@@ -248,7 +305,7 @@ def test_served_by_property_edge_resolvable_and_traceable_to_a_salt_measurement(
     is genuinely traceable to a measured salt property, not merely to a
     bare, ungrounded property IRI.
     """
-    config = Config.from_env()
+    config = _config()
 
     edge_present = _sparql_ask(
         config,
@@ -304,7 +361,7 @@ def test_second_safety_ingest_run_leaves_data_triple_count_unchanged() -> None:
     ``test_extract_integration.py``'s
     ``test_second_extract_run_is_idempotent_in_data_and_sqlite``.
     """
-    config = Config.from_env()
+    config = _config()
 
     def _data_triple_count() -> int:
         bindings = _sparql_select(
