@@ -6,7 +6,17 @@
 	// provenance chain (chat-ui spec 3.5).
 	import type { ProvenancePayload } from '$lib/types';
 
-	let { provenance }: { provenance: ProvenancePayload } = $props();
+	// `containerTestId`/`chipTestId` default to the standalone `provenance`
+	// event's testids. AnswerStamp overrides them when embedding this same
+	// component for the grounded answer's aggregated chain, so a turn that
+	// carries both a standalone `provenance` event and a grounded `answer`
+	// event (each with its own provenance payload) doesn't render two
+	// elements sharing the identical `provenance-chips` testid.
+	let {
+		provenance,
+		containerTestId = 'provenance-chips',
+		chipTestId = 'provenance-chip'
+	}: { provenance: ProvenancePayload; containerTestId?: string; chipTestId?: string } = $props();
 
 	interface Chip {
 		kind: string;
@@ -63,12 +73,12 @@
 	]);
 </script>
 
-<div class="provenance-chips" data-testid="provenance-chips">
+<div class="provenance-chips" data-testid={containerTestId}>
 	{#if chips.length === 0}
 		<span class="provenance-empty">No provenance recorded</span>
 	{/if}
 	{#each chips as chip (chip.kind + '|' + chip.value)}
-		<span class="provenance-chip" data-testid="provenance-chip" data-chip-kind={chip.kind}>
+		<span class="provenance-chip" data-testid={chipTestId} data-chip-kind={chip.kind}>
 			<span class="chip-label">{chip.label}:</span>
 			{#if chip.href}
 				<a href={chip.href} target="_blank" rel="noreferrer">{chip.value}</a>

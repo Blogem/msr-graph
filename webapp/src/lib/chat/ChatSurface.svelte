@@ -48,8 +48,16 @@
 		// the outgoing request body.
 		const requestMessages = toHistory(turns);
 
-		const assistantTurn: Turn = { role: 'assistant', content: '', trace: [], expanded: true };
-		turns.push(assistantTurn);
+		turns.push({ role: 'assistant', content: '', trace: [], expanded: true });
+		// Re-obtain the just-pushed turn from the reactive `turns` array
+		// itself rather than holding onto the plain object literal above:
+		// in Svelte 5, pushing a plain object into a `$state` array wraps
+		// it in a NEW proxy, so the pre-push local variable would keep
+		// pointing at the original, now-detached object and mutations to
+		// it would never be observed by the template. Indexing back into
+		// `turns` gets the reactive proxy so `.content +=`/`.trace.push`
+		// below actually trigger re-renders.
+		const assistantTurn = turns[turns.length - 1];
 		sending = true;
 
 		try {

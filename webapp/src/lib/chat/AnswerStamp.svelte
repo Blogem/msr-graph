@@ -13,7 +13,11 @@
 	{#if answer.grounded}
 		<span class="stamp-badge stamp-grounded">Grounded</span>
 		{#if answer.provenance}
-			<ProvenanceChips provenance={answer.provenance} />
+			<ProvenanceChips
+				provenance={answer.provenance}
+				containerTestId="answer-provenance-chips"
+				chipTestId="answer-provenance-chip"
+			/>
 		{/if}
 	{:else}
 		<span class="stamp-badge stamp-ungrounded" role="alert">Unsourced answer</span>
