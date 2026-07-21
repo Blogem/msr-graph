@@ -188,6 +188,89 @@ all) goes through it. A chunk-1 acceptance test pins the exclusion. The review a
 This is exactly the property you asked for: everything is in the graph and queryable, but
 the unreviewed material is one `FROM` clause away from being included or excluded.
 
+### Corpus support: per-observation model, not a stored scalar
+
+A proposal's corpus support used to be a single materialized `msr:docFrequency` integer
+written onto the `msr:ChangeProposal` resource. That broke the moment a term was mined
+from a *second* corpus: proposal IRIs are deterministic on `term + kind`, so re-mining
+`moderator` from the safety corpus after it already had a chemistry-corpus proposal wrote
+to the same resource, and the additive writer **appended** a second `docFrequency` value
+(`269, 2`) rather than replacing it — `GET /api/proposals` then emitted one row per value,
+producing duplicate ids that crashed the Svelte keyed review queue. It also threw away a
+genuinely useful signal: *which* documents and corpora a term was seen in, and how often.
+
+The fix (`proposal-observation-provenance`) replaces the scalar with an append-only
+per-(proposal × document × mining run) evidence model:
+
+- **`msr:Corpus` is first-class.** `msrd:corpus-chemistry` (the msr-archive OCR corpus)
+  and `msrd:corpus-safety` (the IAEA/GIF/ORNL safety corpus) are resources, and every
+  `msr:Document` asserts `msr:inCorpus <corpus>` (deterministic, additive, idempotent).
+- **`msr:Observation` nodes replace `msr:docFrequency`.** Each mining run appends one
+  `msr:Observation` per document a candidate survives in, linked from the proposal via
+  `msr:hasObservation`, carrying `msr:inDocument`, `msr:occurrenceCount` (term frequency
+  *within* that document — not mere presence), `msr:inCorpus`, `msr:observedInRun` (the
+  run's chunk-12 `prov:Activity`), and `prov:generatedAtTime`. Observations are
+  **append-only**: a later run adds new observations rather than overwriting prior ones,
+  so the full audit trail survives (mirroring the chunk-12 per-run-activity pattern); the
+  current view is the *latest* observation per (proposal, document). They live in
+  `urn:msr:staging` alongside the proposal — non-core, invisible to the analysis agent,
+  same as the rest of the review metadata.
+- **Aggregates are computed at read time, never stored.** `GET /api/proposals` and the
+  proposal-detail endpoint derive `documentFrequency` (distinct documents with a latest
+  observation), `totalOccurrences` (sum of latest per-document `occurrenceCount`),
+  `corpusCount`, and `corpora[]` from a proposal's observations via `GROUP BY`/`SAMPLE` in
+  the queue SPARQL (`cmd/server/proposals.go`). This is the root-cause fix: with nothing
+  stored to duplicate, a proposal resolves to **exactly one queue row** regardless of how
+  many mining runs or corpora contributed observations. The detail endpoint additionally
+  returns the observation breakdown grouped by corpus → per document (document, corpus,
+  latest `occurrenceCount`, first/last observed).
+- **Cross-corpus breadth is a reviewer signal, not an automated one.** A term attested in
+  *independent* corpora (e.g. both the chemistry and safety corpora) is materially more
+  likely to be a real domain concept than a single-corpus artifact, so the queue/detail
+  surfaces `corpusCount`/`corpora` to the reviewer as a visible cross-corpus badge and
+  per-corpus breakdown. This breadth is **surfaced only** — it does not feed triage
+  classification, auto-accept, or mining-ceiling ranking; scoring on it is a deliberate
+  later decision once real cross-corpus data has been observed.
+- **`msr:hasEvidence` is unaffected.** The existing sampled evidence sentences (a small
+  quote sample used by the diff render) are retained unchanged alongside observations;
+  observations are the complete count/provenance layer, evidence is the display quotes —
+  the two are kept deliberately separate.
+
+**Backfill migration.** Because chunk 8 (`mine-ontology-candidates`) and the safety-genre
+ingest already wrote proposals with the old scalar, a one-shot backfill re-scans the two
+already-cached corpora — the chemistry `archive_dir` OCR sidecars (~637 docs under
+`data/corpus/msr-archive`) and the four-document safety corpus — and rebuilds observations
+for the existing staged proposals, keyed on each proposal's stored `msr:term`. It reuses
+the miner's exact deterministic matching (so reconstructed counts reproduce the original
+`docFrequency` values), tags every scanned document with `msr:inCorpus`, and then removes
+the stale `msr:docFrequency` scalars. It is **inference-free** (no DeepSeek/LLM triage
+call — proposals already carry their triaged `kind`/`term`) and **re-runnable/idempotent**
+(re-running does not duplicate observations). The 19 proposals that previously carried two
+appended `docFrequency` values split naturally into correct per-corpus observations (e.g.
+`moderator` → a chemistry observation set with `documentFrequency` ≈ 269 and a separate
+safety observation set with `documentFrequency` = 2).
+
+Run it once as a migration after upgrading to this model (checkpoint first —
+`make checkpoint LABEL=before-observation-migration` — since the migration plan's rollback
+path is restoring that checkpoint):
+
+```bash
+docker compose run --rm extraction mine backfill-observations
+```
+
+**Status note:** as of this writing the backfill (`proposal-observation-provenance` tasks
+4.x) has not yet landed in `extraction/src/msr_extraction/cli.py` — the observation model,
+writer, and read-time-aggregate API (tasks 1–3, 5) are implemented and merged, but no
+`backfill-observations` subcommand exists in the CLI parser yet. `mine backfill-observations`
+above is the **planned name from `openspec/changes/proposal-observation-provenance/tasks.md`
+(4.4)** and `design.md`'s Migration Plan step 4 ("a `mine`/`safety` CLI subcommand, no
+triage"), not a confirmed, shipped command — treat it as provisional until task 4.4 lands
+and update this snippet to match the real `_build_parser()` wiring at that point. There is
+no Makefile wrapper for it yet either way (it's a one-shot migration, not a routine
+pipeline stage); once it exists, invoke the extraction container's CLI subcommand directly
+as shown above. It is designed to be safe to re-run: a second run over the same corpora
+should leave triple counts stable.
+
 ## Worked self-evolution example — the birth of *solubility*
 
 Seed state: the ontology carries eight properties and the vocabulary its 29 concepts —
