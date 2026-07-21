@@ -44,7 +44,7 @@
 - [x] 7.4 (server, unit against fake graph) Queue returns exactly one entry per proposal id even when the fake returns multiple observation rows; summary aggregates (documentFrequency/totalOccurrences/corpusCount/corpora) are correct
 - [x] 7.5 (server, unit) Detail returns the observation breakdown grouped by corpus/document
 - [x] 7.6 (frontend) Queue renders one row per proposal + cross-corpus badge on multi-corpus data (regression for the duplicate-id keyed-each crash); detail renders the observation breakdown
-- [ ] 7.7 (opt-in integration, GraphDB) Backfill over a small cached fixture corpus writes observations, tags documents with `inCorpus`, and `GET /api/proposals` returns one row per proposal; second run leaves triple counts stable (idempotent)
+- [x] 7.7 (opt-in integration, GraphDB) Backfill over a small cached fixture corpus writes observations, tags documents with `inCorpus`, and `GET /api/proposals` returns one row per proposal; second run leaves triple counts stable (idempotent)
 
 ## 8. Documentation
 
