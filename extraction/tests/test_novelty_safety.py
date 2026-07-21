@@ -20,20 +20,18 @@ it wrote ``segments.jsonl``/``mentions.jsonl``/``normalized.txt`` to the
 chemistry-genre paths (``config.segments_path``/``config.mentions_path``/
 ``config.normalized_path``), but ``mine_candidates(..., genre="safety")``
 reads segments via ``config.safety_segments_path`` and scores document
-frequency over ``config.safety_dir`` (confirmed in ``novelty.
+frequency over one normalized text per source (confirmed in ``novelty.
 enumerate_spacy_terms``/``score_document_frequency``). The helper below
-now writes to ``config.safety_segments_path`` instead. It also no longer
-writes a ``normalized.txt`` sidecar: unlike the chemistry genre (where
-``archive_dir`` -- the document-frequency scan root -- is a sibling of,
-not the same tree as, each report's own artifact dir), the safety genre's
-DF scan root (``config.safety_dir``) IS the same tree that
-``config.safety_report_dir`` nests each source's artifacts under, so a
-``normalized.txt`` written there would leak into the report's own
-document-frequency corpus scan (``_build_corpus_index`` globs every
-``*.txt`` under ``safety_dir`` recursively) -- ``mine_candidates`` never
-reads ``normalized_path`` itself, so dropping that write changes nothing
-these tests assert while keeping the DF-floor test (salience_threshold=1)
-honest.
+now writes to ``config.safety_segments_path`` instead. It also does not
+write a ``config.safety_normalized_path`` sidecar, so every fixture
+report's document frequency is deliberately 0 (``score_document_frequency``
+logs "no readable text" and returns 0 for every term) -- these tests
+instead exercise the genre-specific floor directly via
+``Config(safety_salience_threshold=...)``: 0 lets a DF-0 candidate through,
+1 requires an actual document hit (post-chunk-11 mine-calibration fix:
+``genre="safety"`` now floors on ``config.safety_salience_threshold``, not
+``config.salience_threshold``, since the latter's 50-document-corpus
+default zeroed every safety candidate).
 """
 
 from __future__ import annotations
@@ -135,7 +133,7 @@ def test_heat_removal_two_token_compound_survives_intact(tmp_path) -> None:
     """Scenario: "Fundamental safety functions surface as proposals" --
     "heat removal" has no intervening preposition, so it already fits a
     3-token noun chunk and must keep surviving under genre="safety"."""
-    config = Config(corpus_dir=tmp_path, salience_threshold=0)
+    config = Config(corpus_dir=tmp_path, safety_salience_threshold=0)
     _write_curated_report(config, REPORT, [HEAT_REMOVAL_SHORT_SENTENCE])
     _write_mentions(config, REPORT, [])
 
@@ -152,7 +150,7 @@ def test_heat_removal_candidate_carries_document_frequency_evidence(tmp_path) ->
     -- companion assertion that the surviving candidate carries evidence
     (msr:citedIn a safety Document via the report's document IRI), not just
     a bare term."""
-    config = Config(corpus_dir=tmp_path, salience_threshold=0)
+    config = Config(corpus_dir=tmp_path, safety_salience_threshold=0)
     _write_curated_report(config, REPORT, [HEAT_REMOVAL_SHORT_SENTENCE])
     _write_mentions(config, REPORT, [])
 
@@ -177,7 +175,7 @@ def test_confinement_of_radioactive_material_surfaces_as_one_candidate(
     """Scenario: "A prepositional safety concept survives the token window"
     -- the miner emits the noun-phrase candidate "confinement of
     radioactive material" (not only its constituent unigrams/chunks)."""
-    config = Config(corpus_dir=tmp_path, salience_threshold=0)
+    config = Config(corpus_dir=tmp_path, safety_salience_threshold=0)
     _write_curated_report(config, REPORT, [CONFINEMENT_SENTENCE])
     _write_mentions(config, REPORT, [])
 
@@ -195,7 +193,7 @@ def test_confinement_of_radioactive_material_surfaces_as_one_candidate(
 def test_removal_of_residual_heat_surfaces_as_one_candidate(tmp_path) -> None:
     """Scenario: design.md D3's own worked example -- "removal of residual
     heat" survives as one candidate, not truncated to its last tokens."""
-    config = Config(corpus_dir=tmp_path, salience_threshold=0)
+    config = Config(corpus_dir=tmp_path, safety_salience_threshold=0)
     _write_curated_report(config, REPORT, [HEAT_REMOVAL_SOURCE_SENTENCE])
     _write_mentions(config, REPORT, [])
 
@@ -212,7 +210,7 @@ def test_removal_of_residual_heat_surfaces_as_one_candidate(tmp_path) -> None:
 def test_control_of_reactivity_surfaces_as_one_candidate(tmp_path) -> None:
     """Scenario: "Fundamental safety functions surface as proposals" --
     "control of reactivity" (the third fundamental safety function)."""
-    config = Config(corpus_dir=tmp_path, salience_threshold=0)
+    config = Config(corpus_dir=tmp_path, safety_salience_threshold=0)
     _write_curated_report(config, REPORT, [CONTROL_SENTENCE])
     _write_mentions(config, REPORT, [])
 
@@ -228,7 +226,7 @@ def test_all_three_fundamental_safety_functions_surface_together(tmp_path) -> No
     """Scenario: "Fundamental safety functions surface as proposals" over
     the combined ingested-genre text -- all three named phrases are
     present as distinct candidates in the same mining run."""
-    config = Config(corpus_dir=tmp_path, salience_threshold=0)
+    config = Config(corpus_dir=tmp_path, safety_salience_threshold=0)
     _write_curated_report(
         config,
         REPORT,
@@ -256,7 +254,7 @@ def test_single_token_noise_never_surfaces_as_its_own_candidate(tmp_path) -> Non
     only one low-frequency sentence never clears the salience floor, so
     neither ever surfaces as its own single-word candidate alongside the
     genuine safety-genre concepts."""
-    config = Config(corpus_dir=tmp_path, salience_threshold=1)
+    config = Config(corpus_dir=tmp_path, safety_salience_threshold=1)
     _write_curated_report(config, REPORT, [NOISE_SENTENCE, CONFINEMENT_SENTENCE])
     _write_mentions(config, REPORT, [])
 
@@ -287,7 +285,7 @@ def test_safety_linked_mention_excludes_matching_candidate(tmp_path) -> None:
     `build_exclusion_set(..., genre="safety")` actually reads
     `config.safety_mentions_path`, not the (untouched, chemistry-genre)
     `config.mentions_path`."""
-    config = Config(corpus_dir=tmp_path, salience_threshold=0)
+    config = Config(corpus_dir=tmp_path, safety_salience_threshold=0)
     _write_curated_report(config, REPORT, [HEAT_REMOVAL_SHORT_SENTENCE])
     _write_mentions(
         config,
@@ -321,7 +319,7 @@ def test_safety_novel_mention_feeds_a_miss_candidate(tmp_path) -> None:
     `read_miss_candidates(..., genre="safety")` actually reads
     `config.safety_mentions_path`, not the (untouched, chemistry-genre)
     `config.mentions_path`."""
-    config = Config(corpus_dir=tmp_path, salience_threshold=0)
+    config = Config(corpus_dir=tmp_path, safety_salience_threshold=0)
     _write_curated_report(config, REPORT, [NOISE_SENTENCE])
     _write_mentions(
         config,
