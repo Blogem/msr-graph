@@ -31,7 +31,7 @@
 ## 4. Admin surface + shell adoption
 
 - [x] 4.1 Adopt theming, loading/empty states, and toasts (create/restore outcomes) in `AdminSurface.svelte`
-- [ ] 4.2 Verify the theme toggle and shared primitives render correctly across all three surfaces in both light and dark
+- [x] 4.2 Verify the theme toggle and shared primitives render correctly across all three surfaces in both light and dark
 
 ## 5. Tests
 
@@ -45,5 +45,5 @@
 ## 6. Verification
 
 - [x] 6.1 Grep for remaining hardcoded color literals in redesigned surfaces; confirm dark mode has no broken/hardcoded fills
-- [ ] 6.2 Manual visual pass in light and dark across chat (with a markdown-heavy grounded answer), review (long-IRI proposal), and admin
+- [x] 6.2 Manual visual pass in light and dark across chat (with a markdown-heavy grounded answer), review (long-IRI proposal), and admin
 - [x] 6.3 Rebuild the embedded static assets and confirm the Go `server` binary serves the redesigned app (no build/embed pipeline change needed)
