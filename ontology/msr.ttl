@@ -167,3 +167,47 @@ msr:hasEvidence      a owl:ObjectProperty ;  rdfs:domain msr:ChangeProposal ; rd
 msr:Evidence         a owl:Class ; rdfs:comment "One grounding sentence for a ChangeProposal candidate." .
 msr:evidenceText     a owl:DatatypeProperty ; rdfs:domain msr:Evidence ; rdfs:range xsd:string .
 msr:autoAccepted     a owl:DatatypeProperty ; rdfs:range xsd:boolean .   # flags directly-written instances in urn:msr:data
+
+### Corpus / observation-provenance layer (proposal-observation-provenance change,
+### openspec/changes/proposal-observation-provenance) — additive only. Replaces the
+### stored msr:docFrequency scalar (declared above, chunk 8) with append-only,
+### per-(proposal × document × mining-run) observations; msr:docFrequency itself
+### is left declared unchanged — removing it from instance data is a later Python
+### migration task, not a TBox change.
+msr:Corpus a owl:Class ;
+    rdfs:label "Corpus" ;
+    rdfs:comment "A first-class source corpus a Document belongs to (e.g. the chemistry archive OCR corpus, the IAEA/GIF/ORNL safety corpus)." .
+
+msr:Observation a owl:Class ;
+    rdfs:label "Observation" ;
+    rdfs:comment "One append-only, per-document, per-mining-run observation of a ChangeProposal candidate term's corpus support (occurrence count, corpus, run, timestamp). The review surface derives current aggregates from the latest observation per (proposal, document)." .
+
+msr:hasObservation a owl:ObjectProperty ;
+    rdfs:domain msr:ChangeProposal ; rdfs:range msr:Observation ;
+    rdfs:label "has observation" ;
+    rdfs:comment "Links a ChangeProposal to one of its append-only per-document, per-run Observations." .
+
+msr:occurrenceCount a owl:DatatypeProperty ;
+    rdfs:domain msr:Observation ; rdfs:range xsd:integer ;
+    rdfs:label "occurrence count" ;
+    rdfs:comment "Per-document term frequency: the number of times the proposal's term occurred within the observed Document (not mere presence)." .
+
+msr:inCorpus a owl:ObjectProperty ;
+    rdfs:range msr:Corpus ;
+    rdfs:label "in corpus" ;
+    rdfs:comment "Declares the corpus a resource belongs to. Used on both msr:Document (a document declares its corpus) and msr:Observation (an observation carries its document's corpus, so observations group/aggregate by corpus without an extra join). rdfs:domain is intentionally omitted rather than asserted twice: two rdfs:domain triples would, under RDFS domain entailment, wrongly force every Document and every Observation to be typed as both classes." .
+
+msr:observedInRun a owl:ObjectProperty ;
+    rdfs:domain msr:Observation ; rdfs:range prov:Activity ;
+    rdfs:label "observed in run" ;
+    rdfs:comment "The per-run mine prov:Activity (see Provenance layer above, chunk 12) that produced this Observation." .
+
+# msr:inDocument (Mention layer, chunk 6, above) is reused as-is for Observation:
+# an Observation also names the Document it was observed in. Its existing
+# declaration (rdfs:domain msr:Mention ; rdfs:range msr:Document) is left
+# unmodified — for the same reason as msr:inCorpus above, a second rdfs:domain
+# msr:Observation triple would wrongly force every Mention to also type as
+# Observation under RDFS entailment. Label/comment are added additively since
+# the original declaration had none.
+msr:inDocument rdfs:label "in document" ;
+    rdfs:comment "Links a resource to the Document it concerns: a Mention's source Document (chunk 6), or an Observation's observed Document (this change)." .
