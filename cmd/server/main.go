@@ -22,13 +22,6 @@ import (
 	"github.com/blogem/msr-graph/internal/sandbox"
 )
 
-// defaultCheckpointRoot is the checkpoints base directory checkpoint.Engine
-// writes each labelled checkpoint under (data/checkpoints/{label}/). A
-// literal is sufficient for the POC; promoting it to an env-configurable
-// serverConfig field is straightforward follow-up if a deployment needs a
-// different location.
-const defaultCheckpointRoot = "data/checkpoints"
-
 func main() {
 	cfg := loadServerConfig(os.Getenv)
 
@@ -94,7 +87,7 @@ func main() {
 	// approving a proposal and restoring a checkpoint both need to write
 	// the graph.
 	propEngine := proposal.NewEngine(gc)
-	ckptEngine := checkpoint.NewEngine(gc, cfg.dbPath, defaultCheckpointRoot)
+	ckptEngine := checkpoint.NewEngine(gc, cfg.dbPath, cfg.checkpointDir)
 
 	mux := newMux(newChatHandler(ag, prompts), gc, propEngine, ckptEngine)
 

@@ -24,6 +24,7 @@ func TestLoadServerConfig(t *testing.T) {
 				deepSeekAPIKey:     "",
 				agentMaxIterations: defaultAgentMaxIterations,
 				agentTurnDeadline:  defaultAgentTurnDeadline,
+				checkpointDir:      defaultCheckpointDir,
 			},
 		},
 		{
@@ -38,6 +39,7 @@ func TestLoadServerConfig(t *testing.T) {
 				"DEEPSEEK_API_KEY":     "test-key-not-a-real-secret",
 				"AGENT_MAX_ITERATIONS": "50",
 				"AGENT_TURN_DEADLINE":  "90s",
+				"MSR_CHECKPOINT_DIR":   "/data/checkpoints",
 			},
 			want: serverConfig{
 				graphDBURL:         "http://graphdb:7200",
@@ -49,6 +51,7 @@ func TestLoadServerConfig(t *testing.T) {
 				deepSeekAPIKey:     "test-key-not-a-real-secret",
 				agentMaxIterations: 50,
 				agentTurnDeadline:  90 * time.Second,
+				checkpointDir:      "/data/checkpoints",
 			},
 		},
 		{
@@ -67,6 +70,41 @@ func TestLoadServerConfig(t *testing.T) {
 				deepSeekAPIKey:     "",
 				agentMaxIterations: defaultAgentMaxIterations,
 				agentTurnDeadline:  defaultAgentTurnDeadline,
+				checkpointDir:      defaultCheckpointDir,
+			},
+		},
+		{
+			name: "checkpoint dir read from env when set",
+			env: map[string]string{
+				"MSR_CHECKPOINT_DIR": "/data/checkpoints",
+			},
+			want: serverConfig{
+				graphDBURL:         defaultGraphDBURL,
+				graphDBRepo:        defaultGraphDBRepo,
+				dbPath:             defaultDBPath,
+				addr:               defaultAddr,
+				deepSeekBaseURL:    defaultDeepSeekBaseURL,
+				llmModelAnalysis:   defaultLLMModelAnalysis,
+				deepSeekAPIKey:     "",
+				agentMaxIterations: defaultAgentMaxIterations,
+				agentTurnDeadline:  defaultAgentTurnDeadline,
+				checkpointDir:      "/data/checkpoints",
+			},
+		},
+		{
+			name: "checkpoint dir defaults to data/checkpoints when unset",
+			env:  map[string]string{},
+			want: serverConfig{
+				graphDBURL:         defaultGraphDBURL,
+				graphDBRepo:        defaultGraphDBRepo,
+				dbPath:             defaultDBPath,
+				addr:               defaultAddr,
+				deepSeekBaseURL:    defaultDeepSeekBaseURL,
+				llmModelAnalysis:   defaultLLMModelAnalysis,
+				deepSeekAPIKey:     "",
+				agentMaxIterations: defaultAgentMaxIterations,
+				agentTurnDeadline:  defaultAgentTurnDeadline,
+				checkpointDir:      "data/checkpoints",
 			},
 		},
 	}
