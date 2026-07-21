@@ -232,3 +232,69 @@ msr:CatalogIndividualProvenanceShape
         sh:severity sh:Violation ;
         sh:message "Catalog individual (MoltenSalt/Constituent/ChemicalCompound) must carry at least one prov:wasDerivedFrom." ;
     ] .
+
+
+### 2.6 — safety-genre shapes (ingest-iaea-safety, chunk 11)
+# openspec/changes/ingest-iaea-safety: design D6, tasks.md 5.2, specs
+# safety-property-linking + safety-source-acquisition. Extends this catalogue
+# in place; no shapes are removed or altered. Safety `Mention`s satisfy the
+# existing msr:MentionShape (2.2) unchanged, so no new Mention shape is
+# added here. Thresholds (msr:thresholdValue/Comparator/Unit) are soft
+# criteria evaluated by the agent, not SHACL-enforced (design D5) — no
+# threshold/satisfaction shape is added either.
+
+### 2.6.1 — SafetyFunction / Requirement provenance shape
+# Mirrors msr:CatalogIndividualProvenanceShape (2.5): both safety-genre
+# individual kinds require the same two PROV edges. No sh:maxCount on
+# prov:wasGeneratedBy — per-run generation edges accrue in urn:msr:provenance
+# on every pipeline run (design D8, same rationale as 2.5).
+msr:SafetyIndividualProvenanceShape
+    a sh:NodeShape ;
+    sh:targetClass msr:SafetyFunction , msr:Requirement ;
+    sh:property [
+        sh:path prov:wasDerivedFrom ;
+        sh:minCount 1 ;
+        sh:severity sh:Violation ;
+        sh:message "SafetyFunction/Requirement must carry at least one prov:wasDerivedFrom." ;
+    ] ;
+    sh:property [
+        sh:path prov:wasGeneratedBy ;
+        sh:minCount 1 ;
+        sh:severity sh:Violation ;
+        sh:message "SafetyFunction/Requirement must carry at least one prov:wasGeneratedBy." ;
+    ] .
+
+
+### 2.6.2 — msr:servedByProperty target-kind shape
+# spec safety-property-linking "Safety-function to property links asserted
+# only from stated dependencies". A servedByProperty edge's subject class is
+# grown (SafetyFunction is not seeded), so sh:targetSubjectsOf is used
+# instead of sh:targetClass (same pattern as msr:LinksToTargetKindShape,
+# 2.4). Unlike 2.4 this is a single expected type, so a plain sh:class
+# suffices — no sh:sparql disjunction needed.
+msr:ServedByPropertyTargetShape
+    a sh:NodeShape ;
+    sh:targetSubjectsOf msr:servedByProperty ;
+    sh:property [
+        sh:path msr:servedByProperty ;
+        sh:class msr:PhysicalProperty ;
+        sh:severity sh:Violation ;
+        sh:message "msr:servedByProperty target must be an existing msr:PhysicalProperty." ;
+    ] .
+
+
+### 2.6.3 — msr:addressesFunction target-kind shape
+# spec safety-property-linking "Requirement to safety-function links". The
+# target SafetyFunction is a grown individual approved via the mine+approve
+# phase (design D6), so this shape rejects an addressesFunction edge to any
+# IRI not (yet) typed msr:SafetyFunction, matching the closed-set validation
+# already enforced upstream in relation-extraction.
+msr:AddressesFunctionTargetShape
+    a sh:NodeShape ;
+    sh:targetSubjectsOf msr:addressesFunction ;
+    sh:property [
+        sh:path msr:addressesFunction ;
+        sh:class msr:SafetyFunction ;
+        sh:severity sh:Violation ;
+        sh:message "msr:addressesFunction target must be an existing msr:SafetyFunction." ;
+    ] .
