@@ -1,32 +1,148 @@
-/* Minimal hand-rolled global styling (design D6: no UI framework). */
+/* Design tokens (design D1 — Open Props CSS custom properties; see
+   openspec/changes/redesign-web-frontend-ux/design.md). Open Props ships the
+   raw color/space/radius/type/shadow *scales*; the semantic tokens below
+   (--surface, --text, --accent, --radius-1/2/3, --shadow-1/2, --space-*, …)
+   are this app's single source of visual values, mapped onto those scales
+   per theme. Every component style block SHOULD reference a semantic token
+   (var(--…)) rather than a hardcoded literal or an Open Props primitive
+   directly, so retheming stays a one-place change. Hand-rolled CSS only, no
+   UI framework (D6) — Open Props is a stylesheet of custom properties, not a
+   component/utility framework. */
+@import 'open-props/style';
+
+:root,
+[data-theme='light'] {
+	color-scheme: light;
+
+	/* Surfaces (page background vs. elevated card/panel) */
+	--surface: var(--gray-1);
+	--surface-2: white;
+	--surface-3: var(--gray-2);
+
+	/* Text */
+	--text: var(--gray-12);
+	--text-muted: var(--gray-7);
+
+	/* Borders */
+	--border: var(--gray-4);
+	--border-strong: var(--gray-6);
+
+	/* Brand accent — indigo, deliberately distinct from the "grounded"
+	   green semantic (D7) so grounded keeps its own meaning. */
+	--accent: var(--indigo-8);
+	--accent-hover: var(--indigo-9);
+	--accent-contrast: white;
+
+	/* Status semantics, reserved for surfaces built on this foundation
+	   (chat-ui's grounded/ungrounded stamp, review-ui's error/warning
+	   states, …). Kept apart from --accent per D7. */
+	--grounded-bg: var(--green-2);
+	--grounded-text: var(--green-10);
+	--error-bg: var(--red-2);
+	--error-text: var(--red-9);
+	--warning-bg: var(--yellow-2);
+	--warning-text: var(--yellow-10);
+
+	/* Open Props' own shadow tint, tuned per theme so --shadow-1/2 below
+	   read correctly in both. */
+	--shadow-color: 220 3% 15%;
+	--shadow-strength: 2%;
+}
+
+[data-theme='dark'] {
+	color-scheme: dark;
+
+	--surface: var(--gray-12);
+	--surface-2: var(--gray-11);
+	--surface-3: var(--gray-10);
+
+	--text: var(--gray-0);
+	--text-muted: var(--gray-5);
+
+	--border: var(--gray-9);
+	--border-strong: var(--gray-7);
+
+	--accent: var(--indigo-5);
+	--accent-hover: var(--indigo-4);
+	--accent-contrast: var(--gray-12);
+
+	--grounded-bg: hsl(140deg 30% 16%);
+	--grounded-text: var(--green-4);
+	--error-bg: hsl(0deg 40% 18%);
+	--error-text: var(--red-4);
+	--warning-bg: hsl(45deg 45% 16%);
+	--warning-text: var(--yellow-4);
+
+	--shadow-color: 220deg 40% 2%;
+	--shadow-strength: 25%;
+}
 
 :root {
-	color-scheme: light dark;
-	font-family:
-		system-ui,
-		-apple-system,
-		'Segoe UI',
-		sans-serif;
+	/* Radius scale — aliases onto Open Props' --radius-* so "rounded card"
+	   sizing (design's Visual Design Direction) is named by role, not by
+	   Open Props' own numbering. */
+	--radius-1: var(--radius-2); /* small controls: pills, inputs, badges */
+	--radius-2: var(--radius-3); /* default: cards, message bubbles */
+	--radius-3: var(--radius-4); /* large: composer bar, elevated panels */
+
+	/* Elevation scale, aliased for the same reason. */
+	--shadow-1: var(--shadow-2); /* resting card elevation */
+	--shadow-2: var(--shadow-4); /* hover/active or floating (toasts) */
+
+	/* Spacing scale — aliases Open Props' --size-1.. so component styles
+	   spell intent ("--space-3") rather than a magic Open Props index. */
+	--space-1: var(--size-1);
+	--space-2: var(--size-2);
+	--space-3: var(--size-3);
+	--space-4: var(--size-4);
+	--space-5: var(--size-5);
+	--space-6: var(--size-7);
+
+	/* Type scale: components use Open Props' own --font-size-0.. --font-size-8
+	   scale directly (it already reads as a semantic step scale) and
+	   --font-sans / --font-mono for family. No app-specific renaming needed
+	   here. */
+	font-family: var(--font-sans), system-ui, -apple-system, 'Segoe UI', sans-serif;
 }
 
 body {
 	margin: 0;
+	background: var(--surface);
+	color: var(--text);
+}
+
+/* Overflow-safe identifier convention (design D4): apply `.identifier` to
+   any element that renders a raw IRI/URN/unit code (queue id, diff
+   subject/predicate/object, evidence citedIn, …) so a long value wraps
+   instead of forcing horizontal overflow. Pair it with `min-width: 0` on the
+   *flex child* that contains it — flex items default to `min-width: auto`,
+   which lets their content's intrinsic width push the row wider than its
+   container even when the text itself would otherwise wrap. */
+.identifier {
+	overflow-wrap: anywhere;
+	min-width: 0;
 }
 
 .app-shell {
 	display: flex;
 	flex-direction: column;
 	min-height: 100vh;
+	background: var(--surface);
 }
 
 nav[data-testid='app-nav'] {
-	border-bottom: 1px solid #ccc;
-	padding: 0.5rem 1rem;
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: var(--space-4);
+	border-bottom: 1px solid var(--border);
+	background: var(--surface-2);
+	padding: var(--space-3) var(--space-4);
 }
 
 nav[data-testid='app-nav'] ul {
 	display: flex;
-	gap: 1rem;
+	gap: var(--space-3);
 	list-style: none;
 	margin: 0;
 	padding: 0;
@@ -34,17 +150,24 @@ nav[data-testid='app-nav'] ul {
 
 nav[data-testid='app-nav'] a {
 	text-decoration: none;
-	color: inherit;
-	padding: 0.25rem 0.5rem;
-	border-radius: 0.25rem;
+	color: var(--text-muted);
+	padding: var(--space-1) var(--space-3);
+	border-radius: var(--radius-1);
+	font-weight: 500;
+}
+
+nav[data-testid='app-nav'] a:hover {
+	color: var(--text);
+	background: var(--surface-3);
 }
 
 nav[data-testid='app-nav'] a[aria-current='page'] {
 	font-weight: 600;
-	background: rgba(0, 0, 0, 0.08);
+	color: var(--accent-contrast);
+	background: var(--accent);
 }
 
 main[data-testid='app-main'] {
 	flex: 1;
-	padding: 1rem;
+	padding: var(--space-5);
 }
