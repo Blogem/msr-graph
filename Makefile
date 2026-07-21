@@ -31,8 +31,17 @@
 #                   # score -> triage -> write msr:ChangeProposal proposals +
 #                   # auto-accepted instances (see
 #                   # openspec/changes/mine-ontology-candidates/design.md).
-#   make test       # go test ./... with the GraphDB and sandbox Docker
-#                   # acceptance gates enabled.
+#   make test-repo  # provisions (resets+creates) the disposable, SHACL-
+#                   # enabled "msr-test" GraphDB repository and seeds
+#                   # ontology/vocab into it (scripts/ensure-repo.sh
+#                   # REPO_ID=msr-test REPO_RESET=1, then
+#                   # `go run ./cmd/loader seed` against it). Never touches
+#                   # the "msr" repository.
+#   make test       # depends on test-repo; go test ./... with the GraphDB
+#                   # and sandbox Docker acceptance gates enabled, pointed at
+#                   # the throwaway "msr-test" repo (GRAPHDB_TEST_REPO) so
+#                   # integration tests never touch the production "msr"
+#                   # repo.
 #   make down       # stop the stack and remove its volumes.
 #   make chat       # manual-verification REPL for POST /api/chat (cmd/chatcli),
 #                   # against the published http://localhost:8080/api/chat —
@@ -57,7 +66,7 @@
 #                     # compose build server` always embeds a fresh frontend;
 #                     # run this target directly for a host-side Go build.
 
-.PHONY: up down load-seed load-nist ingest link extract mine test chat demo-density checkpoint restore frontend
+.PHONY: up down load-seed load-nist ingest link extract mine test-repo test chat demo-density checkpoint restore frontend
 
 # GraphDB's published host port (see docker-compose.yml, service "graphdb").
 GRAPHDB_URL ?= http://localhost:7200
@@ -142,9 +151,15 @@ mine:
 	@echo "==> running extraction mine (enumerate novel candidates -> score -> triage -> write proposals + auto-accepted instances)"
 	docker compose run --rm extraction mine
 
-test:
-	@echo "==> running go test with the GraphDB and sandbox Docker acceptance gates enabled (GRAPHDB_REQUIRED=1, SANDBOX_DOCKER_REQUIRED=1); -p 1 serializes package execution because the checkpoint/proposal integration tests share the live 'msr' repo and clobber each other under cross-package parallelism"
-	GRAPHDB_REQUIRED=1 SANDBOX_DOCKER_REQUIRED=1 go test -p 1 ./...
+test-repo:
+	@echo "==> resetting + creating the disposable, SHACL-enabled 'msr-test' GraphDB repository (never touches 'msr')"
+	REPO_ID=msr-test REPO_RESET=1 GRAPHDB_URL=$(GRAPHDB_URL) scripts/ensure-repo.sh
+	@echo "==> seeding ontology/vocab into 'msr-test'"
+	GRAPHDB_URL=$(GRAPHDB_URL) GRAPHDB_REPO=msr-test go run ./cmd/loader seed
+
+test: test-repo
+	@echo "==> running go test against the throwaway 'msr-test' repo (GRAPHDB_TEST_REPO=msr-test) with the GraphDB and sandbox Docker acceptance gates enabled (GRAPHDB_REQUIRED=1, SANDBOX_DOCKER_REQUIRED=1); -p 1 serializes package execution because the checkpoint/proposal integration tests share the 'msr-test' repo and clobber each other under cross-package parallelism"
+	GRAPHDB_REQUIRED=1 SANDBOX_DOCKER_REQUIRED=1 GRAPHDB_TEST_REPO=msr-test go test -p 1 ./...
 
 chat:
 	@echo "==> starting chatcli REPL against http://localhost:8080/api/chat (run 'make up' first)"

@@ -365,6 +365,17 @@ paths (`rdfs:subClassOf*`) answer explicitly. Revisit note: GraphDB fixes the ru
 repository creation (changing it means recreating the repo) — another reason to start
 disabled and opt in later rather than the reverse.
 
+**Integration-test repository.** `go test`'s integration tests never run against the
+production `msr` repo — they target a disposable, identically-configured (SHACL-enabled,
+inference-disabled) repository `msr-test`, provisioned by `make test-repo` and torn down/
+recreated on every run (`scripts/ensure-repo.sh REPO_ID=msr-test REPO_RESET=1`, then
+seeded via `go run ./cmd/loader seed`). `make test` depends on `make test-repo` and exports
+`GRAPHDB_TEST_REPO=msr-test` for the test process to read. `scripts/ensure-repo.sh` hard-
+refuses `REPO_ID=msr` combined with `REPO_RESET=1` (non-zero exit, no DELETE issued), so a
+misconfigured `GRAPHDB_TEST_REPO` can never cause the reset path to drop the production
+repo. `make up` is unaffected: it still calls `ensure-repo.sh` with the default
+`REPO_ID=msr` and no reset.
+
 **LLM access — DeepSeek API only.** No Anthropic models and no local LLMs anywhere in the
 design (spaCy is a local *NER pipeline*, not an LLM — it stays). The endpoint is
 OpenAI-compatible, so Go and Python both use OpenAI-compatible clients with the base URL
