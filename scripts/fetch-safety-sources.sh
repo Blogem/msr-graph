@@ -13,6 +13,10 @@ mkdir -p "$DEST"
 UA="Mozilla/5.0"
 
 fetch() { # url  filename
+  if [ -s "$DEST/$2" ]; then
+    echo ">> $2 — skip (present)"
+    return 0
+  fi
   echo ">> $2"
   curl -fsSL -A "$UA" -o "$DEST/$2" "$1"
 }
