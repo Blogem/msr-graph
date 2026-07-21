@@ -13,7 +13,11 @@ dereferenced against the live QUDT/INIS catalogs. :class:`TriagedCandidate`
 bundles a candidate with its confirmed kind and placement; this is the
 shared input every downstream module (novelty, proposals, auto_accept)
 builds against, so its field names and types are the integration
-contract between them.
+contract between them. :class:`Observation` (``proposal-observation-provenance``
+design.md D1/D5) is the per-document occurrence record a candidate
+accumulates during the scan -- carried on :attr:`Candidate.observations` --
+which the proposal writer persists as append-only ``msr:Observation`` nodes
+instead of a single collapsed ``msr:docFrequency`` scalar.
 
 Deliberately stdlib-only (no third-party imports) so this module has zero
 import-time dependencies, mirroring ``provenance.py``.
@@ -176,6 +180,44 @@ class Evidence:
 
 
 @dataclass(frozen=True)
+class Observation:
+    """One (candidate, document) occurrence record from a mining scan.
+
+    ``proposal-observation-provenance`` design.md D1/D5: each mining run
+    that sees a surviving candidate in a document appends one
+    :class:`Observation` recording *where* (which document, which corpus)
+    and *how often* (per-document term frequency) it occurred there.
+    :attr:`Candidate.observations` accumulates these during the scan;
+    downstream (the proposal writer) derives ``documentFrequency`` as the
+    count of distinct :attr:`document_iri` values rather than persisting a
+    scalar, so re-mining a term already seen in another corpus can never
+    collide into a duplicated/ambiguous stored count (the chunk-8 bug this
+    change fixes).
+
+    Deliberately excludes the mining run and ``prov:generatedAtTime``: those
+    are supplied by the writer at write time (design.md D6), not carried on
+    the candidate object, so two candidate objects describing the same
+    (document, occurrence count) compare equal regardless of which run
+    produced them -- run/timestamp are write-time provenance, not part of
+    the candidate's own idempotent identity.
+    """
+
+    #: Full or CURIE IRI of the source ``msr:Document``, e.g.
+    #: ``"msrd:ORNL-TM-2316"`` -- spelled the same way as
+    #: :attr:`Evidence.document_iri`.
+    document_iri: str
+    #: The document's corpus, as a corpus CURIE from
+    #: :mod:`msr_extraction.corpora` (e.g. ``corpora.CORPUS_CHEMISTRY``).
+    #: Stored as a plain string (not imported from ``corpora``) to avoid a
+    #: dependency from this zero-import-time-dependency module onto
+    #: ``corpora.py``.
+    corpus: str
+    #: Term frequency: how many times the term occurred in this document
+    #: (design.md D5) -- not mere presence.
+    occurrence_count: int
+
+
+@dataclass(frozen=True)
 class Candidate:
     """A candidate term surviving lexical/miss discovery and novelty scoring."""
 
@@ -189,6 +231,14 @@ class Candidate:
     doc_frequency: int = 0
     #: Original surface form (for miss-sourced salt-formula spans).
     surface_form: str = ""
+    #: Per-document occurrence records accumulated during the scan
+    #: (``proposal-observation-provenance`` design.md D1/D5). Defaults to
+    #: empty for back-compat with existing construction sites; downstream
+    #: code sets it via ``dataclasses.replace`` since this dataclass is
+    #: frozen. ``doc_frequency`` is kept as-is alongside this (derivable
+    #: from ``observations`` going forward, but not removed here) --
+    #: later tasks stop persisting the scalar.
+    observations: tuple[Observation, ...] = ()
 
 
 @dataclass(frozen=True)
