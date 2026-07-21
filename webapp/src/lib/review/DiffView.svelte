@@ -33,6 +33,7 @@
 						data-testid={node.added ? 'diff-added' : undefined}
 						data-added={node.added ? 'true' : undefined}
 						class:diff-added={node.added}
+						class="identifier"
 						title={node.iri}
 					>
 						{localName(node.iri)}
@@ -54,9 +55,9 @@
 						class:diff-added={edge.added}
 						title={`${edge.subject} ${edge.predicate} ${edge.object}`}
 					>
-						<span class="s">{localName(edge.subject)}</span>
-						<span class="p">{localName(edge.predicate)}</span>
-						<span class="o">{localName(edge.object)}</span>
+						<span class="s identifier">{localName(edge.subject)}</span>
+						<span class="p identifier">{localName(edge.predicate)}</span>
+						<span class="o identifier">{localName(edge.object)}</span>
 					</li>
 				{/each}
 			</ul>
@@ -69,7 +70,7 @@
 	.diff-edges ul {
 		display: flex;
 		flex-wrap: wrap;
-		gap: 0.4rem;
+		gap: var(--space-2);
 		list-style: none;
 		margin: 0;
 		padding: 0;
@@ -77,15 +78,17 @@
 
 	.diff-nodes li,
 	.diff-edges li {
-		border: 1px solid #ccc;
-		border-radius: 0.25rem;
-		padding: 0.2rem 0.5rem;
-		font-size: 0.9rem;
+		border: 1px solid var(--border);
+		border-radius: var(--radius-1);
+		padding: var(--space-1) var(--space-2);
+		font-size: var(--font-size-0);
 	}
 
 	.diff-edges li {
 		display: flex;
-		gap: 0.35rem;
+		gap: var(--space-1);
+		min-width: 0;
+		max-width: 100%;
 	}
 
 	.diff-edges .p {
@@ -94,13 +97,13 @@
 	}
 
 	.diff-added {
-		background: rgba(34, 139, 34, 0.15);
-		border-color: #228b22;
+		background: var(--grounded-bg);
+		border-color: var(--grounded-text);
 		font-weight: 600;
 	}
 
 	.empty {
 		opacity: 0.7;
-		font-size: 0.9rem;
+		font-size: var(--font-size-0);
 	}
 </style>

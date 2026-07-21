@@ -1,190 +1,452 @@
-/* Minimal hand-rolled styling for the chat surface (design D6: no UI
-   framework beyond Svelte). */
+/* Chat surface styling (chat-ui spec; design D1/D4/D7, "Visual Design
+   Direction"). Hand-rolled CSS (D6) referencing the shared semantic tokens
+   defined in webapp/src/routes/app.css -- no literal colors/spacing/radii
+   here, so retheming (light/dark) stays a one-place change. */
 
 .chat-surface {
 	display: flex;
 	flex-direction: column;
-	gap: 1rem;
+	gap: var(--space-4);
 	max-width: 60rem;
 }
+
+/* Onboarding (chat-ui spec "Empty conversation shows onboarding prompts") */
+
+.chat-onboarding {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	gap: var(--space-4);
+	padding: var(--space-6);
+	text-align: center;
+	color: var(--text-muted);
+	background: var(--surface-2);
+	border: 1px solid var(--border);
+	border-radius: var(--radius-2);
+	box-shadow: var(--shadow-1);
+}
+
+.onboarding-heading {
+	margin: 0;
+	font-size: var(--font-size-2);
+	font-weight: 600;
+	color: var(--text);
+}
+
+.example-prompt-list {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-2);
+	list-style: none;
+	margin: 0;
+	padding: 0;
+	width: 100%;
+	max-width: 32rem;
+}
+
+.example-prompt {
+	width: 100%;
+	text-align: left;
+	font: inherit;
+	color: var(--text);
+	background: var(--surface);
+	border: 1px solid var(--border);
+	border-radius: var(--radius-1);
+	padding: var(--space-3);
+	cursor: pointer;
+	transition: background-color 0.15s ease, border-color 0.15s ease;
+}
+
+.example-prompt:hover,
+.example-prompt:focus-visible {
+	background: var(--surface-3);
+	border-color: var(--accent);
+}
+
+/* Turns as rounded cards (Visual Design Direction "Soft rounded cards") */
 
 .chat-message-list {
 	display: flex;
 	flex-direction: column;
-	gap: 0.75rem;
+	gap: var(--space-3);
 	list-style: none;
 	margin: 0;
 	padding: 0;
 }
 
 .chat-message {
-	border: 1px solid #ccc;
-	border-radius: 0.5rem;
-	padding: 0.75rem 1rem;
+	background: var(--surface-2);
+	border-radius: var(--radius-2);
+	box-shadow: var(--shadow-1);
+	padding: var(--space-4);
 }
 
 .chat-message[data-role='user'] {
-	background: rgba(0, 100, 200, 0.06);
+	background: var(--surface-3);
 }
 
 .chat-message[data-role='assistant'] {
-	background: rgba(0, 0, 0, 0.03);
+	background: var(--surface-2);
 }
 
 .message-role {
-	font-size: 0.75rem;
-	font-weight: 600;
+	font-size: var(--font-size-0);
+	font-weight: 700;
 	text-transform: uppercase;
-	opacity: 0.6;
+	letter-spacing: 0.04em;
+	color: var(--text-muted);
 }
 
 .message-content {
 	white-space: pre-wrap;
-	margin: 0.25rem 0 0;
+	overflow-wrap: anywhere;
+	margin: var(--space-2) 0 0;
+	color: var(--text);
+}
+
+.message-content :where(p) {
+	margin: 0 0 var(--space-2);
+}
+
+.message-content :where(p:last-child) {
+	margin-bottom: 0;
+}
+
+.message-content :where(pre) {
+	overflow-x: auto;
+	background: var(--surface-3);
+	border-radius: var(--radius-1);
+	padding: var(--space-2);
+}
+
+.message-content :where(code) {
+	background: var(--surface-3);
+	border-radius: var(--radius-1);
+	padding: 0.1em 0.35em;
+	font-family: var(--font-mono);
+}
+
+.message-content :where(pre code) {
+	background: none;
+	padding: 0;
+}
+
+.message-content :where(table) {
+	border-collapse: collapse;
+}
+
+.message-content :where(th, td) {
+	border: 1px solid var(--border);
+	padding: var(--space-1) var(--space-2);
+}
+
+/* Streaming affordance (chat-ui spec "In-progress streaming affordance") */
+
+.streaming-indicator {
+	display: inline-block;
+	width: 0.5em;
+	height: 1em;
+	margin-left: 0.15em;
+	vertical-align: text-bottom;
+	background: var(--accent);
+	border-radius: 1px;
+	animation: streaming-pulse 1s ease-in-out infinite;
+}
+
+@keyframes streaming-pulse {
+	0%,
+	100% {
+		opacity: 1;
+	}
+	50% {
+		opacity: 0.15;
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.streaming-indicator {
+		animation-duration: 2s;
+	}
+}
+
+/* Per-answer action row (Visual Design Direction "Per-message action row") */
+
+.message-actions {
+	display: flex;
+	justify-content: flex-end;
+	margin-top: var(--space-2);
+}
+
+.copy-answer-btn {
+	font: inherit;
+	font-size: var(--font-size-0);
+	color: var(--text-muted);
+	background: none;
+	border: 1px solid var(--border);
+	border-radius: var(--radius-1);
+	padding: var(--space-1) var(--space-3);
+	cursor: pointer;
+	transition: color 0.15s ease, border-color 0.15s ease;
+}
+
+.copy-answer-btn:hover,
+.copy-answer-btn:focus-visible {
+	color: var(--accent);
+	border-color: var(--accent);
 }
 
 .chat-error {
-	color: #b00020;
+	color: var(--error-text);
+	background: var(--error-bg);
+	border-radius: var(--radius-1);
+	padding: var(--space-2) var(--space-3);
+	margin: 0;
 }
+
+/* Composer: single rounded bar, indigo circular send button (Visual Design
+   Direction "Distinctive input bar") */
 
 .chat-input-row {
 	display: flex;
-	gap: 0.5rem;
+	align-items: center;
+	gap: var(--space-2);
+	background: var(--surface-2);
+	border: 1px solid var(--border);
+	border-radius: var(--radius-3);
+	padding: var(--space-2);
+	box-shadow: var(--shadow-1);
 }
 
 .chat-input-row input {
 	flex: 1;
-	padding: 0.5rem;
+	border: none;
+	background: none;
+	color: var(--text);
+	font: inherit;
+	padding: var(--space-2) var(--space-3);
 }
 
+.chat-input-row input:focus {
+	outline: none;
+}
+
+.chat-input-row input:disabled {
+	opacity: 0.6;
+}
+
+.chat-send-btn {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	width: var(--size-6);
+	height: var(--size-6);
+	flex: none;
+	border: none;
+	border-radius: 50%;
+	background: var(--accent);
+	color: var(--accent-contrast);
+	font-size: var(--font-size-3);
+	line-height: 1;
+	cursor: pointer;
+	transition: background-color 0.15s ease;
+}
+
+.chat-send-btn:hover:not(:disabled),
+.chat-send-btn:focus-visible {
+	background: var(--accent-hover);
+}
+
+.chat-send-btn:disabled {
+	opacity: 0.5;
+	cursor: not-allowed;
+}
+
+/* Trace timeline (chat-ui spec "Trace timeline renders every event type";
+   design D3/D4) */
+
 .trace-timeline {
-	margin-top: 0.5rem;
-	border-top: 1px dashed #ccc;
-	padding-top: 0.5rem;
+	margin-top: var(--space-3);
+	border-top: 1px solid var(--border);
+	padding-top: var(--space-3);
 }
 
 .trace-toggle {
-	font-size: 0.85rem;
-	background: none;
-	border: 1px solid #ccc;
-	border-radius: 0.25rem;
-	padding: 0.15rem 0.5rem;
+	font-size: var(--font-size-0);
+	font-weight: 500;
+	color: var(--text-muted);
+	background: var(--surface-3);
+	border: 1px solid var(--border);
+	border-radius: var(--radius-1);
+	padding: var(--space-1) var(--space-3);
 	cursor: pointer;
+}
+
+.trace-toggle:hover,
+.trace-toggle:focus-visible {
+	color: var(--text);
+	border-color: var(--accent);
 }
 
 .trace-event-list {
 	list-style: none;
-	margin: 0.5rem 0 0;
+	margin: var(--space-3) 0 0;
 	padding: 0;
 	display: flex;
 	flex-direction: column;
-	gap: 0.5rem;
+	gap: var(--space-2);
 }
 
 .trace-event {
-	border-left: 3px solid #ccc;
-	padding: 0.25rem 0.5rem;
-	font-size: 0.9rem;
+	background: var(--surface-3);
+	border-left: 3px solid var(--border-strong);
+	border-radius: var(--radius-1);
+	padding: var(--space-2) var(--space-3);
+	font-size: var(--font-size-0);
+	overflow-wrap: anywhere;
 }
 
 .event-label {
 	font-weight: 600;
-	font-size: 0.8rem;
-	opacity: 0.7;
+	font-size: var(--font-size-00);
+	text-transform: uppercase;
+	letter-spacing: 0.03em;
+	color: var(--text-muted);
 	display: block;
-	margin-bottom: 0.15rem;
+	margin-bottom: var(--space-1);
 }
 
 .badge-truncated {
 	display: inline-block;
-	font-size: 0.7rem;
-	background: #fff3cd;
-	color: #7a5b00;
-	border-radius: 0.25rem;
-	padding: 0.05rem 0.4rem;
-	margin-left: 0.5rem;
+	font-size: var(--font-size-00);
+	background: var(--warning-bg);
+	color: var(--warning-text);
+	border-radius: var(--radius-1);
+	padding: 0.05rem var(--space-2);
+	margin-left: var(--space-2);
 }
 
 .script-output {
 	display: flex;
 	flex-direction: column;
-	gap: 0.25rem;
+	gap: var(--space-1);
 }
 
 .output-label {
-	font-size: 0.75rem;
-	opacity: 0.6;
+	font-size: var(--font-size-00);
+	color: var(--text-muted);
 }
 
 .script-meta {
 	display: grid;
 	grid-template-columns: auto auto;
-	gap: 0 0.5rem;
-	font-size: 0.8rem;
-	margin: 0.25rem 0 0;
+	gap: 0 var(--space-2);
+	font-size: var(--font-size-0);
+	margin: var(--space-2) 0 0;
 }
 
 .script-meta dt {
 	font-weight: 600;
-	opacity: 0.7;
+	color: var(--text-muted);
 }
 
 .script-meta dd {
 	margin: 0;
 }
 
+.tool-call,
+.tool-result,
+.script-run,
+.trace-raw {
+	overflow-wrap: anywhere;
+}
+
+.tool-call pre,
+.tool-result pre,
+.script-run pre,
+.trace-raw pre {
+	background: var(--surface);
+	border-radius: var(--radius-1);
+	padding: var(--space-2);
+	overflow-x: auto;
+}
+
+.trace-text {
+	margin: 0;
+	color: var(--text);
+}
+
+.trace-error {
+	color: var(--error-text);
+	margin: 0;
+}
+
+.trace-done {
+	color: var(--text-muted);
+	font-size: var(--font-size-0);
+	margin: 0;
+}
+
+/* Provenance chips (chat-ui spec "Provenance rendered as source-linking
+   chips") */
+
 .provenance-chips {
 	display: flex;
 	flex-wrap: wrap;
-	gap: 0.4rem;
+	gap: var(--space-2);
 }
 
 .provenance-chip {
 	display: inline-flex;
-	gap: 0.25rem;
-	font-size: 0.8rem;
-	background: rgba(0, 0, 0, 0.05);
-	border-radius: 1rem;
-	padding: 0.15rem 0.6rem;
+	gap: var(--space-1);
+	font-size: var(--font-size-0);
+	background: var(--surface);
+	border: 1px solid var(--border);
+	border-radius: var(--radius-3);
+	padding: var(--space-1) var(--space-3);
+	overflow-wrap: anywhere;
 }
 
 .chip-label {
-	opacity: 0.6;
+	color: var(--text-muted);
 }
 
 .provenance-empty {
-	font-size: 0.8rem;
-	opacity: 0.6;
+	font-size: var(--font-size-0);
+	color: var(--text-muted);
 	font-style: italic;
 }
 
+/* Answer stamp (chat-ui spec "Answer groundedness is stamped"). Green stays
+   reserved for the grounded semantic (design D7); the ungrounded state uses
+   the error tokens, not the brand accent. */
+
 .answer-stamp {
-	margin-top: 0.5rem;
+	margin-top: var(--space-3);
 	display: flex;
 	flex-direction: column;
-	gap: 0.4rem;
+	gap: var(--space-2);
 }
 
 .stamp-badge {
 	display: inline-block;
 	width: fit-content;
-	font-size: 0.75rem;
+	font-size: var(--font-size-0);
 	font-weight: 600;
-	border-radius: 0.25rem;
-	padding: 0.15rem 0.5rem;
+	border-radius: var(--radius-1);
+	padding: var(--space-1) var(--space-3);
 }
 
 .stamp-grounded {
-	background: #d7f4de;
-	color: #14622f;
+	background: var(--grounded-bg);
+	color: var(--grounded-text);
 }
 
 .stamp-ungrounded {
-	background: #fbdcdc;
-	color: #8a1c1c;
+	background: var(--error-bg);
+	color: var(--error-text);
 }
 
 .trace-raw {
-	font-size: 0.8rem;
-	opacity: 0.85;
+	font-size: var(--font-size-0);
+	color: var(--text-muted);
 }

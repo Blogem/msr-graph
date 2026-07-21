@@ -32,7 +32,7 @@
 // fix pointer (re-obtain the turn from `turns` after pushing, e.g.
 // `const assistantTurn = turns[turns.length - 1]`, before mutating it).
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/svelte';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import ChatSurface from './ChatSurface.svelte';
 import type { TraceEvent } from '../types';
 
@@ -238,5 +238,212 @@ describe('ChatSurface', () => {
 		const secondCallBody = JSON.parse((fetchMock.mock.calls[1][1] as RequestInit).body as string);
 		expect(secondCallBody.messages.length).toBeGreaterThanOrEqual(3);
 		expect(secondCallBody.messages[0]).toEqual({ role: 'user', content: 'first message' });
+	});
+});
+
+// ---------------------------------------------------------------------
+// Tests below this line are pass-1 additions for the redesign-web-frontend-ux
+// change (chat-ui spec: "Assistant answers render sanitized markdown",
+// "In-progress streaming affordance", "Assistant answer has a copy action",
+// "Empty conversation shows onboarding prompts"; tasks 5.2/5.4a). They are
+// written against the PINNED contract in the task-5 delegation prompt, not
+// against the current (pre-redesign) ChatSurface.svelte visible in this
+// worktree, so they are expected to fail until the chat-ui coder's branch
+// merges. Pinned testids used here: `streaming-indicator`,
+// `chat-onboarding`, `example-prompt`, `copy-answer`. Reconciled in pass 2.
+// ---------------------------------------------------------------------
+
+/** A stream whose frames are pushed on demand via `push()` and only
+ * terminated by an explicit `close()`, instead of being fully enqueued and
+ * closed up front like `mockChatResponse`. This lets a test observe
+ * mid-stream state (e.g. the streaming indicator) before the turn
+ * completes. */
+function mockChatStreamController() {
+	let controllerRef!: ReadableStreamDefaultController<Uint8Array>;
+	const encoder = new TextEncoder();
+	const stream = new ReadableStream<Uint8Array>({
+		start(controller) {
+			controllerRef = controller;
+		}
+	});
+	return {
+		response: new Response(stream, { status: 200 }),
+		push(event: TraceEvent) {
+			controllerRef.enqueue(encoder.encode(sseFrame(event)));
+		},
+		close() {
+			controllerRef.close();
+		}
+	};
+}
+
+describe('ChatSurface - markdown rendering (redesign 5.2)', () => {
+	beforeEach(() => {
+		vi.unstubAllGlobals();
+	});
+
+	it('renders assistant markdown as HTML, not literal markdown syntax', async () => {
+		const turn: TraceEvent[] = [
+			{ type: 'text', text: 'This is **bold** text and a `code` span.' },
+			{ type: 'answer', answer: { grounded: true } },
+			{ type: 'done' }
+		];
+		vi.stubGlobal('fetch', vi.fn().mockResolvedValue(mockChatResponse(turn)));
+
+		render(ChatSurface);
+		await sendMessage('render some markdown');
+
+		const assistantMessage = screen
+			.getAllByTestId('chat-message')
+			.find((el) => el.getAttribute('data-role') === 'assistant');
+		expect(assistantMessage).toBeTruthy();
+
+		const content = assistantMessage?.querySelector('.message-content');
+		expect(content).toBeTruthy();
+		expect(content?.innerHTML).toContain('<strong>bold</strong>');
+		expect(content?.innerHTML).toContain('<code>code</code>');
+		// The literal markdown syntax characters must not appear as text --
+		// only the rendered elements.
+		expect(content?.textContent).not.toContain('**bold**');
+	});
+});
+
+describe('ChatSurface - streaming affordance (redesign 5.2)', () => {
+	beforeEach(() => {
+		vi.unstubAllGlobals();
+	});
+
+	it('shows the streaming indicator while a turn is streaming and removes it when the turn completes', async () => {
+		const ctrl = mockChatStreamController();
+		vi.stubGlobal('fetch', vi.fn().mockResolvedValue(ctrl.response));
+
+		render(ChatSurface);
+		await fireEvent.input(screen.getByTestId('chat-input'), { target: { value: 'is this streaming?' } });
+		await fireEvent.click(screen.getByTestId('chat-send'));
+
+		ctrl.push({ type: 'text', text: 'partial answer' });
+		await waitFor(() => expect(screen.getByTestId('streaming-indicator')).toBeInTheDocument());
+
+		ctrl.push({ type: 'answer', answer: { grounded: true } });
+		ctrl.push({ type: 'done' });
+		ctrl.close();
+
+		await waitFor(() => expect(screen.queryByTestId('streaming-indicator')).not.toBeInTheDocument());
+		expect(await screen.findByTestId('answer-stamp')).toBeInTheDocument();
+	});
+
+	it('removes the streaming indicator when the turn errors', async () => {
+		const ctrl = mockChatStreamController();
+		vi.stubGlobal('fetch', vi.fn().mockResolvedValue(ctrl.response));
+
+		render(ChatSurface);
+		await fireEvent.input(screen.getByTestId('chat-input'), { target: { value: 'trigger an error' } });
+		await fireEvent.click(screen.getByTestId('chat-send'));
+
+		ctrl.push({ type: 'text', text: 'partial' });
+		await waitFor(() => expect(screen.getByTestId('streaming-indicator')).toBeInTheDocument());
+
+		ctrl.push({ type: 'error', error: 'boom' });
+		ctrl.close();
+
+		await waitFor(() => expect(screen.getByTestId('chat-error')).toBeInTheDocument());
+		expect(screen.queryByTestId('streaming-indicator')).not.toBeInTheDocument();
+	});
+});
+
+describe('ChatSurface - onboarding (redesign 5.2)', () => {
+	beforeEach(() => {
+		vi.unstubAllGlobals();
+	});
+
+	it('shows onboarding with clickable example prompts when the conversation is empty', async () => {
+		render(ChatSurface);
+
+		const onboarding = screen.getByTestId('chat-onboarding');
+		expect(onboarding).toBeInTheDocument();
+
+		const prompts = within(onboarding).getAllByTestId('example-prompt');
+		expect(prompts.length).toBeGreaterThan(0);
+	});
+
+	it('hides onboarding once the first message is sent', async () => {
+		vi.stubGlobal(
+			'fetch',
+			vi.fn().mockResolvedValue(
+				mockChatResponse([{ type: 'text', text: 'reply' }, { type: 'answer', answer: { grounded: true } }, { type: 'done' }])
+			)
+		);
+
+		render(ChatSurface);
+		expect(screen.getByTestId('chat-onboarding')).toBeInTheDocument();
+
+		await sendMessage('what is the density of FLiBe?');
+
+		expect(screen.queryByTestId('chat-onboarding')).not.toBeInTheDocument();
+	});
+
+	it('clicking an example prompt runs it as the first message (assumption: click sends, see report)', async () => {
+		vi.stubGlobal(
+			'fetch',
+			vi.fn().mockResolvedValue(
+				mockChatResponse([{ type: 'text', text: 'reply' }, { type: 'answer', answer: { grounded: true } }, { type: 'done' }])
+			)
+		);
+
+		render(ChatSurface);
+		const onboarding = screen.getByTestId('chat-onboarding');
+		const prompts = within(onboarding).getAllByTestId('example-prompt');
+		const promptText = prompts[0].textContent?.trim() ?? '';
+		expect(promptText.length).toBeGreaterThan(0);
+
+		await fireEvent.click(prompts[0]);
+
+		await waitFor(() => expect(screen.queryByTestId('chat-onboarding')).not.toBeInTheDocument());
+		const userMessages = screen
+			.getAllByTestId('chat-message')
+			.filter((el) => el.getAttribute('data-role') === 'user');
+		expect(userMessages.some((el) => el.textContent?.includes(promptText))).toBe(true);
+	});
+});
+
+describe('ChatSurface - copy-answer action (redesign 5.4a)', () => {
+	const originalClipboard = (navigator as Navigator & { clipboard?: unknown }).clipboard;
+
+	beforeEach(() => {
+		vi.unstubAllGlobals();
+	});
+
+	afterEach(() => {
+		Object.defineProperty(navigator, 'clipboard', { value: originalClipboard, configurable: true });
+	});
+
+	it('writes the completed answer text to the clipboard and shows a transient confirmation', async () => {
+		const writeText = vi.fn().mockResolvedValue(undefined);
+		Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
+
+		vi.stubGlobal('fetch', vi.fn().mockResolvedValue(mockChatResponse(FULL_TURN_EVENTS)));
+
+		render(ChatSurface);
+		await sendMessage('What is the density of FLiBe?');
+
+		const copyBtn = await screen.findByTestId('copy-answer');
+		await fireEvent.click(copyBtn);
+
+		await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
+		expect(writeText.mock.calls[0][0]).toContain('2.5 g/cc');
+
+		// Transient confirmation -- the spec only requires *some* visible
+		// confirmation ("a transient 'copied' state or toast"), so accept
+		// any of: the button's own text/label changing to mention "copied",
+		// a `data-copied`/`aria-pressed` style attribute flip, or a toast
+		// appearing in the shared toast region.
+		await waitFor(() => {
+			const confirmedByText = /copied/i.test(copyBtn.textContent ?? '');
+			const confirmedByAttr = ['data-copied', 'aria-pressed', 'data-state'].some(
+				(attr) => copyBtn.getAttribute(attr) != null && /copied|true/i.test(copyBtn.getAttribute(attr) ?? '')
+			);
+			const toast = screen.queryByTestId('toast');
+			expect(confirmedByText || confirmedByAttr || toast !== null).toBe(true);
+		});
 	});
 });

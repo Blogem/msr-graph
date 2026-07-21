@@ -16,13 +16,15 @@
 // firing").
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/svelte';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { checkpointList, preDemoCheckpoint } from '../__fixtures__/checkpoints';
+import { checkpointList, preDemoCheckpoint, postReviewCheckpoint } from '../__fixtures__/checkpoints';
 
-const { listCheckpointsMock, createCheckpointMock, restoreCheckpointMock } = vi.hoisted(() => ({
-	listCheckpointsMock: vi.fn(),
-	createCheckpointMock: vi.fn(),
-	restoreCheckpointMock: vi.fn()
-}));
+const { listCheckpointsMock, createCheckpointMock, restoreCheckpointMock, deleteCheckpointMock } =
+	vi.hoisted(() => ({
+		listCheckpointsMock: vi.fn(),
+		createCheckpointMock: vi.fn(),
+		restoreCheckpointMock: vi.fn(),
+		deleteCheckpointMock: vi.fn()
+	}));
 
 vi.mock('$lib/api', async (importOriginal) => {
 	const actual = await importOriginal<typeof import('$lib/api')>();
@@ -30,7 +32,8 @@ vi.mock('$lib/api', async (importOriginal) => {
 		...actual,
 		listCheckpoints: listCheckpointsMock,
 		createCheckpoint: createCheckpointMock,
-		restoreCheckpoint: restoreCheckpointMock
+		restoreCheckpoint: restoreCheckpointMock,
+		deleteCheckpoint: deleteCheckpointMock
 	};
 });
 
@@ -41,6 +44,7 @@ beforeEach(() => {
 	listCheckpointsMock.mockReset().mockResolvedValue(checkpointList);
 	createCheckpointMock.mockReset();
 	restoreCheckpointMock.mockReset().mockResolvedValue({ status: 'restored' });
+	deleteCheckpointMock.mockReset().mockResolvedValue({ status: 'deleted' });
 });
 
 describe('AdminSurface - checkpoint list', () => {
@@ -113,6 +117,56 @@ describe('AdminSurface - restore checkpoint', () => {
 
 		await waitFor(() =>
 			expect(restoreCheckpointMock).toHaveBeenCalledWith(preDemoCheckpoint.label)
+		);
+	});
+});
+
+describe('AdminSurface - delete checkpoint', () => {
+	it('requires confirmation before calling deleteCheckpoint, then refreshes the list', async () => {
+		render(AdminSurface);
+		const list = await screen.findByTestId('checkpoint-list');
+		const items = within(list).getAllByTestId('checkpoint-item');
+		const preDemoItem = items.find((el) => el.textContent?.includes(preDemoCheckpoint.label));
+		if (!preDemoItem) throw new Error('pre-demo checkpoint item not found');
+
+		await fireEvent.click(within(preDemoItem).getByTestId('checkpoint-delete'));
+
+		// Not yet fired -- a confirmation is required first.
+		expect(deleteCheckpointMock).not.toHaveBeenCalled();
+
+		// After deletion the server no longer returns the deleted checkpoint;
+		// the component refreshes from the server rather than optimistically
+		// splicing, so the next list call reflects the removal.
+		listCheckpointsMock.mockResolvedValue({ checkpoints: [postReviewCheckpoint] });
+
+		const confirm = await screen.findByTestId('delete-confirm');
+		await fireEvent.click(confirm);
+
+		await waitFor(() =>
+			expect(deleteCheckpointMock).toHaveBeenCalledWith(preDemoCheckpoint.label)
+		);
+		const refreshed = await screen.findByTestId('checkpoint-list');
+		await waitFor(() => expect(refreshed).not.toHaveTextContent(preDemoCheckpoint.label));
+	});
+
+	it('surfaces a delete error and leaves the list unchanged', async () => {
+		deleteCheckpointMock.mockRejectedValue(
+			new ApiError(404, { error: 'not_found', message: 'checkpoint: not found' })
+		);
+
+		render(AdminSurface);
+		const list = await screen.findByTestId('checkpoint-list');
+		const items = within(list).getAllByTestId('checkpoint-item');
+		const preDemoItem = items.find((el) => el.textContent?.includes(preDemoCheckpoint.label));
+		if (!preDemoItem) throw new Error('pre-demo checkpoint item not found');
+
+		await fireEvent.click(within(preDemoItem).getByTestId('checkpoint-delete'));
+		await fireEvent.click(await screen.findByTestId('delete-confirm'));
+
+		const error = await screen.findByTestId('delete-error');
+		expect(error).toHaveTextContent(/not found/i);
+		expect(within(await screen.findByTestId('checkpoint-list')).getAllByTestId('checkpoint-item').length).toBe(
+			checkpointList.checkpoints.length
 		);
 	});
 });

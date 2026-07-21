@@ -46,6 +46,17 @@ vi.mock('$lib/api', async (importOriginal) => {
 });
 
 import { ApiError } from '$lib/api';
+// The shared toast display is mounted once app-wide in `+layout.svelte`
+// (design D5), not inside ReviewSurface itself -- ReviewSurface only calls
+// `pushToast(...)` into the shared `$lib/ui/toast.svelte` store. Rendering
+// ReviewSurface alone therefore never puts a `toast-region`/`toast` node in
+// the DOM even though the push happens correctly. The toast-feedback tests
+// below additionally render `Toaster` (via the same `$lib` alias
+// ReviewSurface itself already imports it through) alongside ReviewSurface
+// so the real region and its testids are exercised, mirroring how the app
+// shell composes them in production.
+import Toaster from '$lib/ui/Toaster.svelte';
+import { toasts } from '$lib/ui/toast.svelte';
 import ReviewSurface from './ReviewSurface.svelte';
 
 function queueResponse(proposals: ProposalSummary[]) {
@@ -243,5 +254,203 @@ describe('ReviewSurface - edit/approve/reject flows (task 8.4)', () => {
 		// Proposal must remain pending -- approve/reject controls should
 		// still be present (not swapped for an "approved" state).
 		expect(within(detail).getByTestId('approve-btn')).toBeInTheDocument();
+	});
+});
+
+// ---------------------------------------------------------------------
+// Tests below this line are pass-1 additions for the redesign-web-frontend-ux
+// change (review-ui spec: "legible information hierarchy", "keyboard-
+// navigable" queue, "toast feedback"; tasks 5.3). Written against the
+// PINNED contract in the task-5 delegation prompt, not against the current
+// (pre-redesign) ReviewSurface.svelte visible in this worktree -- the row
+// here still renders bare `docFrequency` numbers and has no keyboard
+// handling or toasts, so these are expected to fail until the review-ui
+// coder's branch merges. Pinned hooks used: the five existing `.field.*`
+// classes/`proposal-row`/`data-id` (kept), humanized "seen in N
+// document(s)" text, `j`/`ArrowDown`/`k`/`ArrowUp`/`a`/`r` keyboard
+// handling, and the shared `toast-region`/`toast` (already defined in
+// `$lib/ui/Toaster.svelte`, merged in the foundation wave). Reconciled in
+// pass 2.
+// ---------------------------------------------------------------------
+
+describe('ReviewSurface - legible row hierarchy (redesign 5.3)', () => {
+	it('shows the term prominently with all five fields present, and humanizes a single-document frequency', async () => {
+		render(ReviewSurface);
+		await waitFor(() => expect(listProposalsMock).toHaveBeenCalled());
+
+		const rows = await screen.findAllByTestId('proposal-row');
+		const solubilityRow = rows.find((el) => el.getAttribute('data-id') === 'solubility-1');
+		expect(solubilityRow).toBeTruthy();
+		const row = solubilityRow as HTMLElement;
+
+		// All five fields remain present.
+		expect(row.querySelector('.field.id')).toBeTruthy();
+		expect(row.querySelector('.field.kind')).toBeTruthy();
+		expect(row.querySelector('.field.status')).toBeTruthy();
+		expect(row.querySelector('.field.term')).toBeTruthy();
+		expect(row.querySelector('.field.doc-frequency')).toBeTruthy();
+
+		// The term is present and textually part of the row; docFrequency 3
+		// -- plural humanized wording, not a bare "3".
+		expect(row).toHaveTextContent('solubility');
+		expect(row.querySelector('.field.doc-frequency')?.textContent).toMatch(/seen in 3 documents/i);
+		expect(row.querySelector('.field.doc-frequency')?.textContent).not.toBe('3');
+	});
+
+	it('humanizes a document frequency of 1 as singular ("seen in 1 document")', async () => {
+		listProposalsMock.mockResolvedValue(
+			queueResponse([{ id: 'single-doc-1', kind: 'property', status: 'pending', term: 'viscosity', docFrequency: 1 }])
+		);
+
+		render(ReviewSurface);
+		const row = await screen.findByTestId('proposal-row');
+
+		expect(row.querySelector('.field.doc-frequency')?.textContent).toMatch(/seen in 1 document\b/i);
+		expect(row.querySelector('.field.doc-frequency')?.textContent).not.toMatch(/documents/i);
+	});
+
+	it('humanizes a large document frequency as plural ("seen in 47 documents")', async () => {
+		listProposalsMock.mockResolvedValue(
+			queueResponse([{ id: 'many-doc-1', kind: 'property', status: 'pending', term: 'conductivity', docFrequency: 47 }])
+		);
+
+		render(ReviewSurface);
+		const row = await screen.findByTestId('proposal-row');
+
+		expect(row.querySelector('.field.doc-frequency')?.textContent).toMatch(/seen in 47 documents/i);
+	});
+});
+
+describe('ReviewSurface - keyboard navigation (redesign 5.3)', () => {
+	// Dispatched on the `proposal-queue` container rather than `document`:
+	// this is the superset-safe target -- it satisfies a listener attached
+	// directly to the queue container (event originates there) as well as a
+	// listener attached to `window`/`document` (the event still bubbles up
+	// through the DOM tree to reach them), without assuming which one the
+	// coder picked. See report for this assumption.
+	it('moves the selection to the next row on ArrowDown/j and to the previous on ArrowUp/k', async () => {
+		render(ReviewSurface);
+		await waitFor(() => expect(listProposalsMock).toHaveBeenCalled());
+		const rows = await screen.findAllByTestId('proposal-row');
+		expect(rows.length).toBe(proposalQueue.length);
+		const queue = screen.getByTestId('proposal-queue');
+
+		// Select the first row, then move forward with ArrowDown.
+		await fireEvent.click(rows[0]);
+		await fireEvent.keyDown(queue, { key: 'ArrowDown' });
+
+		await waitFor(() => {
+			const updatedRows = screen.getAllByTestId('proposal-row');
+			expect(updatedRows[1].className).toMatch(/selected/);
+		});
+
+		// Move back with 'k'.
+		await fireEvent.keyDown(queue, { key: 'k' });
+		await waitFor(() => {
+			const updatedRows = screen.getAllByTestId('proposal-row');
+			expect(updatedRows[0].className).toMatch(/selected/);
+		});
+
+		// Move forward again with 'j'.
+		await fireEvent.keyDown(queue, { key: 'j' });
+		await waitFor(() => {
+			const updatedRows = screen.getAllByTestId('proposal-row');
+			expect(updatedRows[1].className).toMatch(/selected/);
+		});
+	});
+
+	it('fires approve on the "a" key and reject on the "r" key for the selected proposal', async () => {
+		render(ReviewSurface);
+		await waitFor(() => expect(listProposalsMock).toHaveBeenCalled());
+		const queue = screen.getByTestId('proposal-queue');
+
+		await openProposal(solubilityProposal);
+		await fireEvent.keyDown(queue, { key: 'a' });
+		await waitFor(() => expect(approveProposalMock).toHaveBeenCalledWith('solubility-1', expect.any(String), expect.any(String)));
+
+		await openProposal(graphiteProposal);
+		await fireEvent.keyDown(queue, { key: 'r' });
+		await waitFor(() => expect(rejectProposalMock).toHaveBeenCalledWith('graphite-1'));
+	});
+});
+
+describe('ReviewSurface - toast feedback (redesign 5.3)', () => {
+	// `toasts` (the `$lib/ui/toast.svelte` module-level `$state` array) is
+	// shared, live, singleton state across the whole test file/process --
+	// it is not reset by `@testing-library/svelte`'s `cleanup()` (that only
+	// unmounts DOM, it does not touch application-level stores). Without
+	// clearing it, a toast pushed by one test would still be present (and
+	// not yet auto-dismissed -- the default dismiss delay is 4s, far longer
+	// than a test) when the next test asserts, breaking the "exactly one
+	// toast" queries below. Clear it before each test in this block so every
+	// test starts from an empty toast region.
+	beforeEach(() => {
+		toasts.splice(0, toasts.length);
+	});
+
+	/** Renders ReviewSurface alongside the shared `Toaster` display
+	 * component. In the real app `Toaster` is mounted once in
+	 * `+layout.svelte` (design D5), not inside ReviewSurface -- ReviewSurface
+	 * only pushes into the shared store. `@testing-library/svelte`'s
+	 * `render()` appends into `document.body`, and `screen` queries against
+	 * `document.body`, so two separate `render()` calls compose exactly like
+	 * the real app shell does: `Toaster` renders whatever `ReviewSurface`'s
+	 * `pushToast(...)` calls push into the shared store. */
+	function renderWithToaster() {
+		render(Toaster);
+		return render(ReviewSurface);
+	}
+
+	it('shows a success toast when approve succeeds', async () => {
+		renderWithToaster();
+		await waitFor(() => expect(listProposalsMock).toHaveBeenCalled());
+
+		const detail = await openProposal(solubilityProposal);
+		await fireEvent.click(within(detail).getByTestId('approve-btn'));
+
+		await waitFor(() => expect(approveProposalMock).toHaveBeenCalled());
+		const region = await screen.findByTestId('toast-region');
+		const toast = await within(region).findByTestId('toast');
+		expect(toast).toBeInTheDocument();
+		expect(toast.getAttribute('data-kind')).toBe('success');
+		expect(toast).toHaveTextContent(/approved|success/i);
+	});
+
+	it('shows a failure toast when approve fails (non-validation error) and the proposal stays pending', async () => {
+		approveProposalMock.mockRejectedValue(new Error('network error'));
+
+		renderWithToaster();
+		await waitFor(() => expect(listProposalsMock).toHaveBeenCalled());
+
+		const detail = await openProposal(solubilityProposal);
+		await fireEvent.click(within(detail).getByTestId('approve-btn'));
+
+		await waitFor(() => expect(approveProposalMock).toHaveBeenCalled());
+		const region = await screen.findByTestId('toast-region');
+		const toast = await within(region).findByTestId('toast');
+		expect(toast).toBeInTheDocument();
+		expect(toast.getAttribute('data-kind')).toBe('error');
+		expect(toast).toHaveTextContent(/fail|error/i);
+
+		// Prior state preserved -- still pending, approve control still present.
+		expect(within(detail).getByTestId('approve-btn')).toBeInTheDocument();
+	});
+
+	it('shows a failure toast when reject fails and the proposal stays in its prior state', async () => {
+		rejectProposalMock.mockRejectedValue(new Error('network error'));
+
+		renderWithToaster();
+		await waitFor(() => expect(listProposalsMock).toHaveBeenCalled());
+
+		const detail = await openProposal(graphiteProposal);
+		await fireEvent.click(within(detail).getByTestId('reject-btn'));
+
+		await waitFor(() => expect(rejectProposalMock).toHaveBeenCalled());
+		const region = await screen.findByTestId('toast-region');
+		const toast = await within(region).findByTestId('toast');
+		expect(toast).toBeInTheDocument();
+		expect(toast.getAttribute('data-kind')).toBe('error');
+		expect(toast).toHaveTextContent(/fail|error/i);
+		expect(within(detail).getByTestId('reject-btn')).toBeInTheDocument();
 	});
 });

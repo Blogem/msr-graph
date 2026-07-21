@@ -10,12 +10,20 @@
 		listCheckpoints,
 		createCheckpoint,
 		restoreCheckpoint,
+		deleteCheckpoint,
 		ApiError,
 		type CheckpointManifest
 	} from '$lib/api';
+	import LoadingState from '$lib/ui/LoadingState.svelte';
+	import EmptyState from '$lib/ui/EmptyState.svelte';
+	import { pushToast } from '$lib/ui/toast.svelte';
 
 	let checkpoints = $state<CheckpointManifest[]>([]);
 	let listError = $state('');
+	// True until the initial checkpoint fetch settles (success or failure); a
+	// later refresh (e.g. after create) does not flip this back to true, so
+	// the list doesn't flicker back to a loading placeholder.
+	let listLoading = $state(true);
 
 	let label = $state('');
 	let creating = $state(false);
@@ -30,6 +38,13 @@
 	let restoreError = $state('');
 	let restoreStatus = $state('');
 
+	// Delete mirrors the restore flow: clicking "Delete" on an item arms the
+	// confirmation (`deletingLabel`); only clicking `delete-confirm` actually
+	// fires DELETE /api/checkpoints/{label}.
+	let deletingLabel = $state<string | null>(null);
+	let deleting = $state(false);
+	let deleteError = $state('');
+
 	async function loadCheckpoints(): Promise<void> {
 		try {
 			const response = await listCheckpoints();
@@ -37,6 +52,8 @@
 			listError = '';
 		} catch (err) {
 			listError = err instanceof ApiError ? err.message : 'Failed to load checkpoints.';
+		} finally {
+			listLoading = false;
 		}
 	}
 
@@ -59,10 +76,12 @@
 			// Refresh from the server rather than optimistically appending, so
 			// the list always reflects what the server actually persisted.
 			await loadCheckpoints();
+			pushToast({ message: `Checkpoint "${trimmed}" created.`, kind: 'success' });
 		} catch (err) {
 			// A rejected label (e.g. 400 invalid_label) must not add anything
 			// to the list -- we simply don't touch `checkpoints` here.
 			createError = err instanceof ApiError ? err.message : 'Failed to create checkpoint.';
+			pushToast({ message: createError, kind: 'error' });
 		} finally {
 			creating = false;
 		}
@@ -78,6 +97,33 @@
 		confirmingLabel = null;
 	}
 
+	function startDelete(checkpointLabel: string): void {
+		deletingLabel = checkpointLabel;
+		deleteError = '';
+	}
+
+	function cancelDelete(): void {
+		deletingLabel = null;
+	}
+
+	async function confirmDelete(checkpointLabel: string): Promise<void> {
+		deleting = true;
+		deleteError = '';
+		try {
+			await deleteCheckpoint(checkpointLabel);
+			deletingLabel = null;
+			// Refresh from the server rather than optimistically splicing, so the
+			// list always reflects what the server actually persisted.
+			await loadCheckpoints();
+			pushToast({ message: `Checkpoint "${checkpointLabel}" deleted.`, kind: 'success' });
+		} catch (err) {
+			deleteError = err instanceof ApiError ? err.message : 'Failed to delete checkpoint.';
+			pushToast({ message: deleteError, kind: 'error' });
+		} finally {
+			deleting = false;
+		}
+	}
+
 	async function confirmRestore(checkpointLabel: string): Promise<void> {
 		restoring = true;
 		restoreError = '';
@@ -86,8 +132,10 @@
 			await restoreCheckpoint(checkpointLabel);
 			restoreStatus = `Restored checkpoint "${checkpointLabel}".`;
 			confirmingLabel = null;
+			pushToast({ message: restoreStatus, kind: 'success' });
 		} catch (err) {
 			restoreError = err instanceof ApiError ? err.message : 'Failed to restore checkpoint.';
+			pushToast({ message: restoreError, kind: 'error' });
 		} finally {
 			restoring = false;
 		}
@@ -118,6 +166,9 @@
 		{#if createError}
 			<p data-testid="checkpoint-error" class="error" role="alert">{createError}</p>
 		{/if}
+		{#if creating}
+			<LoadingState label="Creating checkpoint…" />
+		{/if}
 	</section>
 
 	<section class="admin-list">
@@ -125,46 +176,84 @@
 		{#if listError}
 			<p class="error" role="alert">{listError}</p>
 		{/if}
-		<ul data-testid="checkpoint-list">
-			{#each checkpoints as checkpoint (checkpoint.label)}
-				<li data-testid="checkpoint-item">
-					<span class="checkpoint-label">{checkpoint.label}</span>
-					<span class="checkpoint-version">{checkpoint.ontology_version}</span>
+		{#if listLoading}
+			<LoadingState label="Loading checkpoints…" />
+		{:else if checkpoints.length === 0}
+			<EmptyState message="No checkpoints yet." />
+		{:else}
+			<ul data-testid="checkpoint-list">
+				{#each checkpoints as checkpoint (checkpoint.label)}
+					<li data-testid="checkpoint-item">
+						<span class="checkpoint-label">{checkpoint.label}</span>
+						<span class="checkpoint-version">{checkpoint.ontology_version}</span>
 
-					{#if confirmingLabel === checkpoint.label}
-						<span class="restore-confirm-group">
-							<span class="confirm-text">
-								Restore "{checkpoint.label}"? This replaces the live store.
+						{#if confirmingLabel === checkpoint.label}
+							<span class="confirm-group">
+								<span class="confirm-text">
+									Restore "{checkpoint.label}"? This replaces the live store.
+								</span>
+								<button
+									data-testid="restore-confirm"
+									type="button"
+									disabled={restoring}
+									onclick={() => confirmRestore(checkpoint.label)}
+								>
+									{restoring ? 'Restoring…' : 'Confirm restore'}
+								</button>
+								<button type="button" disabled={restoring} onclick={cancelRestore}> Cancel </button>
+								{#if restoring}
+									<LoadingState label="Restoring checkpoint…" />
+								{/if}
 							</span>
-							<button
-								data-testid="restore-confirm"
-								type="button"
-								disabled={restoring}
-								onclick={() => confirmRestore(checkpoint.label)}
-							>
-								{restoring ? 'Restoring…' : 'Confirm restore'}
-							</button>
-							<button type="button" disabled={restoring} onclick={cancelRestore}> Cancel </button>
-						</span>
-					{:else}
-						<button
-							data-testid="checkpoint-restore"
-							type="button"
-							onclick={() => startRestore(checkpoint.label)}
-						>
-							Restore
-						</button>
-					{/if}
-				</li>
-			{:else}
-				<li class="empty">No checkpoints yet.</li>
-			{/each}
-		</ul>
+						{:else if deletingLabel === checkpoint.label}
+							<span class="confirm-group">
+								<span class="confirm-text">
+									Delete "{checkpoint.label}"? This removes its stored snapshot.
+								</span>
+								<button
+									data-testid="delete-confirm"
+									type="button"
+									disabled={deleting}
+									onclick={() => confirmDelete(checkpoint.label)}
+								>
+									{deleting ? 'Deleting…' : 'Confirm delete'}
+								</button>
+								<button type="button" disabled={deleting} onclick={cancelDelete}> Cancel </button>
+								{#if deleting}
+									<LoadingState label="Deleting checkpoint…" />
+								{/if}
+							</span>
+						{:else}
+							<span class="checkpoint-actions">
+								<button
+									data-testid="checkpoint-restore"
+									type="button"
+									onclick={() => startRestore(checkpoint.label)}
+								>
+									Restore
+								</button>
+								<button
+									data-testid="checkpoint-delete"
+									type="button"
+									class="danger"
+									onclick={() => startDelete(checkpoint.label)}
+								>
+									Delete
+								</button>
+							</span>
+						{/if}
+					</li>
+				{/each}
+			</ul>
+		{/if}
 		{#if restoreStatus}
 			<p data-testid="restore-status" role="status">{restoreStatus}</p>
 		{/if}
 		{#if restoreError}
 			<p data-testid="restore-error" class="error" role="alert">{restoreError}</p>
+		{/if}
+		{#if deleteError}
+			<p data-testid="delete-error" class="error" role="alert">{deleteError}</p>
 		{/if}
 	</section>
 </div>
@@ -173,14 +262,14 @@
 	.admin-panel {
 		display: flex;
 		flex-direction: column;
-		gap: 1.5rem;
+		gap: var(--space-6);
 		max-width: 40rem;
 	}
 
 	.admin-create form {
 		display: flex;
 		align-items: center;
-		gap: 0.5rem;
+		gap: var(--space-2);
 	}
 
 	ul[data-testid='checkpoint-list'] {
@@ -189,16 +278,17 @@
 		padding: 0;
 		display: flex;
 		flex-direction: column;
-		gap: 0.5rem;
+		gap: var(--space-2);
 	}
 
 	li[data-testid='checkpoint-item'] {
 		display: flex;
 		align-items: center;
-		gap: 0.75rem;
-		padding: 0.5rem;
-		border: 1px solid #ccc;
-		border-radius: 0.25rem;
+		gap: var(--space-3);
+		padding: var(--space-2);
+		background: var(--surface-2);
+		border: 1px solid var(--border);
+		border-radius: var(--radius-2);
 		flex-wrap: wrap;
 	}
 
@@ -207,27 +297,28 @@
 	}
 
 	.checkpoint-version {
-		color: #666;
-		font-family: monospace;
-		font-size: 0.85em;
+		color: var(--text-muted);
+		font-family: var(--font-mono);
+		font-size: var(--font-size-0);
 	}
 
-	.restore-confirm-group {
+	.confirm-group,
+	.checkpoint-actions {
 		display: flex;
 		align-items: center;
-		gap: 0.5rem;
+		gap: var(--space-2);
 		margin-left: auto;
 	}
 
 	.confirm-text {
-		font-size: 0.85em;
+		font-size: var(--font-size-0);
+	}
+
+	button.danger {
+		color: var(--error-text);
 	}
 
 	.error {
-		color: #b00020;
-	}
-
-	.empty {
-		color: #666;
+		color: var(--error-text);
 	}
 </style>

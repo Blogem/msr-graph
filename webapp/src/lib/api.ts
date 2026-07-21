@@ -156,6 +156,15 @@ export async function restoreCheckpoint(label: string): Promise<StatusResponse> 
 	});
 }
 
+/** `DELETE /api/checkpoints/{label}` -- no request body. Removes the
+ * checkpoint's stored artifacts and resolves to `{status: "deleted"}` on
+ * success. Rejects with a 404 `not_found` ApiError for an unknown label. */
+export async function deleteCheckpoint(label: string): Promise<StatusResponse> {
+	return request<StatusResponse>(`/api/checkpoints/${encodeURIComponent(label)}`, {
+		method: 'DELETE'
+	});
+}
+
 // Re-exported for convenience so a surface component can `import { ... }
 // from '$lib/api'` for both the client functions and their wire types.
 export type {

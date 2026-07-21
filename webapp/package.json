@@ -11,6 +11,11 @@
 		"check:watch": "svelte-check --tsconfig ./tsconfig.json --watch",
 		"test": "vitest run"
 	},
+	"dependencies": {
+		"dompurify": "^3.4.12",
+		"marked": "^18.0.7",
+		"open-props": "^1.7.23"
+	},
 	"devDependencies": {
 		"@sveltejs/adapter-static": "^3.0.10",
 		"@sveltejs/kit": "^2.70.1",

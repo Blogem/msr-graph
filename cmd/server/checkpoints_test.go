@@ -28,10 +28,12 @@ var _ checkpointService = (*fakeCheckpointService)(nil)
 type fakeCheckpointService struct {
 	createFn  func(label string) (checkpoint.Manifest, error)
 	restoreFn func(label string) error
+	deleteFn  func(label string) error
 	listFn    func() ([]checkpoint.Manifest, error)
 
 	createCalls  int
 	restoreCalls int
+	deleteCalls  int
 	listCalls    int
 }
 
@@ -47,6 +49,14 @@ func (f *fakeCheckpointService) Restore(_ context.Context, label string) error {
 	f.restoreCalls++
 	if f.restoreFn != nil {
 		return f.restoreFn(label)
+	}
+	return nil
+}
+
+func (f *fakeCheckpointService) Delete(_ context.Context, label string) error {
+	f.deleteCalls++
+	if f.deleteFn != nil {
+		return f.deleteFn(label)
 	}
 	return nil
 }
@@ -180,6 +190,64 @@ func TestCheckpointRestore_NotFoundReturns404(t *testing.T) {
 
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want 404 (body: %s)", rec.Code, rec.Body.String())
+	}
+}
+
+// --- DELETE /api/checkpoints/{label} ---
+
+func TestCheckpointDelete_Success200(t *testing.T) {
+	var gotLabel string
+	ckpt := &fakeCheckpointService{deleteFn: func(label string) error {
+		gotLabel = label
+		return nil
+	}}
+	mux, _ := newTestMux(&fakeProposalReader{}, &fakeProposalService{}, ckpt)
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/checkpoints/demo", nil)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body: %s)", rec.Code, rec.Body.String())
+	}
+	if ckpt.deleteCalls != 1 {
+		t.Errorf("Delete called %d times, want 1", ckpt.deleteCalls)
+	}
+	if gotLabel != "demo" {
+		t.Errorf("Delete label = %q, want %q (path wildcard not bound)", gotLabel, "demo")
+	}
+	if body := rec.Body.String(); !strings.Contains(body, `"status":"deleted"`) {
+		t.Errorf("body = %s, want it to contain \"status\":\"deleted\"", body)
+	}
+}
+
+func TestCheckpointDelete_NotFoundReturns404(t *testing.T) {
+	ckpt := &fakeCheckpointService{deleteFn: func(string) error {
+		return checkpoint.ErrNotFound
+	}}
+	mux, _ := newTestMux(&fakeProposalReader{}, &fakeProposalService{}, ckpt)
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/checkpoints/no-such-label", nil)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404 (body: %s)", rec.Code, rec.Body.String())
+	}
+}
+
+func TestCheckpointDelete_InvalidLabelReturns400(t *testing.T) {
+	ckpt := &fakeCheckpointService{deleteFn: func(string) error {
+		return checkpoint.ErrInvalidLabel
+	}}
+	mux, _ := newTestMux(&fakeProposalReader{}, &fakeProposalService{}, ckpt)
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/checkpoints/bad-label", nil)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (body: %s)", rec.Code, rec.Body.String())
 	}
 }
 

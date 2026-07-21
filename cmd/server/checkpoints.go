@@ -19,6 +19,7 @@ import (
 type checkpointService interface {
 	Create(ctx context.Context, label string) (checkpoint.Manifest, error)
 	Restore(ctx context.Context, label string) error
+	Delete(ctx context.Context, label string) error
 	List() ([]checkpoint.Manifest, error)
 }
 
@@ -85,5 +86,22 @@ func newCheckpointRestoreHandler(cs checkpointService) http.HandlerFunc {
 			return
 		}
 		writeJSON(w, http.StatusOK, statusResponse{Status: "restored"})
+	}
+}
+
+// newCheckpointDeleteHandler builds the DELETE /api/checkpoints/{label}
+// handler: it removes the named checkpoint's directory and all its
+// artifacts. No request body is required. An unknown label is mapped to
+// 404 and an unsafe label to 400 by mapEngineError (checkpoint.ErrNotFound
+// / checkpoint.ErrInvalidLabel), before any path is touched.
+func newCheckpointDeleteHandler(cs checkpointService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		label := r.PathValue("label")
+
+		if err := cs.Delete(r.Context(), label); err != nil {
+			mapEngineError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, statusResponse{Status: "deleted"})
 	}
 }

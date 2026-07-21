@@ -61,6 +61,9 @@
 #   make restore     # POST /api/checkpoints/{LABEL}/restore against the
 #                     # running server — clears and re-imports the graph and
 #                     # swaps the SQLite file back to the checkpointed copy.
+#   make delete-checkpoint # DELETE /api/checkpoints/{LABEL} against the
+#                     # running server — removes data/checkpoints/{LABEL}/
+#                     # and all its artifacts.
 #   make frontend    # builds the SvelteKit static assets (npm ci && npm run
 #                     # build) into webapp/build/, the directory cmd/server
 #                     # embeds via `//go:embed all:build` (see
@@ -70,7 +73,7 @@
 #                     # compose build server` always embeds a fresh frontend;
 #                     # run this target directly for a host-side Go build.
 
-.PHONY: up down load-seed load-nist ingest link extract mine ingest-safety test-repo test chat demo-density checkpoint restore frontend
+.PHONY: up down load-seed load-nist ingest link extract mine ingest-safety test-repo test chat demo-density checkpoint restore delete-checkpoint frontend
 
 # GraphDB's published host port (see docker-compose.yml, service "graphdb").
 GRAPHDB_URL ?= http://localhost:7200
@@ -186,6 +189,10 @@ checkpoint:
 restore:
 	@echo "==> restoring checkpoint '$(LABEL)' via $(SERVER_URL)/api/checkpoints/$(LABEL)/restore (run 'make up' first)"
 	curl -sS -X POST "$(SERVER_URL)/api/checkpoints/$(LABEL)/restore"
+
+delete-checkpoint:
+	@echo "==> deleting checkpoint '$(LABEL)' via $(SERVER_URL)/api/checkpoints/$(LABEL) (run 'make up' first)"
+	curl -sS -X DELETE "$(SERVER_URL)/api/checkpoints/$(LABEL)"
 
 frontend:
 	@echo "==> building frontend (npm ci && npm run build) into webapp/build/ (embedded by cmd/server)"
