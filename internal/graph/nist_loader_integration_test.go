@@ -42,6 +42,7 @@ import (
 
 	"github.com/blogem/msr-graph/internal/graph"
 	"github.com/blogem/msr-graph/internal/store"
+	"github.com/blogem/msr-graph/internal/testutil"
 )
 
 const (
@@ -71,11 +72,19 @@ const (
 // process environment, following seed_integration_test.go's runLoaderSeed
 // pattern (generalized to any subcommand and env var set, since `nist`
 // additionally needs MSR_DB_PATH pointed at a temp SQLite file).
+//
+// GRAPHDB_REPO is pinned to the resolved test repo (testutil.TestRepo,
+// GRAPHDB_TEST_REPO, default "msr-test" -- the same repo requireGraphDB(t)
+// already vetted) AFTER extraEnv, so it wins even if a caller's extraEnv
+// happens to set its own GRAPHDB_REPO. This guarantees every runLoader call
+// site -- seed and nist alike -- targets the disposable test repo and never
+// falls back to cmd/loader's production "msr" default.
 func runLoader(t *testing.T, subcommand string, extraEnv ...string) {
 	t.Helper()
 	cmd := exec.Command("go", "run", "./cmd/loader", subcommand)
 	cmd.Dir = repoRoot(t)
 	cmd.Env = append(os.Environ(), extraEnv...)
+	cmd.Env = append(cmd.Env, "GRAPHDB_REPO="+testutil.TestRepo(os.Getenv))
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("`go run ./cmd/loader %s` failed: %v\noutput:\n%s", subcommand, err, out)

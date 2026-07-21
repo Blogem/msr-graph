@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/blogem/msr-graph/internal/graph"
+	"github.com/blogem/msr-graph/internal/testutil"
 )
 
 // repoRoot locates the module root from this test file's own path so the
@@ -39,15 +40,20 @@ func repoRoot(t *testing.T) string {
 // their named graphs and ensures urn:msr:staging exists without touching
 // existing content.
 //
-// Assumption: the loader reads its GraphDB endpoint from the GRAPHDB_URL
-// env var, consistent with the rest of the D6 contract. The loader CLI is
-// not implemented yet (lands in a later wave), so this exact configuration
-// mechanism is not pinned anywhere -- confirm it once cmd/loader exists.
+// The loader reads its GraphDB endpoint from the GRAPHDB_URL env var and its
+// target repo from GRAPHDB_REPO (defaulting to "msr" if unset -- see
+// cmd/loader/config.go). This pins GRAPHDB_REPO to the same resolved test
+// repo the enclosing requireGraphDB(t) already vetted (testutil.TestRepo,
+// GRAPHDB_TEST_REPO, default "msr-test"), so the subprocess never falls back
+// to writing into the production "msr" repo.
 func runLoaderSeed(t *testing.T, baseURL string) {
 	t.Helper()
 	cmd := exec.Command("go", "run", "./cmd/loader", "seed")
 	cmd.Dir = repoRoot(t)
-	cmd.Env = append(os.Environ(), "GRAPHDB_URL="+baseURL)
+	cmd.Env = append(os.Environ(),
+		"GRAPHDB_URL="+baseURL,
+		"GRAPHDB_REPO="+testutil.TestRepo(os.Getenv),
+	)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("`go run ./cmd/loader seed` failed: %v\noutput:\n%s", err, out)

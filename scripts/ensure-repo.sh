@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
-# ensure-repo.sh — idempotent check-then-create of the GraphDB repository
-# "msr" via GraphDB's REST API, using the vendored repo-config TTL
+# ensure-repo.sh — idempotent check-then-create of a GraphDB repository via
+# GraphDB's REST API, using the vendored repo-config TTL
 # (deploy/graphdb/msr-repo-config.ttl). Runs from the HOST against the
 # published GraphDB port (see docker-compose.yml, service "graphdb").
 #
@@ -16,15 +16,33 @@
 #     (http://rdf4j.org/schema/rdf4j#SHACLShapeGraph) so a fresh stack
 #     enforces shapes with no manual step (design D2, D4.1/4.2).
 #
+# Also (isolate-integration-test-repo, design D4):
+#   - REPO_ID selects which repository to ensure (default "msr", so `make
+#     up`'s existing call is unchanged). For any REPO_ID other than "msr",
+#     the vendored config is copied to a tempfile with `rep:repositoryID
+#     "msr"` swapped to the chosen id (SHACL is fixed at repo-creation time,
+#     so the id must be baked into the POSTed config), and the tempfile is
+#     cleaned up on exit;
+#   - REPO_RESET=1 drops the repository first (DELETE
+#     /rest/repositories/{REPO_ID}, tolerating 200/204/404) so each
+#     `make test-repo` run starts from a clean repo. Guarded so it can NEVER
+#     drop "msr": REPO_ID=msr together with REPO_RESET=1 fails loudly.
+#
 # Usage: scripts/ensure-repo.sh
 # Env:   GRAPHDB_URL (default http://localhost:7200)
+#        REPO_ID      (default msr)
+#        REPO_RESET   (default unset/0; "1" drops REPO_ID before creating —
+#                      refused when REPO_ID=msr)
 #
-# Called by `make up` after GraphDB reports healthy.
+# Called by `make up` (REPO_ID=msr, the default) after GraphDB reports
+# healthy, and by `make test-repo` (REPO_ID=msr-test REPO_RESET=1) to
+# provision the disposable integration-test repository.
 
 set -euo pipefail
 
 GRAPHDB_URL="${GRAPHDB_URL:-http://localhost:7200}"
-REPO_ID="msr"
+REPO_ID="${REPO_ID:-msr}"
+REPO_RESET="${REPO_RESET:-0}"
 SHACL_SHAPES_GRAPH="http://rdf4j.org/schema/rdf4j#SHACLShapeGraph"
 # URL-encoded form of the reserved shapes-graph IRI above, for the Graph
 # Store Protocol endpoint's `?graph=` query parameter.
@@ -41,6 +59,63 @@ SHAPES_UNITS_FILE="${REPO_ROOT}/deploy/graphdb/msr-shapes-units.ttl"
 if [[ ! -f "${REPO_CONFIG}" ]]; then
   echo "ensure-repo: repo config not found at ${REPO_CONFIG}" >&2
   exit 1
+fi
+
+# Single cleanup trap for every tempfile this script creates (the
+# non-"msr" config copy below, and the create-response body further down),
+# so multiple `trap ... EXIT` calls can't clobber each other.
+TMP_FILES=()
+cleanup_tmp_files() {
+  local f
+  # Guard the expansion with a length check rather than relying on
+  # "${arr[@]:-}" alone: bash 3.2 (still the default /usr/bin/env bash on
+  # macOS) treats "${arr[@]}" on an empty array as an unbound-variable
+  # error under `set -u` regardless of the ":-" fallback.
+  if [[ "${#TMP_FILES[@]}" -gt 0 ]]; then
+    for f in "${TMP_FILES[@]}"; do
+      rm -f "${f}"
+    done
+  fi
+}
+trap cleanup_tmp_files EXIT
+
+# REPO_RESET guard (D4): never allow a reset to touch the real "msr" repo.
+if [[ "${REPO_RESET}" == "1" ]]; then
+  if [[ "${REPO_ID}" == "msr" ]]; then
+    echo "ensure-repo: ERROR — REPO_RESET=1 with REPO_ID=msr is refused." >&2
+    echo "ensure-repo: resetting/dropping the production 'msr' repository is" >&2
+    echo "ensure-repo: never allowed via this flag. Use a non-'msr' REPO_ID" >&2
+    echo "ensure-repo: (e.g. REPO_ID=msr-test, as 'make test-repo' does)." >&2
+    exit 1
+  fi
+
+  echo "ensure-repo: REPO_RESET=1 — dropping repository '${REPO_ID}' if it exists..."
+  reset_status="$(
+    curl -sS -o /dev/null -w '%{http_code}' \
+      -X DELETE "${GRAPHDB_URL}/rest/repositories/${REPO_ID}"
+  )"
+  case "${reset_status}" in
+    200|204|404) : ;;
+    *)
+      echo "ensure-repo: failed to drop repository '${REPO_ID}' before reset (HTTP ${reset_status})" >&2
+      exit 1
+      ;;
+  esac
+  echo "ensure-repo: repository '${REPO_ID}' dropped (or did not already exist)."
+fi
+
+# Resolve the config to POST on create. SHACL is fixed at repo-creation
+# time, so for any REPO_ID other than "msr" the vendored config's
+# `rep:repositoryID "msr"` must be swapped to the chosen id before it is
+# POSTed — done via a tempfile copy so deploy/graphdb/msr-repo-config.ttl
+# itself is never touched.
+if [[ "${REPO_ID}" == "msr" ]]; then
+  REPO_CONFIG_ACTIVE="${REPO_CONFIG}"
+else
+  REPO_CONFIG_ACTIVE="$(mktemp)"
+  TMP_FILES+=("${REPO_CONFIG_ACTIVE}")
+  sed "s/rep:repositoryID \"msr\"/rep:repositoryID \"${REPO_ID}\"/" \
+    "${REPO_CONFIG}" > "${REPO_CONFIG_ACTIVE}"
 fi
 
 # ---------------------------------------------------------------------------
@@ -86,16 +161,16 @@ if grep -Eq "\"id\"[[:space:]]*:[[:space:]]*\"${REPO_ID}\"" <<<"${existing_repos
 
   echo "ensure-repo: repository '${REPO_ID}' is SHACL-enabled — no-op on create."
 else
-  echo "ensure-repo: repository '${REPO_ID}' not found — creating from ${REPO_CONFIG}..."
+  echo "ensure-repo: repository '${REPO_ID}' not found — creating from ${REPO_CONFIG_ACTIVE}..."
 
   # CREATE: POST /rest/repositories, multipart/form-data field "config".
   response_file="$(mktemp)"
-  trap 'rm -f "${response_file}"' EXIT
+  TMP_FILES+=("${response_file}")
 
   http_status="$(
     curl -sS -o "${response_file}" -w '%{http_code}' \
       -X POST "${GRAPHDB_URL}/rest/repositories" \
-      -F "config=@${REPO_CONFIG};type=text/turtle"
+      -F "config=@${REPO_CONFIG_ACTIVE};type=text/turtle"
   )"
 
   response_body="$(cat "${response_file}" 2>/dev/null || true)"
