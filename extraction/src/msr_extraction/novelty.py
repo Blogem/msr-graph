@@ -696,7 +696,9 @@ def enumerate_lexical_terms(
     return {term: list(bucket.values()) for term, bucket in terms.items()}
 
 
-def read_miss_candidates(reports: list[str], config: Config) -> list[Candidate]:
+def read_miss_candidates(
+    reports: list[str], config: Config, *, genre: str = "chemistry"
+) -> list[Candidate]:
     """Read chunk-6 `status:"novel"` records from each report's `mentions.jsonl`.
 
     Each retained record becomes a ``source="miss"`` :class:`Candidate`
@@ -705,10 +707,18 @@ def read_miss_candidates(reports: list[str], config: Config) -> list[Candidate]:
     :class:`Evidence` item carries the report, document IRI, and the
     record's absolute ``char_start``/``char_end`` offsets. A missing
     ``mentions.jsonl`` is logged as a warning and skipped, not an error.
+
+    For ``genre="safety"`` (chunk 11 / ingest-iaea-safety), records are
+    read from ``config.safety_mentions_path(report)`` (written by the
+    safety linker) instead of ``config.mentions_path(report)`` (the
+    chemistry corpus), mirroring :func:`enumerate_spacy_terms`/
+    :func:`enumerate_lexical_terms`'s genre switch -- the default
+    ``genre="chemistry"`` path is byte-identical to before this parameter
+    existed.
     """
     candidates: list[Candidate] = []
     for report in reports:
-        path = config.mentions_path(report)
+        path = config.safety_mentions_path(report) if genre == "safety" else config.mentions_path(report)
         if not path.exists():
             logger.warning(
                 "mentions.jsonl missing for report %s at %s; skipping miss pass",
@@ -739,7 +749,9 @@ def read_miss_candidates(reports: list[str], config: Config) -> list[Candidate]:
     return candidates
 
 
-def build_exclusion_set(reader: GraphReader, reports: list[str], config: Config) -> ExclusionIndex:
+def build_exclusion_set(
+    reader: GraphReader, reports: list[str], config: Config, *, genre: str = "chemistry"
+) -> ExclusionIndex:
     """Build the normalization/token-sequence-aware exclusion index (design D2/4.1).
 
     Sources ALL core labels the `GraphReader` exposes: every label of every
@@ -751,7 +763,11 @@ def build_exclusion_set(reader: GraphReader, reports: list[str], config: Config)
     adds no graph parameters of its own and staging/proposal are never
     consulted. Also folds in every ``status:"linked"`` record's
     ``surface_form`` from each report's `mentions.jsonl` (chunk 6's own
-    already-resolved mentions).
+    already-resolved mentions) -- for ``genre="safety"``, from
+    ``config.safety_mentions_path(report)`` (written by the safety linker)
+    instead of ``config.mentions_path(report)``, mirroring the same genre
+    switch used elsewhere in this module; the default ``genre="chemistry"``
+    path is byte-identical to before this parameter existed.
 
     Ontology/concept labels (`entity.kind` `"concept"`/`"class"`) are
     normalized via :func:`_normalize_token_sequence` (casefold + camelCase
@@ -800,7 +816,7 @@ def build_exclusion_set(reader: GraphReader, reports: list[str], config: Config)
         _index_label(label)
 
     for report in reports:
-        path = config.mentions_path(report)
+        path = config.safety_mentions_path(report) if genre == "safety" else config.mentions_path(report)
         if not path.exists():
             logger.warning(
                 "mentions.jsonl missing for report %s at %s; skipping exclusion scan",
@@ -909,17 +925,24 @@ def mine_candidates(
        via the spaCy noun-chunk pass (:func:`enumerate_spacy_terms`);
        otherwise log the fallback and use the prior lexical n-gram pass
        (:func:`enumerate_lexical_terms`, design D5). Either way, also read
-       the unchanged chunk-6 salt-formula misses
-       (:func:`read_miss_candidates`). ``genre`` is threaded to
-       :func:`enumerate_spacy_terms`/:func:`enumerate_lexical_terms` so
+       the chunk-6 salt-formula misses (:func:`read_miss_candidates`).
+       ``genre`` is threaded to :func:`enumerate_spacy_terms`/
+       :func:`enumerate_lexical_terms`/:func:`read_miss_candidates` so
        ``genre="safety"`` reads segments from the safety cache
-       (``config.safety_segments_path``) and relaxes the noun-chunk window
+       (``config.safety_segments_path``), relaxes the noun-chunk window
        to ``config.safety_max_chunk_tokens`` while preserving the
-       noun-chunk head phrase (prepositions intact) -- ``genre="chemistry"``
-       (the default) is byte-identical to before this parameter existed.
+       noun-chunk head phrase (prepositions intact), and reads miss
+       candidates from ``config.safety_mentions_path`` (written by the
+       safety linker) instead of ``config.mentions_path`` --
+       ``genre="chemistry"`` (the default) is byte-identical to before
+       this parameter existed.
     2. **Harden-exclude.** Drop any candidate whose term is `in`
        :func:`build_exclusion_set`'s :class:`ExclusionIndex` (normalization/
-       token-sequence aware, design D2) -- unchanged for both genres.
+       token-sequence aware, design D2). ``genre`` is threaded here too so
+       ``genre="safety"`` folds in ``status:"linked"`` surface forms from
+       ``config.safety_mentions_path`` instead of ``config.mentions_path``
+       -- the core-vocab/role-reactor-label sourcing is unchanged for both
+       genres.
     3. **Cost-bound, not rank.** Score the survivors' document frequency
        (:func:`score_document_frequency`) over the genre's corpus --
        ``config.archive_dir`` for chemistry (unchanged), ``config.safety_dir``
@@ -967,8 +990,20 @@ def mine_candidates(
             term: tuple(evidence) for term, evidence in lexical_terms.items()
         }
 
-    miss_candidates = read_miss_candidates(reports, config)
-    exclusion = build_exclusion_set(reader, reports, config)
+    # See the NOTE above the `enumerate_lexical_terms` call site: `genre` is
+    # passed only when non-default, for the identical monkeypatch-compat
+    # reason -- `read_miss_candidates` is monkeypatched with a fixed
+    # 2-positional-arg test double in the chemistry-genre test suite.
+    miss_candidates = (
+        read_miss_candidates(reports, config, genre=genre)
+        if genre != "chemistry"
+        else read_miss_candidates(reports, config)
+    )
+    exclusion = (
+        build_exclusion_set(reader, reports, config, genre=genre)
+        if genre != "chemistry"
+        else build_exclusion_set(reader, reports, config)
+    )
 
     enumerated_count = len(lexical_evidence) + len(miss_candidates)
 

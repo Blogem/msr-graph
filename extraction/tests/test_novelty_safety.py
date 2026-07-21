@@ -267,3 +267,82 @@ def test_single_token_noise_never_surfaces_as_its_own_candidate(tmp_path) -> Non
 
     assert "the" not in terms
     assert "system" not in terms
+
+
+# --- Genre-threading regression (review fix): the safety-genre mentions ---
+# path (`config.safety_mentions_path`), not the chemistry-genre one, must
+# be what `build_exclusion_set`/`read_miss_candidates` actually read for
+# genre="safety". Prior to this fix, both functions unconditionally called
+# `config.mentions_path`, so a safety-genre `mentions.jsonl` written by
+# `_write_mentions` above (which already targets
+# `config.safety_mentions_path`, per this module's earlier reconciliation
+# note) was silently never read: a `status:"linked"` span could never
+# exclude anything, and a `status:"novel"` span could never surface as a
+# miss candidate, under genre="safety".
+
+
+def test_safety_linked_mention_excludes_matching_candidate(tmp_path) -> None:
+    """A `status:"linked"` span in the safety `mentions.jsonl` must exclude
+    its matching term from the safety candidate set -- proving
+    `build_exclusion_set(..., genre="safety")` actually reads
+    `config.safety_mentions_path`, not the (untouched, chemistry-genre)
+    `config.mentions_path`."""
+    config = Config(corpus_dir=tmp_path, salience_threshold=0)
+    _write_curated_report(config, REPORT, [HEAT_REMOVAL_SHORT_SENTENCE])
+    _write_mentions(
+        config,
+        REPORT,
+        [
+            {
+                "status": "linked",
+                "surface_form": "reactor safety",
+                "char_start": 0,
+                "char_end": 14,
+            }
+        ],
+    )
+
+    candidates = mine_candidates(
+        config, _empty_reader(), reports=[REPORT], nlp=_NLP, genre="safety"
+    )
+    terms = [c.term for c in candidates]
+
+    # "reactor safety" (the linked, already-known mention) is excluded...
+    assert not any("reactor" in term and "safety" in term for term in terms)
+    # ...but the sibling "effective heat removal" candidate from the same
+    # sentence is untouched, proving the exclusion targeted only the
+    # linked term rather than wiping the whole candidate set.
+    assert any("heat" in term and "removal" in term for term in terms)
+
+
+def test_safety_novel_mention_feeds_a_miss_candidate(tmp_path) -> None:
+    """A `status:"novel"` span in the safety `mentions.jsonl` must surface
+    as its own `source="miss"` candidate -- proving
+    `read_miss_candidates(..., genre="safety")` actually reads
+    `config.safety_mentions_path`, not the (untouched, chemistry-genre)
+    `config.mentions_path`."""
+    config = Config(corpus_dir=tmp_path, salience_threshold=0)
+    _write_curated_report(config, REPORT, [NOISE_SENTENCE])
+    _write_mentions(
+        config,
+        REPORT,
+        [
+            {
+                "status": "novel",
+                "surface_form": "xenon poisoning",
+                "char_start": 5,
+                "char_end": 20,
+            }
+        ],
+    )
+
+    candidates = mine_candidates(
+        config, _empty_reader(), reports=[REPORT], nlp=_NLP, genre="safety"
+    )
+    by_term = {c.term: c for c in candidates}
+
+    assert "xenon poisoning" in by_term
+    match = by_term["xenon poisoning"]
+    assert match.source == "miss"
+    assert len(match.evidence) == 1
+    assert match.evidence[0].document_iri == f"{MSRD}{REPORT}"
