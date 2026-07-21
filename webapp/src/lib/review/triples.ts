@@ -14,6 +14,19 @@ export function localName(iri: string): string {
 	return idx === -1 || idx === iri.length - 1 ? iri : iri.slice(idx + 1);
 }
 
+/** Renders a corpus identifier as a short friendly label for the queue's
+ * cross-corpus badge and the detail view's observation breakdown
+ * (review-ui spec, design D7): the server emits a corpus as an absolute
+ * IRI (e.g. `https://w3id.org/msr-kg/data#corpus-chemistry`), but a CURIE
+ * form (`msrd:corpus-chemistry`) is tolerated too -- both reduce to
+ * `chemistry`. Falls back to the input unchanged if it doesn't look like
+ * a `corpus-*` identifier at all. */
+export function corpusLabel(corpus: string): string {
+	const name = localName(corpus);
+	const withoutPrefix = name.includes(':') ? (name.split(':').pop() ?? name) : name;
+	return withoutPrefix.replace(/^corpus-/i, '');
+}
+
 // A delimiter for joining a triple's subject/predicate/object into one
 // map key (tripleKey below). Built via String.fromCharCode rather than
 // an inline character literal so the delimiter can never collide with
