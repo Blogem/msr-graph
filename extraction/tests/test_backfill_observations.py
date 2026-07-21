@@ -282,6 +282,36 @@ def test_backfill_tags_scanned_documents_with_corpus(tmp_path) -> None:
 # --- no fabricated observations for a non-matching term ------------------
 
 
+def test_backfill_types_the_run_activity_before_writing_observations(tmp_path) -> None:
+    """Code-review follow-up: every observation carries `msr:observedInRun
+    <urn:msr:run:mine/backfill>`, so that run node must actually be typed
+    `a prov:Activity` (mirrors `mine_runner.run_mine`'s ordering discipline
+    -- the stable + per-run Activity writes happen before any fact write).
+    Asserts both the stable per-pipeline typing and the per-run node's
+    typing appear among the generated updates, and that they are sent
+    before the first observation-bearing update (index-order proxy for
+    "written first")."""
+    config = Config(corpus_dir=tmp_path)
+    _write_archive_docs(config, {f"{REPORT_DOC_A}.txt": "keepterm here"})
+
+    reader = FakeReader([StagedProposal(proposal_iri=_proposal_iri("keepterm"), kind="property", term="keepterm")])
+    sparql = FakeSparqlClient()
+
+    run_backfill(config, reader=reader, sparql=sparql)
+
+    text = _combined_text(sparql)
+    assert "msrd:activity-mine a prov:Activity" in text  # stable per-pipeline typing
+    assert "<urn:msr:run:mine/backfill> a prov:Activity" in text  # per-run node typing
+
+    activity_index = next(
+        i for i, update in enumerate(sparql.updates) if "<urn:msr:run:mine/backfill> a prov:Activity" in update
+    )
+    observation_index = next(
+        i for i, update in enumerate(sparql.updates) if "msr:hasObservation" in update
+    )
+    assert activity_index < observation_index
+
+
 def test_backfill_writes_nothing_for_a_proposal_term_with_zero_hits(tmp_path) -> None:
     """A proposal whose stored term no longer matches anything in the cached
     corpora (e.g. corpus drift) must not fabricate an observation -- no

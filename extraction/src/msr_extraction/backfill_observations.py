@@ -58,6 +58,7 @@ import logging
 from dataclasses import dataclass
 
 from msr_extraction import documents, novelty, proposals
+from msr_extraction import mine_provenance as mp
 from msr_extraction.config import Config
 from msr_extraction.corpora import CORPUS_CHEMISTRY, CORPUS_SAFETY
 from msr_extraction.graph_reader import GraphReader
@@ -161,9 +162,25 @@ def run_backfill(
     No LLM/triage call is made and no corpus is re-acquired: every read is
     either a graph SELECT (`read_change_proposals`) or a scan of already-
     cached corpus text on disk (`novelty.score_document_observations`).
+
+    Mirrors `mine_runner.run_mine`'s ordering discipline: the stable
+    per-pipeline Activity typing (`msrd:activity-mine` in `urn:msr:data`)
+    and the per-run Activity *node* (`<urn:msr:run:mine/{run_ts}>` in
+    `urn:msr:provenance`) are written *before* any observation/tag/delete,
+    so every `msr:observedInRun` edge this backfill emits references a run
+    IRI that is actually typed `a prov:Activity` -- closing the same crash
+    window `_cmd_link`/`run_mine` close (a fact referencing an untyped run
+    node). Because `run_ts` is the fixed `BACKFILL_RUN_TS` token by default,
+    both writes are themselves idempotent (`write_activity` emits
+    fixed-timestamp triples keyed by the fixed run IRI, and
+    `write_stable_activity` is timestamp-free by construction) -- re-running
+    the backfill still leaves triple counts stable.
     """
     reader = reader if reader is not None else GraphReader.from_config(config)
     sparql = sparql if sparql is not None else SparqlClient.from_config(config)
+
+    mp.write_stable_activity(sparql)
+    mp.write_activity(run_ts, sparql)
 
     staged = reader.read_change_proposals()
     logger.info("backfill: %d staged proposal(s) to process", len(staged))
