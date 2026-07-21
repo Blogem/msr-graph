@@ -17,22 +17,26 @@ funnel):
    guard (co-mention without a stated dependency yields no edge) +
    two-phase-safe rejection of an unknown/not-yet-approved target.
 
-ASSUMPTION (pass-1, flagged for reconciliation at merge): none of
-``edges.ServedByEdge``/``edges.AddressesFunctionEdge``/
-``edges.served_by_edge_triples``/``edges.addresses_function_edge_triples``,
-nor ``relations.validate_relation``'s "served_by_property"/
-"addresses_function" kind branches, nor ``KnownSets.safety_functions``/
-``.requirements``, exist yet on this isolated pass-1 branch. Every test
-below is written against the pinned contract (design.md D4, tasks 4.1-4.3,
-mirroring the existing ``RoleEdge``/``ReactorEdge`` + "role"/"reactor" kind
-conventions) rather than any implementation, and is expected to fail with
-a collection error (edges-layer tests) or a ValueError/assertion failure
-(relations-layer tests, since ``validate_relation`` itself already exists
-and currently has no "served_by_property"/"addresses_function" branch) --
-NOT a shared identical failure mode, but both are pass-1-expected.
-``relations.extract_relations`` itself is already-landed and genre-agnostic
-(no ``kind`` dispatch inside it), so the co-mention-no-edge test exercises
-real, already-existing code.
+RECONCILED (pass-2, merge with the real ``relations.py``/``edges.py``):
+the pass-1 draft above assumed the two safety kinds would be named
+``"served_by_property"``/``"addresses_function"`` (snake_case), mirroring
+"role"/"reactor". The real ``validate_relation`` dispatches on
+``"servedByProperty"``/``"addressesFunction"`` (camelCase) instead --
+confirmed against ``relations.py``'s ``RelationRecord.relation_kind``
+docstring and the "kind == ..." branches. The four relation-layer tests
+below that named the wrong kind string are updated to the real strings;
+every assertion (closed-set rejection, disposition, "no salt field")
+is unchanged from the pass-1 intent since it was always written against
+the acceptance scenario, not a guessed mechanism. The
+``test_extract_report_safety_genre_writes_to_the_safety_relations_trace``
+fixture also wrote its segments/mentions to the chemistry-genre paths
+(``config.segments_path``/``config.mentions_path``); ``extract_report(...,
+genre="safety")`` reads ``config.safety_segments_path``/
+``config.safety_mentions_path`` instead (confirmed in ``relations.
+select_sentences``), so the fixture now writes there. The edges-layer
+tests (``ServedByEdge``/``AddressesFunctionEdge``/``served_by_edge_triples``/
+``addresses_function_edge_triples``) already matched the real
+``edges.py`` API byte-for-byte and needed no changes.
 """
 
 from __future__ import annotations
@@ -215,7 +219,7 @@ def test_served_by_property_relation_is_written_when_property_is_known() -> None
     """Scenario: "Stated dependency produces an edge" -- a servedByProperty
     relation targeting an existing seed PhysicalProperty validates."""
     raw = {
-        "kind": "served_by_property",
+        "kind": "servedByProperty",
         "safety_function": SAFETY_FUNCTION,
         "property": SPECIFIC_HEAT,
         "confidence": 0.9,
@@ -231,7 +235,7 @@ def test_served_by_property_relation_is_rejected_for_unknown_property() -> None:
     """Scenario basis: "Each edge's PhysicalProperty target MUST already
     exist in core; an edge to an unknown property IRI SHALL be rejected"."""
     raw = {
-        "kind": "served_by_property",
+        "kind": "servedByProperty",
         "safety_function": SAFETY_FUNCTION,
         "property": UNKNOWN_PROPERTY,
         "confidence": 0.9,
@@ -249,7 +253,7 @@ def test_served_by_property_relation_never_carries_a_salt_reference() -> None:
     field the writer could use to assert a SafetyFunction->MoltenSalt
     edge."""
     raw = {
-        "kind": "served_by_property",
+        "kind": "servedByProperty",
         "safety_function": SAFETY_FUNCTION,
         "property": SPECIFIC_HEAT,
         "confidence": 0.9,
@@ -266,7 +270,7 @@ def test_addresses_function_relation_is_written_when_target_is_approved() -> Non
     SafetyFunction has been approved into core (present in
     known.safety_functions), the edge validates."""
     raw = {
-        "kind": "addresses_function",
+        "kind": "addressesFunction",
         "requirement": REQUIREMENT,
         "safety_function": SAFETY_FUNCTION,
         "confidence": 0.85,
@@ -283,7 +287,7 @@ def test_addresses_function_relation_is_rejected_when_target_not_yet_approved() 
     exactly as the closed-set validation rejects any relation naming an
     entity absent from core."""
     raw = {
-        "kind": "addresses_function",
+        "kind": "addressesFunction",
         "requirement": REQUIREMENT,
         "safety_function": UNKNOWN_SAFETY_FUNCTION,
         "confidence": 0.85,
@@ -300,7 +304,7 @@ def test_below_threshold_served_by_property_relation_is_skipped_not_written() ->
     or reification node is written; the relation is recorded with
     disposition:"skipped"."""
     raw = {
-        "kind": "served_by_property",
+        "kind": "servedByProperty",
         "safety_function": SAFETY_FUNCTION,
         "property": SPECIFIC_HEAT,
         "confidence": 0.1,
@@ -350,7 +354,11 @@ def test_extract_report_safety_genre_writes_to_the_safety_relations_trace(tmp_pa
     already provides this path), mirroring write_relations_jsonl's
     contract for the chemistry genre."""
     config = Config(corpus_dir=tmp_path)
-    segments_path = config.segments_path(REPORT)
+    # extract_report(..., genre="safety") reads segments/mentions via
+    # select_sentences's safety-genre branch -- config.safety_segments_path/
+    # config.safety_mentions_path, NOT the chemistry-genre config.segments_path/
+    # config.mentions_path (confirmed against relations.select_sentences).
+    segments_path = config.safety_segments_path(REPORT)
     segments_path.parent.mkdir(parents=True, exist_ok=True)
     sentence_text = "Heat capacity is needed for natural circulation cooling of the core."
     with segments_path.open("w", encoding="utf-8") as fh:
@@ -366,7 +374,7 @@ def test_extract_report_safety_genre_writes_to_the_safety_relations_trace(tmp_pa
             )
             + "\n"
         )
-    mentions_path = config.mentions_path(REPORT)
+    mentions_path = config.safety_mentions_path(REPORT)
     mentions_path.parent.mkdir(parents=True, exist_ok=True)
     with mentions_path.open("w", encoding="utf-8") as fh:
         fh.write(
@@ -388,7 +396,7 @@ def test_extract_report_safety_genre_writes_to_the_safety_relations_trace(tmp_pa
         )
 
     raw_relation = {
-        "kind": "served_by_property",
+        "kind": "servedByProperty",
         "safety_function": SAFETY_FUNCTION,
         "property": SPECIFIC_HEAT,
         "confidence": 0.9,

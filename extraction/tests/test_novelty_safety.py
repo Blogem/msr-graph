@@ -6,34 +6,34 @@ convention as ``test_novelty.py``'s ``_NLP``) injected via
 ``mine_candidates(..., nlp=_NLP, genre="safety")`` -- no live GraphDB, no
 live model.
 
-ASSUMPTION (pass-1, flagged in the tester handoff report for
-reconciliation at merge): ``novelty.mine_candidates`` does not yet accept
-a ``genre`` keyword on this isolated pass-1 branch (task 3.1: "relax the
-1-3 content-token window ... for the safety genre", driven by the
-``config.safety_max_chunk_tokens`` field the Wave-1 config plumbing
-already added). Every test below is written against that pinned contract,
-not against any implementation, and is expected to fail (either a
-TypeError on the unrecognized ``genre=`` kwarg, or an assertion failure)
-until the coder's change lands.
+RECONCILED (pass-2, merge with the real ``novelty.py``): the coder's
+landed implementation resolved the pass-1 "IMPORTANT FINDING" below in
+full -- ``_merge_prepositional_chunks`` bridges adjacent ``doc.noun_chunks``
+across a single intervening ``ADP`` (preposition) token, and
+``_survivor_span_tokens`` preserves that preposition in the emitted term,
+so all four phrases (including the three PP-spanning ones) genuinely
+surface as candidates under ``genre="safety"``, exactly as this file's
+assertions expect. No BEHAVIOR_MISMATCH here.
 
-IMPORTANT FINDING (surfaced to the orchestrator in the tester handoff
-report, not silently worked around): a dry run of the REAL
-``en_core_web_sm`` pipeline against this file's own fixture sentences
-(recorded below) shows ``doc.noun_chunks`` never spans a prepositional
-attachment -- "confinement of radioactive material" tokenizes into TWO
-separate noun chunks ("confinement" and "radioactive material"), never
-one. Widening ``_MAX_CHUNK_TOKENS`` alone (design.md D3's literal
-"relax the content-token window" wording) cannot make these two acceptance
-scenarios pass: the fundamental-safety-function phrases "confinement of
-radioactive material", "control of reactivity", and "removal of residual
-heat" would need adjacent-chunk merging across a single preposition token,
-not just a wider per-chunk window. Only "heat removal" (no intervening
-preposition; 2 content tokens) is achievable with a pure window widen.
-The tests below assert the literal acceptance-criteria outcome (the spec
-text, not design.md's mechanism sketch) for all four phrases, so a
-window-only implementation will pass the "heat removal" test but is
-expected to fail the three PP-spanning ones -- a genuine BEHAVIOR_MISMATCH
-gap for pass-2 to report, not a test bug to soften.
+The only reconciliation needed was this file's own fixture-writer helper:
+it wrote ``segments.jsonl``/``mentions.jsonl``/``normalized.txt`` to the
+chemistry-genre paths (``config.segments_path``/``config.mentions_path``/
+``config.normalized_path``), but ``mine_candidates(..., genre="safety")``
+reads segments via ``config.safety_segments_path`` and scores document
+frequency over ``config.safety_dir`` (confirmed in ``novelty.
+enumerate_spacy_terms``/``score_document_frequency``). The helper below
+now writes to ``config.safety_segments_path`` instead. It also no longer
+writes a ``normalized.txt`` sidecar: unlike the chemistry genre (where
+``archive_dir`` -- the document-frequency scan root -- is a sibling of,
+not the same tree as, each report's own artifact dir), the safety genre's
+DF scan root (``config.safety_dir``) IS the same tree that
+``config.safety_report_dir`` nests each source's artifacts under, so a
+``normalized.txt`` written there would leak into the report's own
+document-frequency corpus scan (``_build_corpus_index`` globs every
+``*.txt`` under ``safety_dir`` recursively) -- ``mine_candidates`` never
+reads ``normalized_path`` itself, so dropping that write changes nothing
+these tests assert while keeping the DF-floor test (salience_threshold=1)
+honest.
 """
 
 from __future__ import annotations
@@ -81,6 +81,14 @@ NOISE_SENTENCE = "The system was checked."
 
 
 def _write_curated_report(config: Config, report: str, sentences: list[str]) -> None:
+    """Write the safety-genre ``segments.jsonl`` fixture for ``report``.
+
+    Deliberately does NOT write a ``normalized.txt`` sidecar (see the
+    module docstring's reconciliation note): ``mine_candidates`` never
+    reads ``safety_normalized_path``, and writing one would leak into
+    ``score_document_frequency``'s ``config.safety_dir`` corpus scan for
+    ``genre="safety"``.
+    """
     segments = []
     offset = 0
     for index, sentence in enumerate(sentences):
@@ -99,19 +107,16 @@ def _write_curated_report(config: Config, report: str, sentences: list[str]) -> 
         )
         offset = end
 
-    normalized_text = " ".join(sentences)
-    normalized_path = config.normalized_path(report)
-    normalized_path.parent.mkdir(parents=True, exist_ok=True)
-    normalized_path.write_text(normalized_text, encoding="utf-8")
-
-    with config.segments_path(report).open("w", encoding="utf-8") as fh:
+    segments_path = config.safety_segments_path(report)
+    segments_path.parent.mkdir(parents=True, exist_ok=True)
+    with segments_path.open("w", encoding="utf-8") as fh:
         for seg in segments:
             fh.write(json.dumps(seg))
             fh.write("\n")
 
 
 def _write_mentions(config: Config, report: str, records: list[dict]) -> None:
-    path = config.mentions_path(report)
+    path = config.safety_mentions_path(report)
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8") as fh:
         for record in records:
