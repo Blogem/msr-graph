@@ -6,7 +6,7 @@
 
 ## 1. Safety-source acquisition (`safety-source-acquisition`)
 
-- [ ] 1.1 Confirm `scripts/fetch-safety-sources.sh` (already added) populates the gitignored `data/safety/` cache with the four sources; make it idempotent (skip present files)
+- [x] 1.1 Confirm `scripts/fetch-safety-sources.sh` (already added) populates the gitignored `data/safety/` cache with the four sources; make it idempotent (skip present files)
 - [ ] 1.2 Author the committed attributed manifest (source id, title, publisher, rights, `dcterms:source` URL, date, ingested section/page scope) in the extraction package; SRS-123 scoped to §2.1.2.5 / §3.2 / §5.1.8, the GIF/ORNL docs whole
 - [ ] 1.3 Implement `safety extract`: pypdf text extraction per cached PDF → `data/safety/{id}.txt`, honoring the manifest's section/page scope; add `pypdf` (+ `cryptography` for the encrypted IAEA PDF) to `pyproject.toml`
 - [ ] 1.4 Run the chunk-5 normalizer + segmenter over the extracted text → `data/safety/{id}/normalized.txt` + `segments.jsonl` (reuse, do not fork, the chunk-5 code)
@@ -34,7 +34,7 @@
 ## 5. Provenance & SHACL (extends chunks 12–13)
 
 - [ ] 5.1 Confirm safety documents/mentions/individuals/edge-reification-nodes carry the chunk-12 provenance edges (reuse the shared `provenance.py` writer; no new provenance model)
-- [ ] 5.2 Extend the `shacl-validation` catalogue Turtle (reserved shapes graph): add `SafetyFunction`/`Requirement` provenance shapes (`wasDerivedFrom` + `wasGeneratedBy`), a `servedByProperty`-target-must-be-`PhysicalProperty` shape, and an `addressesFunction`-target-must-be-`SafetyFunction` shape. **No new mention shape** — safety `Mention`s are already covered by the landed `Mention` shape. No threshold/satisfaction shape
+- [x] 5.2 Extend the `shacl-validation` catalogue Turtle (reserved shapes graph): add `SafetyFunction`/`Requirement` provenance shapes (`wasDerivedFrom` + `wasGeneratedBy`), a `servedByProperty`-target-must-be-`PhysicalProperty` shape, and an `addressesFunction`-target-must-be-`SafetyFunction` shape. **No new mention shape** — safety `Mention`s are already covered by the landed `Mention` shape. No threshold/satisfaction shape
 
 ## 6. Agent safety answers (`analysis-agent`)
 
