@@ -105,6 +105,13 @@ class Config:
     # re-resolve every layer-5 surface via the model, rewriting the store
     # (persist-disambiguation-cache D4). Env MSR_DISAMBIG_REFRESH.
     disambig_cache_refresh: bool = False
+    # Chunk 11 (ingest-iaea-safety D3, task 3.1) — the safety genre's
+    # noun-chunk candidate window for the novelty miner. Safety concepts are
+    # longer prepositional phrases ("confinement of radioactive material",
+    # "removal of residual heat") than the chemistry default of 3 surviving
+    # content tokens allows, so this genre gets its own (relaxed) window.
+    # Override with MSR_SAFETY_MAX_CHUNK_TOKENS.
+    safety_max_chunk_tokens: int = 6
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> Config:
@@ -153,6 +160,9 @@ class Config:
             disambig_cache_refresh=(
                 env.get("MSR_DISAMBIG_REFRESH", "").strip().lower()
                 in ("1", "true", "yes")
+            ),
+            safety_max_chunk_tokens=int(
+                env.get("MSR_SAFETY_MAX_CHUNK_TOKENS", cls.safety_max_chunk_tokens)
             ),
         )
 
@@ -216,3 +226,37 @@ class Config:
     def qudt_units_path(self) -> Path:
         """Path to the QUDT unit allowlist consulted by relation extraction."""
         return self.ontology_dir / "qudt-units.json"
+
+    @property
+    def safety_dir(self) -> Path:
+        """The gitignored safety-source cache dir (chunk 11 D1).
+
+        Rooted alongside ``corpus_dir`` off the shared data root (mirroring
+        how :attr:`archive_dir` is rooted off ``corpus_dir``), so overriding
+        ``MSR_CORPUS_DIR`` moves both caches together.
+        """
+        return self.corpus_dir.parent / "safety"
+
+    def safety_text_path(self, source_id: str) -> Path:
+        """Path to the pypdf-extracted raw text for a safety source (D1/1.3)."""
+        return self.safety_dir / f"{source_id}.txt"
+
+    def safety_report_dir(self, source_id: str) -> Path:
+        """Directory holding the processed artifacts for a safety source."""
+        return self.safety_dir / source_id
+
+    def safety_normalized_path(self, source_id: str) -> Path:
+        """Path to the chunk-5 normalized text for a safety source."""
+        return self.safety_report_dir(source_id) / "normalized.txt"
+
+    def safety_segments_path(self, source_id: str) -> Path:
+        """Path to the chunk-5 segmented-text artifact for a safety source."""
+        return self.safety_report_dir(source_id) / "segments.jsonl"
+
+    def safety_mentions_path(self, source_id: str) -> Path:
+        """Path to the chunk-6 mention/miss artifact for a safety source."""
+        return self.safety_report_dir(source_id) / "mentions.jsonl"
+
+    def safety_relations_path(self, source_id: str) -> Path:
+        """Path to the chunk-7 relation-extraction artifact for a safety source."""
+        return self.safety_report_dir(source_id) / "relations.jsonl"
