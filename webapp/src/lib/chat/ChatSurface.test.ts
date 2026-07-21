@@ -406,6 +406,55 @@ describe('ChatSurface - onboarding (redesign 5.2)', () => {
 	});
 });
 
+describe('ChatSurface - reasoning disclosure', () => {
+	beforeEach(() => {
+		vi.unstubAllGlobals();
+	});
+
+	it('shows reasoning in a collapsed Thinking section, out of the answer bubble', async () => {
+		const turn: TraceEvent[] = [
+			{ type: 'reasoning', reasoning: 'Let me compute the density coefficients.' },
+			{ type: 'text', text: 'The density is 2.5 g/cc.' },
+			{ type: 'answer', answer: { grounded: true } },
+			{ type: 'done' }
+		];
+		vi.stubGlobal('fetch', vi.fn().mockResolvedValue(mockChatResponse(turn)));
+
+		render(ChatSurface);
+		await sendMessage('What is the density of FLiBe?');
+
+		const disclosure = await screen.findByTestId('reasoning-disclosure');
+		expect(disclosure).toHaveTextContent('compute the density coefficients');
+		// A collapsible <details> that starts collapsed.
+		expect(disclosure.tagName.toLowerCase()).toBe('details');
+		expect((disclosure as HTMLDetailsElement).open).toBe(false);
+
+		// Reasoning must NOT bleed into the answer bubble.
+		const assistantMessage = screen
+			.getAllByTestId('chat-message')
+			.find((el) => el.getAttribute('data-role') === 'assistant');
+		const content = assistantMessage?.querySelector('.message-content');
+		expect(content?.textContent).toContain('2.5 g/cc');
+		expect(content?.textContent).not.toContain('compute the density coefficients');
+
+		// Reasoning is not routed through the trace timeline either.
+		const timeline = await screen.findByTestId('trace-timeline');
+		const eventTypes = within(timeline)
+			.getAllByTestId('trace-event')
+			.map((el) => el.getAttribute('data-event-type'));
+		expect(eventTypes).not.toContain('reasoning');
+	});
+
+	it('renders no Thinking disclosure for a turn without reasoning', async () => {
+		vi.stubGlobal('fetch', vi.fn().mockResolvedValue(mockChatResponse(FULL_TURN_EVENTS)));
+
+		render(ChatSurface);
+		await sendMessage('What is the density of FLiBe?');
+
+		expect(screen.queryByTestId('reasoning-disclosure')).not.toBeInTheDocument();
+	});
+});
+
 describe('ChatSurface - copy-answer action (redesign 5.4a)', () => {
 	const originalClipboard = (navigator as Navigator & { clipboard?: unknown }).clipboard;
 

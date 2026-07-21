@@ -55,6 +55,14 @@ export interface TextTraceEvent {
 	text: string;
 }
 
+/** A `reasoning` trace event: the model's chain-of-thought, surfaced
+ * separately from the answer text (internal/agent/events.go EventReasoning).
+ * Rendered in a collapsible "Thinking" section, never in the answer bubble. */
+export interface ReasoningTraceEvent {
+	type: 'reasoning';
+	reasoning: string;
+}
+
 /** A `tool_call` trace event: the tool name/args the model requested. */
 export interface ToolCallTraceEvent {
 	type: 'tool_call';
@@ -115,6 +123,7 @@ export interface UnknownTraceEvent {
  * mirroring chunk-4's schema, plus the raw fallback for anything else. */
 export type TraceEvent =
 	| TextTraceEvent
+	| ReasoningTraceEvent
 	| ToolCallTraceEvent
 	| ToolResultTraceEvent
 	| ScriptRunTraceEvent

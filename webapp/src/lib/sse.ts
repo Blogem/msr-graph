@@ -21,6 +21,7 @@ import type { ChatMessage, TraceEvent } from './types';
  * gracefully"). */
 const KNOWN_TRACE_EVENT_TYPES = new Set([
 	'text',
+	'reasoning',
 	'tool_call',
 	'tool_result',
 	'script_run',

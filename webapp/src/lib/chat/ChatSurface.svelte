@@ -21,8 +21,15 @@
 		role: 'user' | 'assistant';
 		content: string;
 		/** Present only for assistant turns; the ordered trace events for
-		 * that turn (design D4 "events are appended as they arrive"). */
+		 * that turn (design D4 "events are appended as they arrive").
+		 * Reasoning events are excluded -- they accumulate into `reasoning`
+		 * instead (chat-ui spec "Model reasoning shown in a collapsible
+		 * section"). */
 		trace?: TraceEvent[];
+		/** Accumulated chain-of-thought from `reasoning` events, shown in a
+		 * collapsed "Thinking" disclosure separate from the answer bubble.
+		 * Empty/absent when the turn carried no reasoning. */
+		reasoning?: string;
 		expanded?: boolean;
 		/** True from the moment the assistant turn is created until its
 		 * stream completes or errors (chat-ui spec "In-progress streaming
@@ -67,7 +74,14 @@
 		// the outgoing request body.
 		const requestMessages = toHistory(turns);
 
-		turns.push({ role: 'assistant', content: '', trace: [], expanded: true, streaming: true });
+		turns.push({
+			role: 'assistant',
+			content: '',
+			reasoning: '',
+			trace: [],
+			expanded: true,
+			streaming: true
+		});
 		// Re-obtain the just-pushed turn from the reactive `turns` array
 		// itself rather than holding onto the plain object literal above:
 		// in Svelte 5, pushing a plain object into a `$state` array wraps
@@ -81,6 +95,14 @@
 
 		try {
 			await streamChat(requestMessages, (event: TraceEvent) => {
+				// Reasoning is surfaced in its own collapsible "Thinking"
+				// section, so it is kept out of both the answer bubble and
+				// the trace timeline (chat-ui spec "Model reasoning shown in
+				// a collapsible section"). Handle it before the trace push.
+				if ('reasoning' in event) {
+					assistantTurn.reasoning = (assistantTurn.reasoning ?? '') + event.reasoning;
+					return;
+				}
 				assistantTurn.trace?.push(event);
 				// `'text' in event` / `'error' in event` (rather than
 				// `event.type === '...'`) narrows the union down to exactly
@@ -160,6 +182,14 @@
 				<li class="chat-message" data-testid="chat-message" data-role={turn.role}>
 					<div class="message-role">{turn.role}</div>
 					{#if turn.role === 'assistant'}
+						{#if turn.reasoning}
+							<details class="reasoning" data-testid="reasoning-disclosure">
+								<summary>Thinking</summary>
+								<div class="reasoning-body" data-testid="reasoning-body">
+									{@html renderMarkdown(turn.reasoning)}
+								</div>
+							</details>
+						{/if}
 						<div class="message-content">{@html renderMarkdown(turn.content)}</div>
 						{#if turn.streaming}
 							<span class="streaming-indicator" data-testid="streaming-indicator" aria-hidden="true"

@@ -18,6 +18,13 @@ describe('parseTraceEventData', () => {
 		expect(event).toEqual({ type: 'text', text: 'hello' });
 	});
 
+	it('parses a reasoning event as a typed event (not a raw fallback)', () => {
+		const payload = { type: 'reasoning', reasoning: 'step one' };
+		const event = parseTraceEventData(JSON.stringify(payload));
+		expect(event).toEqual(payload);
+		expect('raw' in event).toBe(false);
+	});
+
 	it('parses a tool_call event', () => {
 		const payload = { type: 'tool_call', tool_call: { id: 't1', name: 'sparql_query', arguments: '{}' } };
 		const event = parseTraceEventData(JSON.stringify(payload));
