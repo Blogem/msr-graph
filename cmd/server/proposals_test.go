@@ -278,7 +278,11 @@ func asSlice(t *testing.T, v any, field string) []any {
 
 func newTestMux(reader graphReader, prop proposalService, ckpt checkpointService) (http.Handler, *chatStub) {
 	stub := &chatStub{}
-	return newMux(stub, reader, prop, ckpt), stub
+	// newMux gained a static-frontend handler param in
+	// openspec/changes/web-frontend (chunk 10, task 6.3); a plain 404 stub
+	// is enough here since none of these tests exercise "/" or the static
+	// routing (that's static_test.go, task 8.6).
+	return newMux(stub, reader, prop, ckpt, http.NotFoundHandler()), stub
 }
 
 // --- 1. Queue filtering + JSON shape (task 5.5 scenario 1) ---
