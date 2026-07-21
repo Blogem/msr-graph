@@ -1,16 +1,16 @@
 ## 1. Project scaffold
 
-- [ ] 1.1 Initialize a SvelteKit + TypeScript project in `webapp/` (Vite, `@sveltejs/adapter-static` with `fallback: index.html`, build output to a directory the Go embed reads, e.g. `webapp/build/`)
-- [ ] 1.2 Add vitest + `@testing-library/svelte` as dev dependencies and a `test` script
-- [ ] 1.3 Update `.gitignore`/`.dockerignore` to exclude `webapp/node_modules` and the build output (keep any committed embed placeholder tracked)
-- [ ] 1.4 Add the app shell layout with client-side navigation across the three surfaces (chat `/`, review `/review`, admin `/admin`)
+- [x] 1.1 Initialize a SvelteKit + TypeScript project in `webapp/` (Vite, `@sveltejs/adapter-static` with `fallback: index.html`, build output to a directory the Go embed reads, e.g. `webapp/build/`)
+- [x] 1.2 Add vitest + `@testing-library/svelte` as dev dependencies and a `test` script
+- [x] 1.3 Update `.gitignore`/`.dockerignore` to exclude `webapp/node_modules` and the build output (keep any committed embed placeholder tracked)
+- [x] 1.4 Add the app shell layout with client-side navigation across the three surfaces (chat `/`, review `/review`, admin `/admin`)
 
 ## 2. Typed API client and SSE parser (`webapp/src/lib`)
 
-- [ ] 2.1 Create a single `lib/api.ts` typed client wrapping the chunk-9 proposal + checkpoint endpoints, typed to the concrete merged shapes (design D7): queue `{proposals:[{id,kind,status,term,docFrequency}]}`; detail `{id,triples[],evidence[],neighborhood[]}` (triple `{subject,predicate,object,objectType,datatype?,lang?}`, evidence `{text,citedIn,startOffset,endOffset}`); edit `PUT …/graph` body `{triples:"<full serialized graph>"}` (whole-graph replace); approve `POST …/approve` body `{reviewer,timestamp}` (empty body → 400); reject `POST …/reject` (no body); checkpoints list `{checkpoints:[{label,ontology_version}]}`, create `POST` body `{label}` → 201 manifest, restore `POST …/{label}/restore`. Every call mockable.
-- [ ] 2.2 Define the `TraceEvent` discriminated union mirroring the chunk-4 SSE schema (`text | tool_call | tool_result | script_run | provenance | answer | done`) plus a raw fallback for unknown types
-- [ ] 2.3 Implement `streamChat(messages, onEvent)` using `fetch` + `response.body.getReader()`, buffering across chunk boundaries and splitting on complete SSE frames into `TraceEvent`s
-- [ ] 2.4 Parse the typed error body `{error, message, violations?}`: map `400` (bad_request/invalid_label), `404` (not_found), `409` (invalid_transition), and the SHACL `422` with `violations[]` (each `{focusNode,constraint,shape,path,message}`) so callers can render legible messages
+- [x] 2.1 Create a single `lib/api.ts` typed client wrapping the chunk-9 proposal + checkpoint endpoints, typed to the concrete merged shapes (design D7): queue `{proposals:[{id,kind,status,term,docFrequency}]}`; detail `{id,triples[],evidence[],neighborhood[]}` (triple `{subject,predicate,object,objectType,datatype?,lang?}`, evidence `{text,citedIn,startOffset,endOffset}`); edit `PUT …/graph` body `{triples:"<full serialized graph>"}` (whole-graph replace); approve `POST …/approve` body `{reviewer,timestamp}` (empty body → 400); reject `POST …/reject` (no body); checkpoints list `{checkpoints:[{label,ontology_version}]}`, create `POST` body `{label}` → 201 manifest, restore `POST …/{label}/restore`. Every call mockable.
+- [x] 2.2 Define the `TraceEvent` discriminated union mirroring the chunk-4 SSE schema (`text | tool_call | tool_result | script_run | provenance | answer | done`) plus a raw fallback for unknown types
+- [x] 2.3 Implement `streamChat(messages, onEvent)` using `fetch` + `response.body.getReader()`, buffering across chunk boundaries and splitting on complete SSE frames into `TraceEvent`s
+- [x] 2.4 Parse the typed error body `{error, message, violations?}`: map `400` (bad_request/invalid_label), `404` (not_found), `409` (invalid_transition), and the SHACL `422` with `violations[]` (each `{focusNode,constraint,shape,path,message}`) so callers can render legible messages
 
 ## 3. Chat surface (`chat-ui`)
 
@@ -39,16 +39,16 @@
 
 ## 6. Server embed and static serving (`frontend-app-shell`)
 
-- [ ] 6.1 Add a `//go:embed` of the built frontend directory to the server (mirroring `internal/store`'s embed precedent); commit a minimal placeholder so `go build` succeeds before a local frontend build
-- [ ] 6.2 Add a static-asset + SPA-fallback handler serving embedded files, with `index.html` fallback for non-`/api`, non-`/healthz` `GET`s that match no asset
-- [ ] 6.3 Register the handler on the merged `newMux(chat, gr, ps, cs)` in `cmd/server/handler.go` at the root pattern (`/`) and thread it through the `main.go` call site; do not alter chunk 9's params or its Go 1.22 method-scoped `/api/*` routes (they win by specificity regardless of order)
-- [ ] 6.4 In the static handler, explicitly return `404` for any path beginning with `/api/` (the `/` catch-all would otherwise serve the SPA for an unknown `/api/*` path)
+- [x] 6.1 Add a `//go:embed` of the built frontend directory to the server (mirroring `internal/store`'s embed precedent); commit a minimal placeholder so `go build` succeeds before a local frontend build
+- [x] 6.2 Add a static-asset + SPA-fallback handler serving embedded files, with `index.html` fallback for non-`/api`, non-`/healthz` `GET`s that match no asset
+- [x] 6.3 Register the handler on the merged `newMux(chat, gr, ps, cs)` in `cmd/server/handler.go` at the root pattern (`/`) and thread it through the `main.go` call site; do not alter chunk 9's params or its Go 1.22 method-scoped `/api/*` routes (they win by specificity regardless of order)
+- [x] 6.4 In the static handler, explicitly return `404` for any path beginning with `/api/` (the `/` catch-all would otherwise serve the SPA for an unknown `/api/*` path)
 
 ## 7. Build wiring
 
-- [ ] 7.1 Add a Makefile target that builds the frontend (`npm ci && npm run build`) into the Go embed directory
-- [ ] 7.2 Add a Dockerfile node build stage before the Go build stage so embedded assets exist at compile time; produce the single `server` binary with the frontend embedded
-- [ ] 7.3 Ensure the existing `make build`/image build path runs the frontend build first (ordering enforced)
+- [x] 7.1 Add a Makefile target that builds the frontend (`npm ci && npm run build`) into the Go embed directory
+- [x] 7.2 Add a Dockerfile node build stage before the Go build stage so embedded assets exist at compile time; produce the single `server` binary with the frontend embedded
+- [x] 7.3 Ensure the existing `make build`/image build path runs the frontend build first (ordering enforced)
 
 ## 8. Tests
 
