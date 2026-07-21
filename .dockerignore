@@ -5,7 +5,8 @@ docs
 docker
 deploy
 extraction
-webapp
+webapp/node_modules
+webapp/build
 data
 testdata
 *.md
