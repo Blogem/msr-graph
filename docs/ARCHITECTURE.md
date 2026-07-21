@@ -215,15 +215,19 @@ per-(proposal × document × mining run) evidence model:
   current view is the *latest* observation per (proposal, document). They live in
   `urn:msr:staging` alongside the proposal — non-core, invisible to the analysis agent,
   same as the rest of the review metadata.
-- **Aggregates are computed at read time, never stored.** `GET /api/proposals` and the
-  proposal-detail endpoint derive `documentFrequency` (distinct documents with a latest
-  observation), `totalOccurrences` (sum of latest per-document `occurrenceCount`),
-  `corpusCount`, and `corpora[]` from a proposal's observations via `GROUP BY`/`SAMPLE` in
-  the queue SPARQL (`cmd/server/proposals.go`). This is the root-cause fix: with nothing
-  stored to duplicate, a proposal resolves to **exactly one queue row** regardless of how
-  many mining runs or corpora contributed observations. The detail endpoint additionally
-  returns the observation breakdown grouped by corpus → per document (document, corpus,
-  latest `occurrenceCount`, first/last observed).
+- **Aggregates are computed at read time, never stored.** The queue SPARQL
+  (`cmd/server/proposals.go`) is a flat `SELECT` with an `OPTIONAL` join against each
+  proposal's observations — no SPARQL `GROUP BY`/`SAMPLE` — so a proposal with N
+  observations comes back as N rows sharing the same proposal id; Go application code
+  (`proposalQueueAgg`) collapses those rows into one summary per proposal, taking the
+  latest observation per document (by max `generatedAtTime`) and deriving
+  `documentFrequency` (distinct documents), `totalOccurrences` (sum of latest per-document
+  `occurrenceCount`), `corpusCount`, and `corpora[]` from that latest-per-document set. This
+  is the root-cause fix: with nothing stored to duplicate, a proposal resolves to
+  **exactly one queue row** regardless of how many mining runs or corpora contributed
+  observations. The detail endpoint additionally returns the observation breakdown grouped
+  by corpus → per document (document, corpus, latest `occurrenceCount`, first/last
+  observed).
 - **Cross-corpus breadth is a reviewer signal, not an automated one.** A term attested in
   *independent* corpora (e.g. both the chemistry and safety corpora) is materially more
   likely to be a real domain concept than a single-corpus artifact, so the queue/detail
