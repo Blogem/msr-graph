@@ -31,6 +31,14 @@ VOC = "https://w3id.org/msr-kg/vocab#"
 # deliberately never included here.
 CORE_GRAPHS = ("urn:msr:ontology", "urn:msr:data", "urn:msr:vocab")
 
+# The staging graph the D4 backfill's staged-proposal reader deliberately
+# queries INSTEAD of :data:`CORE_GRAPHS` -- staged ``msr:ChangeProposal``
+# resources live here, never in the core dataset (proposal-observation-
+# provenance design.md D4/D6). This is the one reader in this module that
+# intentionally departs from the "core graphs only" restriction documented
+# above; every other query here stays core-only.
+STAGING_GRAPH = "urn:msr:staging"
+
 # SPARQL-JSON bindings: one dict per result row, var name -> {"value": ..., "type": ...}.
 Bindings = list[dict[str, dict[str, str]]]
 SelectFn = Callable[[str], Bindings]
@@ -107,6 +115,36 @@ SELECT ?c WHERE {
 }
 """
 
+# proposal-observation-provenance design.md D4/D6, task 4.1 -- the D4
+# backfill's staged-proposal reader. Reads every staged ``msr:ChangeProposal``
+# resource's own IRI plus its stored ``msr:kind``/``msr:term`` (the two
+# fields the backfill needs: `term` to re-match against the cached corpora,
+# `kind` to reproduce the deterministic ``msrd:obs-{kind}-{slug}-...``
+# observation IRI scheme). Deliberately does NOT select
+# ``msr:docFrequency`` -- that stale scalar is removed outright, never
+# read/reproduced by the backfill.
+_CHANGE_PROPOSALS_QUERY = """\
+PREFIX msr: <https://w3id.org/msr-kg/ontology#>
+SELECT ?proposal ?kind ?term WHERE {
+    ?proposal a msr:ChangeProposal ;
+        msr:kind ?kind ;
+        msr:term ?term .
+}
+"""
+
+# proposal-observation-provenance design.md D4/D6, task 4.3 -- counts the
+# stale ``msr:docFrequency`` scalar triples the backfill removes, so
+# :func:`msr_extraction.backfill_observations.run_backfill` can report an
+# accurate "docFrequency scalars removed" summary count without a second,
+# separate mechanism for that number to drift from what the DELETE actually
+# matches (same graph, same triple pattern).
+_DOC_FREQUENCY_COUNT_QUERY = """\
+PREFIX msr: <https://w3id.org/msr-kg/ontology#>
+SELECT (COUNT(*) AS ?n) WHERE {
+    ?proposal msr:docFrequency ?v .
+}
+"""
+
 
 @dataclass(frozen=True)
 class KnownEntity:
@@ -115,6 +153,22 @@ class KnownEntity:
     target_iri: str
     labels: tuple[str, ...]
     kind: str  # "concept" | "class" | "salt"
+
+
+@dataclass(frozen=True)
+class StagedProposal:
+    """One staged ``msr:ChangeProposal`` read from ``urn:msr:staging`` (D4 backfill).
+
+    ``proposal_iri`` is the resource's own full IRI exactly as SPARQL bound
+    it (not re-derived from ``kind``/``term`` via ``mining_types.term_slug``)
+    -- the backfill links its rebuilt observation nodes to this IRI
+    directly, so an existing proposal's resource identity can never drift
+    from what is actually in the graph.
+    """
+
+    proposal_iri: str
+    kind: str
+    term: str
 
 
 class GraphReader:
@@ -131,11 +185,21 @@ class GraphReader:
         query_endpoint: str,
         *,
         select_fn: SelectFn | None = None,
+        staging_select_fn: SelectFn | None = None,
         timeout: float = 30.0,
     ) -> None:
         self.query_endpoint = query_endpoint
         self.timeout = timeout
         self._select = select_fn if select_fn is not None else self._default_select
+        # proposal-observation-provenance design.md D4/D6, task 4.1: a
+        # SEPARATE injectable select path targeting `urn:msr:staging` alone
+        # (never `CORE_GRAPHS`), used only by :meth:`read_change_proposals`/
+        # :meth:`count_doc_frequency_scalars`. Additive keyword-only
+        # constructor param -- every existing caller/test that constructs a
+        # `GraphReader` without it is unaffected.
+        self._select_staging = (
+            staging_select_fn if staging_select_fn is not None else self._default_select_staging
+        )
 
     @classmethod
     def from_config(cls, config: Config) -> GraphReader:
@@ -165,6 +229,38 @@ class GraphReader:
         # of tuples as the request content stream, so the params must be
         # form-encoded explicitly and sent via `content=` instead.
         body = urlencode(self.build_query_params(query))
+        response = httpx.post(
+            self.query_endpoint,
+            content=body,
+            headers={
+                "Content-Type": "application/x-www-form-urlencoded",
+                "Accept": "application/sparql-results+json",
+            },
+            timeout=self.timeout,
+        )
+        response.raise_for_status()
+        return response.json()["results"]["bindings"]
+
+    def build_staging_query_params(self, query: str) -> list[tuple[str, str]]:
+        """Build the form-encoded params restricting a query to `urn:msr:staging` alone.
+
+        Mirrors :meth:`build_query_params`, but scopes `default-graph-uri` to
+        :data:`STAGING_GRAPH` instead of :data:`CORE_GRAPHS` -- staged
+        `msr:ChangeProposal` resources live only in `urn:msr:staging`
+        (proposal-observation-provenance design.md D4/D6), never in the core
+        dataset, so :meth:`read_change_proposals`/
+        :meth:`count_doc_frequency_scalars` must not use the core-graph
+        restriction the rest of this reader enforces.
+        """
+        return [("query", query), ("default-graph-uri", STAGING_GRAPH)]
+
+    def _default_select_staging(self, query: str) -> Bindings:
+        # deferred import, mirrors `_default_select` -- see that method's
+        # comment for why `content=` (not `data=`) is required for a
+        # repeated-param, form-encoded body.
+        import httpx
+
+        body = urlencode(self.build_staging_query_params(query))
         response = httpx.post(
             self.query_endpoint,
             content=body,
@@ -315,3 +411,42 @@ class GraphReader:
             for binding in bindings
             if binding.get("label") and binding["label"]["value"].strip()
         }
+
+    def read_change_proposals(self) -> list[StagedProposal]:
+        """Read every staged `msr:ChangeProposal`'s IRI, `kind`, and `term`.
+
+        Queries `urn:msr:staging` alone (via :meth:`build_staging_query_params`,
+        never :data:`CORE_GRAPHS`) -- this is the D4 backfill's read of
+        already-staged proposals (proposal-observation-provenance design.md
+        D4/task 4.1), so the backfill can re-scan the cached corpora keyed
+        on each proposal's stored `term` and link the rebuilt observations
+        to its *actual* resource IRI, rather than reconstructing one via
+        `mining_types.term_slug`. No triage/LLM call is involved -- this is
+        a plain SPARQL read. Results are sorted by `(term, kind,
+        proposal_iri)` for determinism, independent of SPARQL result order.
+        """
+        bindings = self._select_staging(_CHANGE_PROPOSALS_QUERY)
+        proposals = [
+            StagedProposal(
+                proposal_iri=binding["proposal"]["value"],
+                kind=binding["kind"]["value"],
+                term=binding["term"]["value"],
+            )
+            for binding in bindings
+        ]
+        proposals.sort(key=lambda p: (p.term, p.kind, p.proposal_iri))
+        return proposals
+
+    def count_doc_frequency_scalars(self) -> int:
+        """Count stale `msr:docFrequency` scalar triples still in `urn:msr:staging`.
+
+        Used only by the D4 backfill (`backfill_observations.run_backfill`)
+        to report an accurate "docFrequency scalars removed" summary count
+        for the same `DELETE WHERE` it subsequently issues (task 4.3). Reads
+        `urn:msr:staging` alone, mirroring :meth:`read_change_proposals`.
+        Returns ``0`` if the query yields no binding (nothing to count).
+        """
+        bindings = self._select_staging(_DOC_FREQUENCY_COUNT_QUERY)
+        if not bindings:
+            return 0
+        return int(bindings[0]["n"]["value"])
