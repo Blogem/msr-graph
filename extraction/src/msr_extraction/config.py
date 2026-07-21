@@ -112,6 +112,19 @@ class Config:
     # content tokens allows, so this genre gets its own (relaxed) window.
     # Override with MSR_SAFETY_MAX_CHUNK_TOKENS.
     safety_max_chunk_tokens: int = 6
+    # Post-chunk-11 mine-calibration fix — the safety genre's OWN
+    # document-frequency floor. `salience_threshold` (50) is sized for the
+    # 637-document msr-archive chemistry corpus; the safety corpus is a
+    # handful of curated IAEA/GIF/ORNL sources (as few as 4), so a
+    # candidate's document frequency there is bounded by the source count
+    # and never approaches 50 — reusing the chemistry floor for both genres
+    # zeroed every safety mining run's candidate set (every candidate fell
+    # below it). 1 means "appears in at least one safety document" is
+    # enough to reach triage: this genre's precision gate is the LLM triage
+    # step (design D3/D4), not the DF floor, mirroring the validated
+    # low-floor + LLM-triage-reject path from refine-mine-salience's own
+    # POC. Override with MSR_SAFETY_SALIENCE_THRESHOLD.
+    safety_salience_threshold: int = 1
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> Config:
@@ -163,6 +176,11 @@ class Config:
             ),
             safety_max_chunk_tokens=int(
                 env.get("MSR_SAFETY_MAX_CHUNK_TOKENS", cls.safety_max_chunk_tokens)
+            ),
+            safety_salience_threshold=int(
+                env.get(
+                    "MSR_SAFETY_SALIENCE_THRESHOLD", cls.safety_salience_threshold
+                )
             ),
         )
 
