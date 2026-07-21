@@ -27,9 +27,18 @@ so prepositional safety concepts ("confinement of radioactive material",
 "removal of residual heat") survive candidate enumeration as multi-word
 phrases rather than being reduced to a stopword-stripped lemma join; and
 (b) reads segments from ``config.safety_segments_path(report)`` and scores
-document frequency over ``config.safety_dir`` instead of the chemistry
-corpus paths (``config.segments_path``/``config.archive_dir``). The DF
-floor/ceiling values, the known/linked exclusion mechanism
+document frequency over one normalized text per source (chunk 11's
+follow-up mine-calibration fix: :func:`_build_safety_corpus_index` reads
+``config.safety_normalized_path(report)`` for each ``report``, NOT an
+``rglob`` over ``config.safety_dir`` -- that root also holds each source's
+raw ``{id}.txt``, so an ``rglob`` there double-counted every document)
+instead of the chemistry corpus paths (``config.segments_path``/
+``config.archive_dir``). The safety genre also gets its OWN,
+much-lower document-frequency floor (``config.safety_salience_threshold``,
+default 1, vs. the chemistry ``config.salience_threshold`` default of 50)
+-- the chemistry floor is sized for the 637-document msr-archive corpus,
+so reusing it for the 4-document safety corpus zeroed every candidate.
+The mine-max-candidates ceiling, the known/linked exclusion mechanism
 (:func:`build_exclusion_set`), and the curated-set evidence-sentence
 capture are reused unchanged by both genres.
 
@@ -49,19 +58,21 @@ multi-token label is not excluded). Staging and proposal graphs are never
 consulted -- the reader already excludes them, so this module deliberately
 adds no graph parameters of its own.
 
-Document frequency (:func:`score_document_frequency`, unchanged) is a
-**coarse cost bound only, never a novelty rank** (design D3 -- the POC
-showed DF does not separate genuine targets from common/known phrases):
-surviving candidates below ``config.salience_threshold`` (the floor) are
-dropped, and if more than ``config.mine_max_candidates`` (the ceiling)
+Document frequency (:func:`score_document_frequency`, chemistry-genre path
+unchanged) is a **coarse cost bound only, never a novelty rank** (design
+D3 -- the POC showed DF does not separate genuine targets from common/
+known phrases): surviving candidates below the genre's floor
+(``config.salience_threshold`` for chemistry, ``config.safety_salience_threshold``
+for safety -- see "Genre-aware mining" above) are dropped, and if more
+than ``config.mine_max_candidates`` (the ceiling, shared by both genres)
 survive, only the top-N by document frequency (deterministic
 ``(-doc_frequency, term)`` tie-break) are kept as a pure runaway guard on
 triage fan-out, with the cut count logged. No keyness/weirdness/TF-IDF
-ranking is computed anywhere in this module. Evidence (sentence text,
-source ``Document``, and offsets into that document's ``normalized.txt``)
-is drawn only from the curated ~12-report set, where those offsets and
-``msr:Document`` nodes exist, even though the frequency count itself spans
-all 637 documents.
+ranking is computed anywhere in this module. For chemistry, evidence
+(sentence text, source ``Document``, and offsets into that document's
+``normalized.txt``) is drawn only from the curated ~12-report set, where
+those offsets and ``msr:Document`` nodes exist, even though the frequency
+count itself spans all 637 documents.
 
 Everything here is deterministic: no dict-order reliance, all returned
 collections sorted for reproducibility (spaCy inference is deterministic at
@@ -845,17 +856,56 @@ def _build_corpus_index(archive_dir: Path) -> list[str]:
     return texts
 
 
+def _build_safety_corpus_index(config: Config, reports: list[str]) -> list[str]:
+    """Case-folded, per-source normalized text for the safety genre's DF scan
+    (post-chunk-11 mine-calibration fix: DF double-count).
+
+    Unlike the chemistry corpus scan (:func:`_build_corpus_index`, an
+    ``rglob("*.txt")`` over ``archive_dir``), ``config.safety_dir`` holds
+    BOTH each source's raw top-level ``{id}.txt`` (written by
+    ``safety_acquire.extract_pdf_text``) AND its per-source
+    ``{id}/normalized.txt`` (written by ``safety_acquire.normalize_and_segment``)
+    -- an ``rglob`` over that same root therefore matched both files for
+    every source, double-counting each of the (as few as 4) safety
+    documents and roughly doubling every candidate's document frequency.
+
+    This reads exactly ONE text per source instead --
+    ``config.safety_normalized_path(report)`` for each ``report`` in
+    `reports` -- so a term's document frequency is the count of DISTINCT
+    safety documents it appears in, never more than ``len(reports)``. A
+    missing normalized text for a report is logged as a warning and
+    skipped, not an error (mirrors every other per-report read in this
+    module).
+    """
+    texts: list[str] = []
+    for report in reports:
+        path = config.safety_normalized_path(report)
+        if not path.exists():
+            logger.warning(
+                "normalized.txt missing for safety source %s at %s; excluding "
+                "from document-frequency corpus",
+                report,
+                path,
+            )
+            continue
+        try:
+            texts.append(path.read_text(encoding="utf-8", errors="ignore").casefold())
+        except OSError:
+            logger.warning("could not read normalized text %s; excluding from corpus index", path)
+    return texts
+
+
 def score_document_frequency(
-    terms: set[str], config: Config, *, genre: str = "chemistry"
+    terms: set[str],
+    config: Config,
+    *,
+    genre: str = "chemistry",
+    reports: list[str] | None = None,
 ) -> dict[str, int]:
     """Document frequency of each term over the genre's full OCR/text corpus.
 
-    Builds the case-folded doc-text index once (via :func:`_build_corpus_index`
-    over the genre's corpus root -- ``config.archive_dir`` for
-    ``genre="chemistry"`` (the 637-document msr-archive corpus, unchanged),
-    or ``config.safety_dir`` (the safety cache) for ``genre="safety"``, chunk
-    11 / ingest-iaea-safety D3 task 3.1); for each document, generates that
-    document's own set of normalized n-gram terms via :func:`_terms_in_text`
+    Builds the case-folded doc-text index once; for each document, generates
+    that document's own set of normalized n-gram terms via :func:`_terms_in_text`
     -- the *same* ``_tokenize`` + ``_ngrams`` path :func:`enumerate_lexical_terms`
     uses to build candidate terms -- and intersects it against `terms` in one
     hash-set operation, incrementing each matched term's count. This is
@@ -865,6 +915,19 @@ def score_document_frequency(
     which is unusable at the full lexical-pass scale (hundreds of thousands
     of candidate terms over 637 documents took hours).
 
+    For ``genre="chemistry"`` (unchanged), the index is
+    :func:`_build_corpus_index` over ``config.archive_dir`` (the
+    637-document msr-archive corpus, an ``rglob("*.txt")``). For
+    ``genre="safety"`` (chunk 11 / ingest-iaea-safety D3 task 3.1, refined
+    by the post-chunk-11 mine-calibration fix), the index is instead
+    :func:`_build_safety_corpus_index`, which reads exactly one
+    (``config.safety_normalized_path``) text per `reports` entry rather
+    than globbing ``config.safety_dir`` -- an ``rglob`` there would match
+    both a source's raw top-level ``{id}.txt`` and its per-source
+    ``{id}/normalized.txt``, double-counting every document. `reports` is
+    required (non-``None``) for ``genre="safety"``; it is ignored for
+    ``genre="chemistry"``.
+
     Semantics note: because both sides come from the same normalized-token
     n-gram path, this is exact-match membership on normalized token n-grams,
     NOT substring containment. A term like ``"solubility"`` no longer
@@ -873,25 +936,29 @@ def score_document_frequency(
     old substring-based counts; the default ``salience_threshold`` (50) is
     robust to that shift.
 
-    If the genre's corpus root is missing or has no `.txt` sidecars, logs a
-    warning and returns ``{term: 0 for term in terms}`` rather than raising.
+    If the genre's corpus root is missing/empty (chemistry) or no source
+    has a readable normalized text (safety), logs a warning and returns
+    ``{term: 0 for term in terms}`` rather than raising.
     """
     if not terms:
         return {}
 
-    corpus_dir = config.safety_dir if genre == "safety" else config.archive_dir
-    if not corpus_dir.exists():
-        logger.warning(
-            "corpus dir %s does not exist; document-frequency scoring returns 0 for all terms",
-            corpus_dir,
-        )
-        return {term: 0 for term in terms}
+    if genre == "safety":
+        corpus_texts = _build_safety_corpus_index(config, reports or [])
+    else:
+        corpus_dir = config.archive_dir
+        if not corpus_dir.exists():
+            logger.warning(
+                "corpus dir %s does not exist; document-frequency scoring returns 0 for all terms",
+                corpus_dir,
+            )
+            return {term: 0 for term in terms}
+        corpus_texts = _build_corpus_index(corpus_dir)
 
-    corpus_texts = _build_corpus_index(corpus_dir)
     if not corpus_texts:
         logger.warning(
-            "corpus dir %s has no .txt sidecars; document-frequency scoring returns 0 for all terms",
-            corpus_dir,
+            "genre=%s corpus has no readable text; document-frequency scoring returns 0 for all terms",
+            genre,
         )
         return {term: 0 for term in terms}
 
@@ -945,14 +1012,23 @@ def mine_candidates(
        genres.
     3. **Cost-bound, not rank.** Score the survivors' document frequency
        (:func:`score_document_frequency`) over the genre's corpus --
-       ``config.archive_dir`` for chemistry (unchanged), ``config.safety_dir``
-       for safety; drop anything below the ``config.salience_threshold``
-       floor. If more than ``config.mine_max_candidates`` remain, keep only
-       the top-N by document frequency with a deterministic
+       ``config.archive_dir`` for chemistry (unchanged, an ``rglob`` over
+       the 637-document msr-archive corpus), or, for safety, exactly one
+       normalized text per `reports` entry (``config.safety_normalized_path``,
+       via :func:`_build_safety_corpus_index`) rather than an ``rglob`` over
+       ``config.safety_dir`` -- that root also holds each source's raw
+       ``{id}.txt``, so an ``rglob`` there double-counted every document
+       (post-chunk-11 mine-calibration fix). Drop anything below the
+       genre's floor -- ``config.safety_salience_threshold`` (default 1) for
+       safety, ``config.salience_threshold`` (default 50) for chemistry;
+       reusing the chemistry floor for both genres previously zeroed every
+       safety mining run, since the safety corpus's document count never
+       approaches 50. If more than ``config.mine_max_candidates`` remain,
+       keep only the top-N by document frequency with a deterministic
        ``(-doc_frequency, term)`` tie-break (a pure runaway guard on triage
        fan-out -- explicitly NOT a novelty ranking; no keyness/weirdness/
-       TF-IDF is computed anywhere in this module). The floor/ceiling
-       VALUES themselves are unchanged for both genres.
+       TF-IDF is computed anywhere in this module). The ceiling VALUE itself
+       is unchanged for both genres; only the floor is genre-specific.
     4. **Attach evidence.** Lexical/spaCy-sourced candidates carry the
        evidence collected during enumeration (plus, for spaCy candidates,
        the chunk's original `surface_form`); miss candidates keep the
@@ -1018,15 +1094,23 @@ def mine_candidates(
     # passed only when non-default, for the identical monkeypatch-compat
     # reason.
     frequencies = (
-        score_document_frequency(all_terms, config, genre=genre)
+        score_document_frequency(all_terms, config, genre=genre, reports=reports)
         if genre != "chemistry"
         else score_document_frequency(all_terms, config)
+    )
+
+    # Genre-aware DF floor (post-chunk-11 mine-calibration fix):
+    # `config.safety_salience_threshold` for the safety genre, otherwise
+    # unchanged `config.salience_threshold`. The chemistry-genre value/path
+    # is byte-identical to before this field existed.
+    salience_floor = (
+        config.safety_salience_threshold if genre == "safety" else config.salience_threshold
     )
 
     scored: list[Candidate] = []
     for term, evidence in surviving_lexical.items():
         doc_frequency = frequencies.get(term, 0)
-        if doc_frequency >= config.salience_threshold:
+        if doc_frequency >= salience_floor:
             scored.append(
                 Candidate(
                     term=term,
@@ -1038,7 +1122,7 @@ def mine_candidates(
             )
     for candidate in surviving_miss:
         doc_frequency = frequencies.get(candidate.term, 0)
-        if doc_frequency >= config.salience_threshold:
+        if doc_frequency >= salience_floor:
             scored.append(
                 Candidate(
                     term=candidate.term,
