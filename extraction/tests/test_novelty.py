@@ -763,9 +763,20 @@ def test_mine_candidates_does_not_exclude_staging_only_term_spacy_path(tmp_path)
 
 def test_mine_candidates_floor_drops_rare_term(monkeypatch, tmp_path) -> None:
     """Scenario: "A rare OCR one-off is dropped by the floor" -- enumeration
-    is monkeypatched away entirely (fixed lexical terms + fixed document
-    frequencies) so the floor comparison is exercised in isolation,
-    independent of spaCy/n-gram enumeration specifics."""
+    is monkeypatched away entirely (fixed lexical terms) so the floor
+    comparison is exercised against a REAL tmp fixture archive corpus,
+    independent of spaCy/n-gram enumeration specifics.
+
+    Reworked for proposal-observation-provenance (task 2.1/2.2): document
+    frequency is now DERIVED from the miner's real per-document
+    observation scan (`novelty.score_document_observations`), not a
+    monkeypatched `score_document_frequency` scalar -- a fabricated dict
+    no longer flows through to `Candidate.doc_frequency` once the
+    observation-derived value replaces it (`mine_candidates`'s Pass B).
+    So this test drives BOTH real scans over a small fixture archive where
+    "keepterm" genuinely appears in 3 documents (== threshold) and
+    "dropterm" in only 2 (== threshold - 1), keeping the original
+    boundary-test intent intact."""
     monkeypatch.setattr(novelty, "load_spacy_pipeline", _model_unavailable)
     monkeypatch.setattr(
         novelty,
@@ -773,17 +784,23 @@ def test_mine_candidates_floor_drops_rare_term(monkeypatch, tmp_path) -> None:
         lambda reports, cfg: _fixed_lexical_evidence(["keepterm", "dropterm"]),
     )
     monkeypatch.setattr(novelty, "read_miss_candidates", lambda reports, cfg: [])
-    monkeypatch.setattr(
-        novelty, "score_document_frequency", lambda terms, cfg: {"keepterm": 3, "dropterm": 2}
-    )
 
     config = Config(corpus_dir=tmp_path, salience_threshold=3, mine_max_candidates=100)
+    _write_archive_docs(
+        config,
+        {
+            "doc0.txt": "keepterm dropterm",
+            "doc1.txt": "keepterm dropterm",
+            "doc2.txt": "keepterm only",
+        },
+    )
 
     candidates = mine_candidates(config, _empty_reader(), reports=[REPORT])
     by_term = {c.term: c for c in candidates}
 
     assert "keepterm" in by_term
     assert by_term["keepterm"].doc_frequency == 3
+    assert len({obs.document_iri for obs in by_term["keepterm"].observations}) == 3
     assert "dropterm" not in by_term
 
 
