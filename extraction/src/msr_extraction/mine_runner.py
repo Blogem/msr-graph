@@ -216,10 +216,12 @@ def run_mine(
        split (`instance` candidates that resolve against neither core
        schema nor a proposal bundle are out of scope and dropped, logged).
     7. Write auto-accepted individuals (and their own generation edges).
-    8. Attribute every proposal resource and rides-with individual to the
-       run node via one batch of generation edges into
-       `urn:msr:provenance` (append-only; `write_auto_accepted` already
-       covers its own individuals).
+    8. Attribute every proposal resource, its observation nodes
+       (`proposals.ProposalBundle.observation_iris` --
+       `proposal-observation-provenance` design.md D1/D6), and any
+       rides-with individual to the run node via one batch of generation
+       edges into `urn:msr:provenance` (append-only; `write_auto_accepted`
+       already covers its own individuals).
     9. Return the run summary.
     """
     reader = reader if reader is not None else GraphReader.from_config(config)
@@ -372,6 +374,7 @@ def run_mine(
 
             proposals.write_proposal(bundle, sparql, extra_proposal_triples=extra_triples)
             fact_iris.append(bundle.proposal_iri)
+            fact_iris.extend(bundle.observation_iris)
             if rides_with_iri is not None:
                 fact_iris.append(rides_with_iri)
             proposals_by_kind[KIND_CLASS] = proposals_by_kind.get(KIND_CLASS, 0) + 1
@@ -389,6 +392,7 @@ def run_mine(
                 continue
             proposals.write_proposal(bundle, sparql)
             fact_iris.append(bundle.proposal_iri)
+            fact_iris.extend(bundle.observation_iris)
             proposals_by_kind[kind] = proposals_by_kind.get(kind, 0) + 1
             continue
 

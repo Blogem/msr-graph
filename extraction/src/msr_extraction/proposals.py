@@ -45,11 +45,13 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
+from msr_extraction import mine_provenance as mp
 from msr_extraction.mining_types import (
     KIND_CLASS,
     KIND_PROPERTY,
     KIND_RELATION,
     Evidence,
+    Observation,
     Placement,
     TriagedCandidate,
     local_name,
@@ -132,11 +134,20 @@ class ProposalBundle:
     #: ``urn:msr:proposal/{kind}-{slug}`` -- this proposal's dedicated graph.
     proposal_graph: str
     #: Turtle triple block (``msr:ChangeProposal`` resource + ``msr:Evidence``
-    #: nodes), destined for ``urn:msr:staging``.
+    #: nodes + ``msr:Observation`` nodes), destined for ``urn:msr:staging``.
     staging_triples: str
     #: Turtle triple block of the proposed TBox/instance axioms, destined
     #: for ``proposal_graph``. May be empty (e.g. a bare ``instance`` kind).
     proposal_graph_triples: str
+    #: Deterministic ``msrd:obs-{kind}-{slug}-{doc-slug}-{run-slug}`` CURIEs
+    #: for every observation node included in :attr:`staging_triples`
+    #: (empty if the candidate carried no observations). Exposed so a
+    #: caller (``mine_runner.run_mine``) can fold these into the run's
+    #: ``fact_iris`` batch, giving each observation node its own per-run
+    #: ``prov:wasGeneratedBy`` generation edge in ``urn:msr:provenance``
+    #: (chunk 12's pattern), alongside the ``msr:observedInRun`` edge
+    #: already embedded on the node itself.
+    observation_iris: tuple[str, ...] = ()
 
 
 def _proposal_iri(kind: str, slug: str) -> str:
@@ -160,34 +171,141 @@ def _evidence_block(evidence: Evidence) -> str:
     )
 
 
+def _doc_slug(document_iri: str) -> str:
+    """Return a deterministic, CURIE-safe slug for an observation's document id.
+
+    ``document_iri`` may be a bare full IRI (``Evidence.document_iri``'s
+    style, e.g. ``"https://w3id.org/msr-kg/data#ORNL-TM-2316"``) or an
+    already-short ``msrd:`` CURIE (``Observation.document_iri``'s style,
+    e.g. ``"msrd:ORNL-TM-2316"``). Either way this takes the trailing
+    segment after the last ``#``/``/`` (mirroring
+    ``mining_types.local_name``'s bracketed-IRI case, but for a bare,
+    unbracketed value) and runs it through ``mining_types.term_slug`` so
+    the result is always a valid CURIE local-name segment -- no
+    ``:``/``.``/other punctuation survives -- regardless of which
+    document-id spelling the caller used.
+    """
+    tail = document_iri
+    for sep in ("#", "/"):
+        if sep in tail:
+            tail = tail.rsplit(sep, 1)[-1]
+    return term_slug(tail)
+
+
+def _observation_iri(kind: str, slug: str, doc_slug: str, run_slug: str) -> str:
+    """Return the deterministic ``msrd:`` CURIE for one observation node.
+
+    ``msrd:obs-{kind}-{slug}-{doc-slug}-{run-slug}`` -- keyed by
+    (proposal, document, run) so re-writing the SAME run's observation is a
+    set-semantics no-op, while a NEW run (different ``run_slug``) mints a
+    new, additional observation IRI rather than colliding with a prior
+    run's node for the same document (design.md D1's append-only model).
+    """
+    return f"msrd:obs-{kind}-{slug}-{doc_slug}-{run_slug}"
+
+
+def _observation_block(observation: Observation, iri: str, run_ts: str) -> str:
+    """Return the Turtle block for one ``msr:Observation`` node.
+
+    ``msr:inCorpus`` is emitted as a bare ``msrd:`` CURIE token (not
+    bracketed) since :attr:`Observation.corpus` is already a CURIE
+    (``mining_types.Observation``'s docstring, e.g.
+    ``"msrd:corpus-chemistry"``) and ``msrd:`` is declared in
+    :data:`_PREFIXES`. ``msr:observedInRun`` uses
+    ``mine_provenance.run_activity_iri`` -- the same per-run
+    ``prov:Activity`` node IRI every other mined fact's generation edge
+    references -- so an observation's run attribution is the identical
+    node the run's other facts are pinned to.
+    """
+    run_iri = mp.run_activity_iri(run_ts)
+    return (
+        f"{iri} a msr:Observation ;\n"
+        f"    msr:inDocument <{observation.document_iri}> ;\n"
+        f'    msr:occurrenceCount "{observation.occurrence_count}"^^xsd:integer ;\n'
+        f"    msr:inCorpus {observation.corpus} ;\n"
+        f"    msr:observedInRun {run_iri} ;\n"
+        f'    prov:generatedAtTime "{run_ts}"^^xsd:dateTime .'
+    )
+
+
+def _build_observations(
+    observations: tuple[Observation, ...], kind: str, slug: str, run_ts: str
+) -> tuple[list[str], list[str]]:
+    """Return ``(observation_iris, observation_blocks)`` for a candidate's
+    per-document occurrence records (design.md D1/D5).
+
+    Sorts by ``(document_iri, corpus)`` first so output is deterministic
+    regardless of dict/set iteration order upstream. Each observation is
+    keyed by (proposal, document, run) via :func:`_observation_iri`: a
+    re-run at the SAME ``run_ts`` over the same candidate reproduces
+    byte-identical IRIs/blocks (idempotent, set-semantics no-op); a
+    DIFFERENT ``run_ts`` mints new observation IRIs that are appended
+    alongside whatever observations already exist in the graph for this
+    proposal (append-only -- prior runs' observations are never touched or
+    replaced by this function, since it only ever builds new INSERT DATA
+    content for the current run).
+    """
+    run_slug = term_slug(run_ts)
+    ordered = sorted(observations, key=lambda o: (o.document_iri, o.corpus))
+    iris: list[str] = []
+    blocks: list[str] = []
+    for observation in ordered:
+        doc_slug = _doc_slug(observation.document_iri)
+        iri = _observation_iri(kind, slug, doc_slug, run_slug)
+        iris.append(iri)
+        blocks.append(_observation_block(observation, iri, run_ts))
+    return iris, blocks
+
+
 def _staging_resource_block(
     triaged: TriagedCandidate,
     proposal_iri: str,
     proposal_graph: str,
     evidence: list[Evidence],
+    observation_iris: list[str],
+    observation_blocks: list[str],
 ) -> str:
-    """Return the Turtle block for the ``msr:ChangeProposal`` resource plus its evidence.
+    """Return the Turtle block for the ``msr:ChangeProposal`` resource plus
+    its evidence and observation nodes.
 
-    Deliberately omits ``prov:wasGeneratedBy`` -- a per-run generation edge
+    Carries ``msr:hasObservation`` links to ``observation_iris`` (empty if
+    the candidate has no observations, e.g. an older call site or a
+    fixture that never populated ``Candidate.observations``) -- there is
+    no stored ``msr:docFrequency`` scalar; document frequency is a
+    read-time aggregate derived from the linked observations
+    (``proposal-observation-provenance`` design.md D1/D3).
+
+    Deliberately still omits ``prov:wasGeneratedBy`` on the
+    ``ChangeProposal`` resource itself -- a per-run generation edge there
     would carry the run-specific :func:`mine_provenance.run_activity_iri`
     and so would change on every invocation, which would break the
     ``proposal-staging`` spec's "re-run leaves ``urn:msr:staging`` triple
-    counts unchanged" idempotency guarantee. The per-run attribution edge
-    the ``change-proposal-schema`` spec requires (``ChangeProposal``
-    resource -> its mine run) is instead written by the CLI umbrella into
-    the append-only ``urn:msr:provenance`` graph via
+    counts unchanged" idempotency guarantee for the resource+evidence
+    portion of this block. The per-run attribution edge the
+    ``change-proposal-schema`` spec requires (``ChangeProposal`` resource
+    -> its mine run) is instead written by the CLI umbrella into the
+    append-only ``urn:msr:provenance`` graph via
     ``mine_provenance.write_generation_edges``, mirroring how
     ``mentions.py``/``documents.py`` keep ``urn:msr:data`` idempotent while
-    still recording per-run lineage.
+    still recording per-run lineage. The observation nodes appended below
+    are the one deliberate exception to "this block never changes with
+    run_ts": at the SAME ``run_ts`` they reproduce byte-identical
+    (idempotent) content, but a DIFFERENT ``run_ts`` appends genuinely new
+    observation nodes alongside the unchanged resource/evidence blocks --
+    intentional per design.md D1, not a regression of the idempotency
+    guarantee (which is about never *duplicating or mutating* existing
+    triples, and appending new observation nodes for a new run does
+    neither).
     """
     predicates = [
         "a msr:ChangeProposal",
         f'msr:kind "{_escape_literal(triaged.kind)}"^^xsd:string',
         'msr:reviewStatus "pending"^^xsd:string',
         f'msr:term "{_escape_literal(triaged.candidate.term)}"^^xsd:string',
-        f'msr:docFrequency "{triaged.candidate.doc_frequency}"^^xsd:integer',
         f'msr:hasProposalGraph "{proposal_graph}"^^xsd:anyURI',
     ]
+    if observation_iris:
+        predicates.append(f"msr:hasObservation {', '.join(observation_iris)}")
     if evidence:
         evidence_iris = ", ".join(
             _evidence_iri(e.report, e.start_offset, e.end_offset) for e in evidence
@@ -195,7 +313,7 @@ def _staging_resource_block(
         predicates.append(f"msr:hasEvidence {evidence_iris}")
     joined = " ;\n    ".join(predicates)
     resource_block = f"{proposal_iri} {joined} ."
-    blocks = [resource_block, *(_evidence_block(e) for e in evidence)]
+    blocks = [resource_block, *(_evidence_block(e) for e in evidence), *observation_blocks]
     return "\n\n".join(blocks)
 
 
@@ -371,17 +489,21 @@ def build_proposal_bundle(
     ``msrd:proposal-{kind}-{slug}`` resource IRI and
     ``urn:msr:proposal/{kind}-{slug}`` graph name
     (``slug = mining_types.term_slug(triaged.candidate.term)``), then
-    assembles the ``urn:msr:staging`` resource+evidence block. No blank
-    nodes anywhere.
+    assembles the ``urn:msr:staging`` resource+evidence+observation block.
+    No blank nodes anywhere.
 
-    ``run_ts`` is accepted but **reserved/unused** by the staging block
-    (kept in the signature for call-site/API stability and in case a
-    future bundle component needs it): the per-run
-    ``prov:wasGeneratedBy`` attribution for this proposal's
-    ``msr:ChangeProposal`` resource is written separately, by the CLI
-    umbrella, into ``urn:msr:provenance`` (append-only) via
+    ``run_ts`` is now actually used (``proposal-observation-provenance``
+    design.md D1/D6): it mints the deterministic
+    ``msrd:obs-{kind}-{slug}-{doc-slug}-{run-slug}`` IRI for every
+    observation in ``triaged.candidate.observations`` (via
+    :func:`_build_observations`) and stamps each observation's
+    ``msr:observedInRun``/``prov:generatedAtTime``. The per-run
+    ``prov:wasGeneratedBy`` attribution for the ``msr:ChangeProposal``
+    resource itself is still written separately, by the CLI umbrella, into
+    ``urn:msr:provenance`` (append-only) via
     ``mine_provenance.write_generation_edges`` -- not embedded in this
-    (idempotent, re-run-stable) bundle.
+    bundle -- but the caller can additionally attribute the returned
+    :attr:`ProposalBundle.observation_iris` the same way.
     """
     placement = triaged.placement
     if placement.canonical_unit and placement.canonical_unit not in allowlist.units:
@@ -403,8 +525,11 @@ def build_proposal_bundle(
         triaged.candidate.evidence,
         key=lambda e: (e.report, e.start_offset, e.end_offset),
     )
+    observation_iris, observation_blocks = _build_observations(
+        triaged.candidate.observations, kind, slug, run_ts
+    )
     staging_triples = _staging_resource_block(
-        triaged, proposal_iri, proposal_graph, evidence
+        triaged, proposal_iri, proposal_graph, evidence, observation_iris, observation_blocks
     )
 
     return ProposalBundle(
@@ -412,6 +537,7 @@ def build_proposal_bundle(
         proposal_graph=proposal_graph,
         staging_triples=staging_triples,
         proposal_graph_triples=proposal_graph_triples,
+        observation_iris=tuple(observation_iris),
     )
 
 
