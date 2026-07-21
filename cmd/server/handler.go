@@ -53,6 +53,7 @@ func newMux(chat http.Handler, gr graphReader, ps proposalService, cs checkpoint
 	api.HandleFunc("GET /api/checkpoints", newCheckpointListHandler(cs))
 	api.HandleFunc("POST /api/checkpoints", newCheckpointCreateHandler(cs))
 	api.HandleFunc("POST /api/checkpoints/{label}/restore", newCheckpointRestoreHandler(cs))
+	api.HandleFunc("DELETE /api/checkpoints/{label}", newCheckpointDeleteHandler(cs))
 
 	return newAPIOrStaticMux(api, static)
 }

@@ -204,6 +204,31 @@ func (e *Engine) Restore(ctx context.Context, label string) error {
 	return nil
 }
 
+// Delete removes the checkpoint's directory (data/checkpoints/{label}/)
+// and all its artifacts (store.trig, msr.db, manifest.json). label is
+// validated against the filesystem-safe charset (ValidateLabel) before
+// any path is built, so an unsafe label never reaches os.RemoveAll; an
+// unknown label yields ErrNotFound. ctx is unused (os.RemoveAll is not
+// context-aware) but kept for interface symmetry with Create/Restore.
+func (e *Engine) Delete(_ context.Context, label string) error {
+	if err := ValidateLabel(label); err != nil {
+		return err
+	}
+
+	dir := filepath.Join(e.root, label)
+	if _, err := os.Stat(dir); err != nil {
+		if os.IsNotExist(err) {
+			return ErrNotFound
+		}
+		return fmt.Errorf("checkpoint: stat checkpoint dir %s: %w", dir, err)
+	}
+
+	if err := os.RemoveAll(dir); err != nil {
+		return fmt.Errorf("checkpoint: remove checkpoint dir %s: %w", dir, err)
+	}
+	return nil
+}
+
 // List enumerates the checkpoints under root by reading each
 // subdirectory's manifest.json. Subdirectories without a manifest are
 // skipped (they are not a valid checkpoint); the result is sorted by
