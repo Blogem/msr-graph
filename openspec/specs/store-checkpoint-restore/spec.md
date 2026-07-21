@@ -50,8 +50,9 @@ identical effect.
 
 ### Requirement: Checkpoint API and make wrappers
 Checkpoint/restore SHALL be exposed as `GET /api/checkpoints` (list), `POST /api/checkpoints`
-(create), and `POST /api/checkpoints/{label}/restore` (restore), and as `make checkpoint` /
-`make restore` wrappers on the root Makefile. The `{label}` SHALL be validated to a
+(create), `POST /api/checkpoints/{label}/restore` (restore), and `DELETE
+/api/checkpoints/{label}` (delete), and as `make checkpoint` / `make restore` / `make
+delete-checkpoint` wrappers on the root Makefile. The `{label}` SHALL be validated to a
 conservative filesystem-safe charset and a label outside it SHALL be rejected before any path
 is touched, preventing path traversal outside `data/checkpoints/`.
 
@@ -62,3 +63,23 @@ is touched, preventing path traversal outside `data/checkpoints/`.
 #### Scenario: An unsafe label is rejected
 - **WHEN** a client requests a checkpoint whose label contains path-traversal characters (e.g. `../etc`)
 - **THEN** the request is rejected and no file outside `data/checkpoints/` is written or read
+
+### Requirement: Delete removes a checkpoint's stored artifacts
+Deleting a checkpoint SHALL remove its `data/checkpoints/{label}/` directory and all its
+artifacts (the TriG export, the SQLite copy, and the manifest), exposed as `DELETE
+/api/checkpoints/{label}`. The `{label}` SHALL be validated to the conservative filesystem-safe
+charset before any path is touched, and an unknown label SHALL be rejected as not-found without
+removing anything. Delete SHALL NOT touch the live store (GraphDB repository or SQLite
+measurement store) — only the checkpoint's own on-disk snapshot.
+
+#### Scenario: Delete removes a checkpoint
+- **WHEN** a client `DELETE`s an existing checkpoint `demo`
+- **THEN** `data/checkpoints/demo/` no longer exists and `demo` no longer appears in `GET /api/checkpoints`
+
+#### Scenario: Deleting an unknown checkpoint is not-found
+- **WHEN** a client `DELETE`s a label with no checkpoint directory
+- **THEN** the request is rejected `404 not_found` and no filesystem entry is removed
+
+#### Scenario: An unsafe label is rejected on delete
+- **WHEN** a client `DELETE`s a label containing path-traversal characters (e.g. `../etc`)
+- **THEN** the request is rejected `400 invalid_label` and no file outside `data/checkpoints/` is touched
