@@ -57,18 +57,38 @@ paths so client-side routing works on deep links/reload.
   deployable"); serving `webapp/build` from disk (rejected — embed keeps the binary
   self-contained and matches `internal/store`'s existing `//go:embed` precedent).
 
-### D2 — Static handler at `/` with an explicit `/api/` guard; `/api` never shadowed
+### D2 — API/static dispatcher with an explicit `/api/` guard; `/api` never shadowed
 Chunk 9 is now merged: `newMux` has signature `newMux(chat http.Handler, gr graphReader, ps
 proposalService, cs checkpointService)` and registers the proposal/checkpoint routes with **Go
 1.22 method-scoped patterns** (`GET /api/proposals`, `POST /api/checkpoints/{label}/restore`,
-…), which auto-return `405` for a matched path with the wrong method. Add the embedded-frontend
-handler at the root pattern (`/`). Go 1.22 `ServeMux` resolves by **most-specific pattern wins,
-independent of registration order**, so every explicit `/api/*` and `/healthz` route takes
-precedence over `/` — registration order does not matter.
-- *Critical caveat*: because `/` is the catch-all, an unmatched `/api/foo` path **would**
-  otherwise fall through to the SPA handler. The static handler MUST therefore explicitly return
-  `404` (not the SPA `index.html`) for any request whose path begins with `/api/`. This is the
-  `frontend-app-shell` "Unknown API path is not served the SPA" requirement.
+…), which auto-return `405` for a matched path with the wrong method. The frontend change adds a
+5th `static http.Handler` param to `newMux` and threads the embedded-frontend handler through the
+`main.go` call site (chunk-9 params/routes unchanged).
+
+*Implementation note (supersedes this design's original "register `static` on `/`, order doesn't
+matter" plan — corrected after empirical testing against Go 1.26 `net/http`):* registering the
+static handler directly at the root pattern (`mux.Handle("/", static)`) does **not** safely
+coexist with chunk-9's method-scoped routes. Go's `ServeMux` picks the single most-specific
+pattern matching host+path+**method** together; a wrong-method request (e.g. `GET
+/api/checkpoints/x/restore`, registered only as `POST`) does not match the method-scoped pattern
+at all, so an unrestricted `/` becomes the only match and silently replaces Go's built-in
+"known path, wrong method → 405 + Allow" with the SPA. This regresses chunk-9's `405` tests to
+`404`/SPA. The claim "every `/api/*` route takes precedence over `/` regardless of order" holds
+only for *correct-method* requests.
+
+Instead, `newMux` keeps chunk-9's routes on an unexported `api` mux with **no** `/` catch-all and
+wraps it in `newAPIOrStaticMux(api, static)`, which: (1) if `api.Handler(r)` resolves a non-empty
+pattern (all registered API routes plus the unrestricted-method `/api/chat` and `/healthz`),
+dispatches straight to `api.ServeHTTP` on the real `ResponseWriter` — preserving `/api/chat`'s SSE
+streaming and Go 1.22 wildcard binding, and never buffering it; (2) otherwise (no pattern matches
+— either a genuinely unknown path or a known path with the wrong method) runs the request through
+`api.ServeHTTP` into an in-memory recorder: a `404` falls through to `static` (SPA/asset), while a
+`405` (or anything else, `Allow` header included) is copied through unchanged. This preserves
+chunk-9's `405` behavior *and* the `/api/` guard below.
+- *Critical caveat*: an unmatched `/api/foo` path **would** otherwise fall through to the SPA
+  handler. The static handler MUST therefore explicitly return `404` (not the SPA `index.html`)
+  for any request whose path begins with `/api/`. This is the `frontend-app-shell` "Unknown API
+  path is not served the SPA" requirement.
 - *Coordination*: the only shared file is `cmd/server/handler.go`. The frontend change threads
   the embed handler into the existing `newMux` signature and its `main.go` call site (do not
   change the chunk-9 params/routes). Guard with a test that `/api/chat` and a representative
