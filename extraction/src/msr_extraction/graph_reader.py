@@ -87,6 +87,26 @@ SELECT ?version WHERE {
 }
 """
 
+# Chunk 11 (ingest-iaea-safety D4, task 4.1/4.2) -- the two safety-branch
+# individual kinds the digital-thread linking relations validate their
+# subjects/targets against. Both are *grown*, not seeded (design.md D3): an
+# individual only appears here once the safety branch has been mined and
+# approved into core via the chunk-9 approval engine, which is exactly the
+# closed-set gate the two-phase ordering in design.md D4 relies on.
+_SAFETY_FUNCTIONS_QUERY = """\
+PREFIX msr: <https://w3id.org/msr-kg/ontology#>
+SELECT ?c WHERE {
+    ?c a msr:SafetyFunction .
+}
+"""
+
+_REQUIREMENTS_QUERY = """\
+PREFIX msr: <https://w3id.org/msr-kg/ontology#>
+SELECT ?c WHERE {
+    ?c a msr:Requirement .
+}
+"""
+
 
 @dataclass(frozen=True)
 class KnownEntity:
@@ -247,6 +267,31 @@ class GraphReader:
         reactor concept.
         """
         bindings = self._select(_REACTOR_CONCEPTS_QUERY)
+        return {binding["c"]["value"] for binding in bindings}
+
+    def read_safety_functions(self) -> set[str]:
+        """Read the grown ``msr:SafetyFunction`` individual IRIs (chunk 11).
+
+        Unlike :meth:`read_salt_roles`/:meth:`read_physical_properties`
+        (fixed seed vocabularies), this set starts empty and only gains
+        members once the safety branch has been mined and approved into
+        core (design.md D3) -- the second-phase caller
+        (``ingest-iaea-safety`` D4) populates
+        :class:`~msr_extraction.relations.KnownSets`'s ``safety_functions``
+        from this read so the digital-thread linking relations'
+        closed-set validation resolves only after that approval.
+        """
+        bindings = self._select(_SAFETY_FUNCTIONS_QUERY)
+        return {binding["c"]["value"] for binding in bindings}
+
+    def read_requirements(self) -> set[str]:
+        """Read the grown ``msr:Requirement`` individual IRIs (chunk 11).
+
+        See :meth:`read_safety_functions` -- identical grown-not-seeded
+        posture, populating :class:`~msr_extraction.relations.KnownSets`'s
+        ``requirements``.
+        """
+        bindings = self._select(_REQUIREMENTS_QUERY)
         return {binding["c"]["value"] for binding in bindings}
 
     def read_role_reactor_labels(self) -> set[str]:
