@@ -26,6 +26,11 @@ dependencies = [
     "click==8.1.8",
     "rapidfuzz==3.10.1",
     "openai==1.57.0",
+    # Chunk 11 (ingest-iaea-safety D1/1.3) — text-layer PDF extraction for the
+    # safety-source genre (pypdf), plus cryptography for the encrypted IAEA
+    # SRS-123 PDF that pypdf needs it to open.
+    "pypdf>=4,<6",
+    "cryptography>=42",
 ]
 
 [project.optional-dependencies]
