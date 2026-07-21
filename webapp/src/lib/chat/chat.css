@@ -1,0 +1,190 @@
+/* Minimal hand-rolled styling for the chat surface (design D6: no UI
+   framework beyond Svelte). */
+
+.chat-surface {
+	display: flex;
+	flex-direction: column;
+	gap: 1rem;
+	max-width: 60rem;
+}
+
+.chat-message-list {
+	display: flex;
+	flex-direction: column;
+	gap: 0.75rem;
+	list-style: none;
+	margin: 0;
+	padding: 0;
+}
+
+.chat-message {
+	border: 1px solid #ccc;
+	border-radius: 0.5rem;
+	padding: 0.75rem 1rem;
+}
+
+.chat-message[data-role='user'] {
+	background: rgba(0, 100, 200, 0.06);
+}
+
+.chat-message[data-role='assistant'] {
+	background: rgba(0, 0, 0, 0.03);
+}
+
+.message-role {
+	font-size: 0.75rem;
+	font-weight: 600;
+	text-transform: uppercase;
+	opacity: 0.6;
+}
+
+.message-content {
+	white-space: pre-wrap;
+	margin: 0.25rem 0 0;
+}
+
+.chat-error {
+	color: #b00020;
+}
+
+.chat-input-row {
+	display: flex;
+	gap: 0.5rem;
+}
+
+.chat-input-row input {
+	flex: 1;
+	padding: 0.5rem;
+}
+
+.trace-timeline {
+	margin-top: 0.5rem;
+	border-top: 1px dashed #ccc;
+	padding-top: 0.5rem;
+}
+
+.trace-toggle {
+	font-size: 0.85rem;
+	background: none;
+	border: 1px solid #ccc;
+	border-radius: 0.25rem;
+	padding: 0.15rem 0.5rem;
+	cursor: pointer;
+}
+
+.trace-event-list {
+	list-style: none;
+	margin: 0.5rem 0 0;
+	padding: 0;
+	display: flex;
+	flex-direction: column;
+	gap: 0.5rem;
+}
+
+.trace-event {
+	border-left: 3px solid #ccc;
+	padding: 0.25rem 0.5rem;
+	font-size: 0.9rem;
+}
+
+.event-label {
+	font-weight: 600;
+	font-size: 0.8rem;
+	opacity: 0.7;
+	display: block;
+	margin-bottom: 0.15rem;
+}
+
+.badge-truncated {
+	display: inline-block;
+	font-size: 0.7rem;
+	background: #fff3cd;
+	color: #7a5b00;
+	border-radius: 0.25rem;
+	padding: 0.05rem 0.4rem;
+	margin-left: 0.5rem;
+}
+
+.script-output {
+	display: flex;
+	flex-direction: column;
+	gap: 0.25rem;
+}
+
+.output-label {
+	font-size: 0.75rem;
+	opacity: 0.6;
+}
+
+.script-meta {
+	display: grid;
+	grid-template-columns: auto auto;
+	gap: 0 0.5rem;
+	font-size: 0.8rem;
+	margin: 0.25rem 0 0;
+}
+
+.script-meta dt {
+	font-weight: 600;
+	opacity: 0.7;
+}
+
+.script-meta dd {
+	margin: 0;
+}
+
+.provenance-chips {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 0.4rem;
+}
+
+.provenance-chip {
+	display: inline-flex;
+	gap: 0.25rem;
+	font-size: 0.8rem;
+	background: rgba(0, 0, 0, 0.05);
+	border-radius: 1rem;
+	padding: 0.15rem 0.6rem;
+}
+
+.chip-label {
+	opacity: 0.6;
+}
+
+.provenance-empty {
+	font-size: 0.8rem;
+	opacity: 0.6;
+	font-style: italic;
+}
+
+.answer-stamp {
+	margin-top: 0.5rem;
+	display: flex;
+	flex-direction: column;
+	gap: 0.4rem;
+}
+
+.stamp-badge {
+	display: inline-block;
+	width: fit-content;
+	font-size: 0.75rem;
+	font-weight: 600;
+	border-radius: 0.25rem;
+	padding: 0.15rem 0.5rem;
+}
+
+.stamp-grounded {
+	background: #d7f4de;
+	color: #14622f;
+}
+
+.stamp-ungrounded {
+	background: #fbdcdc;
+	color: #8a1c1c;
+}
+
+.trace-raw {
+	font-size: 0.8rem;
+	opacity: 0.85;
+}
