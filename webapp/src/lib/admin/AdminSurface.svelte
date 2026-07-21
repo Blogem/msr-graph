@@ -10,6 +10,7 @@
 		listCheckpoints,
 		createCheckpoint,
 		restoreCheckpoint,
+		deleteCheckpoint,
 		ApiError,
 		type CheckpointManifest
 	} from '$lib/api';
@@ -36,6 +37,13 @@
 	let restoring = $state(false);
 	let restoreError = $state('');
 	let restoreStatus = $state('');
+
+	// Delete mirrors the restore flow: clicking "Delete" on an item arms the
+	// confirmation (`deletingLabel`); only clicking `delete-confirm` actually
+	// fires DELETE /api/checkpoints/{label}.
+	let deletingLabel = $state<string | null>(null);
+	let deleting = $state(false);
+	let deleteError = $state('');
 
 	async function loadCheckpoints(): Promise<void> {
 		try {
@@ -87,6 +95,33 @@
 
 	function cancelRestore(): void {
 		confirmingLabel = null;
+	}
+
+	function startDelete(checkpointLabel: string): void {
+		deletingLabel = checkpointLabel;
+		deleteError = '';
+	}
+
+	function cancelDelete(): void {
+		deletingLabel = null;
+	}
+
+	async function confirmDelete(checkpointLabel: string): Promise<void> {
+		deleting = true;
+		deleteError = '';
+		try {
+			await deleteCheckpoint(checkpointLabel);
+			deletingLabel = null;
+			// Refresh from the server rather than optimistically splicing, so the
+			// list always reflects what the server actually persisted.
+			await loadCheckpoints();
+			pushToast({ message: `Checkpoint "${checkpointLabel}" deleted.`, kind: 'success' });
+		} catch (err) {
+			deleteError = err instanceof ApiError ? err.message : 'Failed to delete checkpoint.';
+			pushToast({ message: deleteError, kind: 'error' });
+		} finally {
+			deleting = false;
+		}
 	}
 
 	async function confirmRestore(checkpointLabel: string): Promise<void> {
@@ -153,7 +188,7 @@
 						<span class="checkpoint-version">{checkpoint.ontology_version}</span>
 
 						{#if confirmingLabel === checkpoint.label}
-							<span class="restore-confirm-group">
+							<span class="confirm-group">
 								<span class="confirm-text">
 									Restore "{checkpoint.label}"? This replaces the live store.
 								</span>
@@ -170,14 +205,42 @@
 									<LoadingState label="Restoring checkpoint…" />
 								{/if}
 							</span>
+						{:else if deletingLabel === checkpoint.label}
+							<span class="confirm-group">
+								<span class="confirm-text">
+									Delete "{checkpoint.label}"? This removes its stored snapshot.
+								</span>
+								<button
+									data-testid="delete-confirm"
+									type="button"
+									disabled={deleting}
+									onclick={() => confirmDelete(checkpoint.label)}
+								>
+									{deleting ? 'Deleting…' : 'Confirm delete'}
+								</button>
+								<button type="button" disabled={deleting} onclick={cancelDelete}> Cancel </button>
+								{#if deleting}
+									<LoadingState label="Deleting checkpoint…" />
+								{/if}
+							</span>
 						{:else}
-							<button
-								data-testid="checkpoint-restore"
-								type="button"
-								onclick={() => startRestore(checkpoint.label)}
-							>
-								Restore
-							</button>
+							<span class="checkpoint-actions">
+								<button
+									data-testid="checkpoint-restore"
+									type="button"
+									onclick={() => startRestore(checkpoint.label)}
+								>
+									Restore
+								</button>
+								<button
+									data-testid="checkpoint-delete"
+									type="button"
+									class="danger"
+									onclick={() => startDelete(checkpoint.label)}
+								>
+									Delete
+								</button>
+							</span>
 						{/if}
 					</li>
 				{/each}
@@ -188,6 +251,9 @@
 		{/if}
 		{#if restoreError}
 			<p data-testid="restore-error" class="error" role="alert">{restoreError}</p>
+		{/if}
+		{#if deleteError}
+			<p data-testid="delete-error" class="error" role="alert">{deleteError}</p>
 		{/if}
 	</section>
 </div>
@@ -236,7 +302,8 @@
 		font-size: var(--font-size-0);
 	}
 
-	.restore-confirm-group {
+	.confirm-group,
+	.checkpoint-actions {
 		display: flex;
 		align-items: center;
 		gap: var(--space-2);
@@ -245,6 +312,10 @@
 
 	.confirm-text {
 		font-size: var(--font-size-0);
+	}
+
+	button.danger {
+		color: var(--error-text);
 	}
 
 	.error {
