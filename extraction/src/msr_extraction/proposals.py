@@ -257,6 +257,27 @@ def _build_observations(
     return iris, blocks
 
 
+def build_observation_bundle(
+    observations: tuple[Observation, ...], kind: str, slug: str, run_ts: str
+) -> tuple[list[str], list[str]]:
+    """Public wrapper around :func:`_build_observations` (D4 backfill, task 4.1).
+
+    The D4 backfill (`backfill_observations.py`) rebuilds observation nodes
+    for already-staged proposals it reads directly from the graph
+    (`graph_reader.GraphReader.read_change_proposals`) -- it has no
+    `TriagedCandidate`/QUDT allowlist to route through
+    :func:`build_proposal_bundle`'s full candidate-bundle path, only a
+    proposal's stored `kind`/`term` (hence `slug = mining_types.term_slug(term)`)
+    and the observations a fresh corpus re-scan produced for that term. This
+    is a pure, additive alias with no behavior change to
+    :func:`_build_observations` itself -- see that function's docstring for
+    the exact IRI scheme, sort order, and idempotency guarantees, which
+    apply identically here (the SAME `kind`/`slug`/`run_ts` reproduce
+    byte-identical IRIs/blocks on re-run).
+    """
+    return _build_observations(observations, kind, slug, run_ts)
+
+
 def _staging_resource_block(
     triaged: TriagedCandidate,
     proposal_iri: str,
