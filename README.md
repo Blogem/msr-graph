@@ -308,11 +308,13 @@ and proved end to end by [`docs/SAFETY_THREAD_SPIKE.md`](docs/SAFETY_THREAD_SPIK
   `dcterms:publisher`/`dcterms:rights`/`dcterms:source` so any evidence quote the agent
   surfaces stays attributable. Re-running `scripts/fetch-safety-sources.sh` reproduces
   the cache from scratch.
-- **Current status:** the acquisition/extraction/normalization/document-writing stages
-  above are implemented and covered by `extraction/tests/test_safety_*.py`; a `safety`
-  extraction-CLI subcommand group and a `make ingest-safety` target (mirroring `make
-  ingest`) are planned but not yet wired (`openspec/changes/ingest-iaea-safety/tasks.md`,
-  section 7) — until then, the stages are driven directly via the Python API.
+- **Current status:** the full pipeline (acquisition/extraction/normalization/
+  document-writing/linking/relation-extraction/mining) is implemented and covered by
+  `extraction/tests/test_safety_*.py`, and is wired up end to end: `make ingest-safety`
+  (mirroring `make ingest`) runs `docker compose run --rm extraction safety ingest`;
+  the individual stages are available via `python -m msr_extraction safety
+  fetch|extract|documents|ingest` (mirroring the chemistry-genre `fetch`/`extract`/
+  `documents` subcommands).
 
 ## `data/` bind-mount ownership
 
