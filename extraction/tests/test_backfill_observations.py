@@ -1,68 +1,54 @@
 """Backfill-migration unit tests (openspec/changes/proposal-observation-
 provenance, spec proposal-observation-provenance, task 7.3).
 
-Hermetic: a fake SPARQL client records every ``.update(...)`` call (mirrors
-``test_proposals_observations.py``'s ``FakeSparqlClient``); no network, no
-live model, no live GraphDB. Fixture corpora are written under ``tmp_path``
-using the same helper style ``test_novelty_observations.py`` established
-(``config.archive_dir/*.txt`` for chemistry, ``config.safety_normalized_path``
-for safety).
+Hermetic: a fake ``sparql`` client records every ``.update(...)`` call
+(mirrors ``test_proposals_observations.py``'s ``FakeSparqlClient``); a fake
+``reader`` (duck-typed against ``GraphReader.read_change_proposals``/
+``count_doc_frequency_scalars``) stands in for the ``urn:msr:staging`` read.
+No network, no live model, no live GraphDB. Fixture corpora are written
+under ``tmp_path`` using the same helper style ``test_novelty_observations.py``
+established (``config.archive_dir/*.txt`` for chemistry,
+``config.safety_normalized_path`` for safety).
 
-ASSUMPTION (pass-1, flagged for reconciliation at merge): this pass runs
-BEFORE the coder's ``backfill_observations.py`` module (task 4) lands, so
-every test below is written against the following assumed public contract
-(design.md D1/D4/D5/D6, tasks 4.1-4.3, and the shared task-contract prompt),
-not against any implementation. If the coder's actual module names things
-differently, pass 2 reconciles by adjusting only the import / call-site
-names below -- the assertions (what must be true of the generated SPARQL
-and the inference-free guarantee) come from the spec and should not need to
-change.
+Pass 2 reconciliation note: this file was originally written in pass 1
+against an assumed ``run_backfill(proposals, config, client, run_ts, ...)``
+signature, before ``backfill_observations.py``/``graph_reader.py`` landed.
+Rewritten here against the REAL, merged API:
 
-Assumed contract::
-
-    from msr_extraction.backfill_observations import run_backfill
-
-    run_backfill(
-        proposals,       # list[tuple[str, str]] of (term, kind) for every
-                         # already-staged msr:ChangeProposal to reconstruct
-                         # observations for -- discovery of this list (a
-                         # SPARQL SELECT over urn:msr:staging) is the CLI
-                         # wrapper's job (task 4.4), not this function's;
-                         # this function only re-scans corpora + writes.
-        config,          # Config -- source of archive_dir/safety paths
-        client,          # SparqlClient (or duck-typed .update(str)) -- the
-                         # only I/O this function performs
-        run_ts,          # str -- the backfill's own run/generation
-                         # timestamp; passing the SAME run_ts twice must
-                         # reproduce byte-identical generated updates
-                         # (idempotent re-run, design.md "Risks" section)
-        *,
-        chemistry_reports=None,  # list[str] | None -- report ids to re-scan
-                                  # for the chemistry corpus (defaults to
-                                  # every archive_dir *.txt sidecar if None)
-        safety_reports=None,     # list[str] | None -- source ids to re-scan
-                                  # for the safety corpus
-    )
-
-Each test below only relies on the observable SPARQL text the fake client
-receives (``msr:inDocument``/``msr:occurrenceCount``/``msr:inCorpus``/
-``msr:hasObservation``/``msr:docFrequency``-removal/corpus CURIEs), not on
-any exact observation-IRI suffix or internal helper name, so the suite stays
-robust to the coder's exact internal structure while still pinning the
-spec-mandated invariants (inference-free, DF reproduction, corpus split,
-idempotent re-run, stale-scalar removal).
+- ``backfill_observations.run_backfill(config, *, reader=None, sparql=None,
+  run_ts=BACKFILL_RUN_TS) -> BackfillSummary`` -- proposal discovery happens
+  INSIDE ``run_backfill`` via ``reader.read_change_proposals()``, not via a
+  caller-supplied list.
+- ``graph_reader.StagedProposal(proposal_iri, kind, term)`` -- the fake
+  reader below returns these directly (bypassing the real SPARQL-over-HTTP
+  ``GraphReader``, mirroring how ``test_novelty_observations.py`` passes an
+  empty-``select_fn`` ``GraphReader`` rather than a live one).
+- The safety-genre corpus scan inside ``run_backfill`` is NOT parameterized
+  by the caller -- it always re-scans every real
+  ``safety_manifest.SAFETY_SOURCES`` id. A safety-genre fixture in this file
+  must therefore be written under one of those REAL source ids (picked via
+  ``safety_manifest.SAFETY_SOURCES[0].id``), not an arbitrary id.
+- Idempotency is via the fixed ``BACKFILL_RUN_TS = "backfill"`` run token
+  (deterministic observation IRIs), not a caller-varied timestamp.
 """
 
 from __future__ import annotations
 
-from msr_extraction import corpora, disambiguation, triage
+from msr_extraction import disambiguation, safety_manifest, triage
+from msr_extraction.backfill_observations import BACKFILL_RUN_TS, run_backfill
 from msr_extraction.config import Config
+from msr_extraction.corpora import CORPUS_CHEMISTRY, CORPUS_SAFETY
+from msr_extraction.graph_reader import MSRD, StagedProposal
 
 REPORT_DOC_A = "DOC-A"
 REPORT_DOC_B = "DOC-B"
 REPORT_DOC_C = "DOC-C"
-SAFETY_SRC_A = "SAFETY-A"
-RUN_TS = "2026-07-21T00:00:00+00:00"
+
+#: A REAL safety-manifest source id -- `run_backfill` always re-scans every
+#: `safety_manifest.SAFETY_SOURCES` id itself (not caller-injectable), so a
+#: safety-genre fixture must be written under one of these ids to ever be
+#: seen by the scan.
+SAFETY_SOURCE_ID = safety_manifest.SAFETY_SOURCES[0].id
 
 
 class FakeSparqlClient:
@@ -71,6 +57,20 @@ class FakeSparqlClient:
 
     def update(self, sparql_update: str) -> None:
         self.updates.append(sparql_update)
+
+
+class FakeReader:
+    """Duck-typed stand-in for `graph_reader.GraphReader`'s two backfill reads."""
+
+    def __init__(self, staged: list[StagedProposal], doc_frequency_scalars: int = 0) -> None:
+        self._staged = staged
+        self._doc_frequency_scalars = doc_frequency_scalars
+
+    def read_change_proposals(self) -> list[StagedProposal]:
+        return list(self._staged)
+
+    def count_doc_frequency_scalars(self) -> int:
+        return self._doc_frequency_scalars
 
 
 def _write_archive_docs(config: Config, docs: dict[str, str]) -> None:
@@ -85,17 +85,12 @@ def _write_safety_normalized(config: Config, source_id: str, text: str) -> None:
     path.write_text(text, encoding="utf-8")
 
 
-def _import_run_backfill():
-    """Import the assumed entry point, failing with a clear message if the
-    coder named it differently -- this is the single reconciliation point
-    pass 2 needs to touch if the name/signature differs."""
-    from msr_extraction.backfill_observations import run_backfill
-
-    return run_backfill
-
-
 def _combined_text(client: FakeSparqlClient) -> str:
     return "\n".join(client.updates)
+
+
+def _proposal_iri(term: str, kind: str = "property") -> str:
+    return f"{MSRD}proposal-{kind}-{term}"
 
 
 # --- inference-free ---------------------------------------------------
@@ -108,7 +103,6 @@ def test_backfill_never_invokes_triage_or_llm(monkeypatch, tmp_path) -> None:
     called at all, then asserts the backfill still completes and writes
     observations -- proving neither was invoked, regardless of whether
     backfill_observations.py even imports those modules."""
-    run_backfill = _import_run_backfill()
 
     def _boom_triage(*args, **kwargs):
         raise AssertionError("backfill must never call triage.triage_candidate")
@@ -122,18 +116,14 @@ def test_backfill_never_invokes_triage_or_llm(monkeypatch, tmp_path) -> None:
     config = Config(corpus_dir=tmp_path)
     _write_archive_docs(config, {f"{REPORT_DOC_A}.txt": "keepterm appears here"})
 
-    client = FakeSparqlClient()
-    run_backfill(
-        [("keepterm", "property")],
-        config,
-        client,
-        RUN_TS,
-        chemistry_reports=[REPORT_DOC_A],
-        safety_reports=[],
-    )
+    reader = FakeReader([StagedProposal(proposal_iri=_proposal_iri("keepterm"), kind="property", term="keepterm")])
+    sparql = FakeSparqlClient()
 
-    assert client.updates, "backfill must write at least one update for a matched term"
-    assert "msr:hasObservation" in _combined_text(client) or "msr:inDocument" in _combined_text(client)
+    summary = run_backfill(config, reader=reader, sparql=sparql)
+
+    assert summary.proposals_processed == 1
+    assert summary.observations_written >= 1
+    assert sparql.updates, "backfill must write at least one update for a matched term"
 
 
 # --- deterministic document-frequency reproduction ---------------------
@@ -144,8 +134,6 @@ def test_backfill_reproduces_known_document_frequency(tmp_path) -> None:
     per-document observations reproducing that document frequency (design.md
     D4: "reconstructed counts reproduce the original docFrequency values"),
     with the exact per-document occurrence count (term frequency, D5)."""
-    run_backfill = _import_run_backfill()
-
     config = Config(corpus_dir=tmp_path)
     _write_archive_docs(
         config,
@@ -156,24 +144,20 @@ def test_backfill_reproduces_known_document_frequency(tmp_path) -> None:
         },
     )
 
-    client = FakeSparqlClient()
-    run_backfill(
-        [("keepterm", "property")],
-        config,
-        client,
-        RUN_TS,
-        chemistry_reports=[REPORT_DOC_A, REPORT_DOC_B, REPORT_DOC_C],
-        safety_reports=[],
-    )
+    reader = FakeReader([StagedProposal(proposal_iri=_proposal_iri("keepterm"), kind="property", term="keepterm")])
+    sparql = FakeSparqlClient()
 
-    text = _combined_text(client)
+    summary = run_backfill(config, reader=reader, sparql=sparql)
+
+    text = _combined_text(sparql)
     assert REPORT_DOC_A in text
     assert REPORT_DOC_B in text
     assert REPORT_DOC_C not in text  # zero-occurrence document contributes nothing
     assert text.count("msr:inDocument") == 2  # exactly 2 distinct matching documents
     assert '"3"^^xsd:integer' in text
     assert '"1"^^xsd:integer' in text
-    assert corpora.CORPUS_CHEMISTRY in text
+    assert CORPUS_CHEMISTRY in text
+    assert summary.observations_written == 2
 
 
 # --- cross-corpus split -------------------------------------------------
@@ -181,64 +165,50 @@ def test_backfill_reproduces_known_document_frequency(tmp_path) -> None:
 
 def test_backfill_splits_a_cross_corpus_term_by_corpus(tmp_path) -> None:
     """Scenario: "A previously duplicated proposal is split by corpus" -- a
-    term present in BOTH a chemistry and a safety fixture document yields
-    observations attributed to the correct, distinct corpora."""
-    run_backfill = _import_run_backfill()
-
+    term present in BOTH a chemistry fixture document and a REAL safety
+    source's normalized text yields observations attributed to the correct,
+    distinct corpora on the SAME proposal resource."""
     config = Config(corpus_dir=tmp_path)
     _write_archive_docs(config, {f"{REPORT_DOC_A}.txt": "crossterm appears here"})
-    _write_safety_normalized(config, SAFETY_SRC_A, "crossterm appears here too")
+    _write_safety_normalized(config, SAFETY_SOURCE_ID, "crossterm appears here too")
 
-    client = FakeSparqlClient()
-    run_backfill(
-        [("crossterm", "property")],
-        config,
-        client,
-        RUN_TS,
-        chemistry_reports=[REPORT_DOC_A],
-        safety_reports=[SAFETY_SRC_A],
-    )
+    reader = FakeReader([StagedProposal(proposal_iri=_proposal_iri("crossterm"), kind="property", term="crossterm")])
+    sparql = FakeSparqlClient()
 
-    text = _combined_text(client)
-    assert corpora.CORPUS_CHEMISTRY in text
-    assert corpora.CORPUS_SAFETY in text
+    summary = run_backfill(config, reader=reader, sparql=sparql)
+
+    text = _combined_text(sparql)
+    assert CORPUS_CHEMISTRY in text
+    assert CORPUS_SAFETY in text
     assert text.count("msr:inDocument") == 2  # one chemistry + one safety observation
+    assert summary.observations_written == 2
+    assert summary.documents_tagged == 2
 
 
 # --- idempotency ---------------------------------------------------------
 
 
 def test_backfill_is_idempotent_on_rerun(tmp_path) -> None:
-    """Re-running the backfill (same proposals, same corpus, same run_ts)
-    must not duplicate observations -- either deterministic observation
-    IRIs (a re-run is a set-semantics no-op) or a clear-then-rewrite
-    strategy; either way, two independent runs produce byte-identical
-    generated updates (mirrors ``test_proposals_observations.py``'s
-    same-run_ts idempotency pattern)."""
-    run_backfill = _import_run_backfill()
-
+    """Re-running the backfill (same staged proposals, same corpus, the
+    default fixed BACKFILL_RUN_TS) must not duplicate observations --
+    deterministic observation IRIs make a re-run a set-semantics no-op, so
+    two independent runs produce byte-identical generated updates (mirrors
+    ``test_proposals_observations.py``'s same-run_ts idempotency pattern)."""
     config = Config(corpus_dir=tmp_path)
     _write_archive_docs(config, {f"{REPORT_DOC_A}.txt": "keepterm keepterm here"})
 
-    client_a, client_b = FakeSparqlClient(), FakeSparqlClient()
-    run_backfill(
-        [("keepterm", "property")],
-        config,
-        client_a,
-        RUN_TS,
-        chemistry_reports=[REPORT_DOC_A],
-        safety_reports=[],
-    )
-    run_backfill(
-        [("keepterm", "property")],
-        config,
-        client_b,
-        RUN_TS,
-        chemistry_reports=[REPORT_DOC_A],
-        safety_reports=[],
-    )
+    def _reader() -> FakeReader:
+        return FakeReader(
+            [StagedProposal(proposal_iri=_proposal_iri("keepterm"), kind="property", term="keepterm")]
+        )
 
-    assert client_a.updates == client_b.updates
+    sparql_a, sparql_b = FakeSparqlClient(), FakeSparqlClient()
+    summary_a = run_backfill(config, reader=_reader(), sparql=sparql_a)
+    summary_b = run_backfill(config, reader=_reader(), sparql=sparql_b)
+
+    assert sparql_a.updates == sparql_b.updates
+    assert summary_a == summary_b
+    assert BACKFILL_RUN_TS in _combined_text(sparql_a)
 
 
 # --- stale docFrequency scalar removal -----------------------------------
@@ -248,82 +218,85 @@ def test_backfill_removes_stale_docfrequency_scalar(tmp_path) -> None:
     """After backfill, the stale msr:docFrequency scalar is removed (design.md
     D4/D3, task 4.3): the generated updates must include a removal targeting
     msr:docFrequency (a DELETE, not merely an INSERT that leaves the old
-    scalar in place alongside the new observations)."""
-    run_backfill = _import_run_backfill()
-
+    scalar in place alongside the new observations), and the summary reports
+    how many scalars were removed."""
     config = Config(corpus_dir=tmp_path)
     _write_archive_docs(config, {f"{REPORT_DOC_A}.txt": "keepterm here"})
 
-    client = FakeSparqlClient()
-    run_backfill(
-        [("keepterm", "property")],
-        config,
-        client,
-        RUN_TS,
-        chemistry_reports=[REPORT_DOC_A],
-        safety_reports=[],
+    reader = FakeReader(
+        [StagedProposal(proposal_iri=_proposal_iri("keepterm"), kind="property", term="keepterm")],
+        doc_frequency_scalars=3,
     )
+    sparql = FakeSparqlClient()
 
-    text = _combined_text(client)
+    summary = run_backfill(config, reader=reader, sparql=sparql)
+
+    text = _combined_text(sparql)
     assert "docFrequency" in text
     assert "DELETE" in text.upper()
+    assert summary.doc_frequency_scalars_removed == 3
+
+
+def test_backfill_skips_the_delete_when_no_stale_scalars_remain(tmp_path) -> None:
+    """No stale msr:docFrequency scalars in urn:msr:staging -> no DELETE is
+    sent at all (never an unconditional no-op DELETE on every run)."""
+    config = Config(corpus_dir=tmp_path)
+    _write_archive_docs(config, {f"{REPORT_DOC_A}.txt": "keepterm here"})
+
+    reader = FakeReader(
+        [StagedProposal(proposal_iri=_proposal_iri("keepterm"), kind="property", term="keepterm")],
+        doc_frequency_scalars=0,
+    )
+    sparql = FakeSparqlClient()
+
+    summary = run_backfill(config, reader=reader, sparql=sparql)
+
+    assert "docFrequency" not in _combined_text(sparql)
+    assert summary.doc_frequency_scalars_removed == 0
 
 
 # --- document corpus tagging ---------------------------------------------
 
 
 def test_backfill_tags_scanned_documents_with_corpus(tmp_path) -> None:
-    """Task 4.2: scanned documents are tagged with msr:inCorpus for their
+    """Task 4.2: matched documents are tagged with msr:inCorpus for their
     genre's corpus -- a matched chemistry document ends up associated with
-    msrd:corpus-chemistry and a matched safety document with
-    msrd:corpus-safety somewhere in the generated updates (either via the
-    observation's own msr:inCorpus predicate, or a standalone
-    documents.write_corpus_tags-style update -- this test only pins that the
-    tagging triple exists for each matched document, not which writer
-    produced it)."""
-    run_backfill = _import_run_backfill()
-
+    msrd:corpus-chemistry and a matched (real) safety source with
+    msrd:corpus-safety somewhere in the generated updates."""
     config = Config(corpus_dir=tmp_path)
     _write_archive_docs(config, {f"{REPORT_DOC_A}.txt": "keepterm here"})
-    _write_safety_normalized(config, SAFETY_SRC_A, "keepterm here too")
+    _write_safety_normalized(config, SAFETY_SOURCE_ID, "keepterm here too")
 
-    client = FakeSparqlClient()
-    run_backfill(
-        [("keepterm", "property")],
-        config,
-        client,
-        RUN_TS,
-        chemistry_reports=[REPORT_DOC_A],
-        safety_reports=[SAFETY_SRC_A],
-    )
+    reader = FakeReader([StagedProposal(proposal_iri=_proposal_iri("keepterm"), kind="property", term="keepterm")])
+    sparql = FakeSparqlClient()
 
-    text = _combined_text(client)
+    summary = run_backfill(config, reader=reader, sparql=sparql)
+
+    text = _combined_text(sparql)
     assert "msr:inCorpus" in text
-    assert REPORT_DOC_A in text and corpora.CORPUS_CHEMISTRY in text
-    assert SAFETY_SRC_A in text and corpora.CORPUS_SAFETY in text
+    assert REPORT_DOC_A in text and CORPUS_CHEMISTRY in text
+    assert SAFETY_SOURCE_ID in text and CORPUS_SAFETY in text
+    assert summary.documents_tagged == 2
 
 
-# --- no fabricated observations for a non-matching document -------------
+# --- no fabricated observations for a non-matching term ------------------
 
 
 def test_backfill_writes_nothing_for_a_proposal_term_with_zero_hits(tmp_path) -> None:
     """A proposal whose stored term no longer matches anything in the cached
     corpora (e.g. corpus drift) must not fabricate an observation -- no
-    msr:inDocument for a document that never contained the term."""
-    run_backfill = _import_run_backfill()
-
+    msr:inDocument for a document that never contained the term, and the
+    summary reports zero observations written."""
     config = Config(corpus_dir=tmp_path)
     _write_archive_docs(config, {f"{REPORT_DOC_A}.txt": "totally unrelated content"})
 
-    client = FakeSparqlClient()
-    run_backfill(
-        [("nomatchterm", "property")],
-        config,
-        client,
-        RUN_TS,
-        chemistry_reports=[REPORT_DOC_A],
-        safety_reports=[],
+    reader = FakeReader(
+        [StagedProposal(proposal_iri=_proposal_iri("nomatchterm"), kind="property", term="nomatchterm")]
     )
+    sparql = FakeSparqlClient()
 
-    text = _combined_text(client)
-    assert "msr:inDocument" not in text
+    summary = run_backfill(config, reader=reader, sparql=sparql)
+
+    assert "msr:inDocument" not in _combined_text(sparql)
+    assert summary.observations_written == 0
+    assert summary.proposals_processed == 1

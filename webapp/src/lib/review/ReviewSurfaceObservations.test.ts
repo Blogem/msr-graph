@@ -175,15 +175,27 @@ describe('ReviewSurface - observation breakdown in the detail drawer (task 7.6)'
 	});
 });
 
-// Sanity check that the OLD single-corpus fixture (`proposalQueue`, still
-// the older scalar `docFrequency` shape) is untouched by this suite's new
-// fixtures -- guards against accidentally mutating the shared fixture
-// module's exports.
+// Sanity check that `proposalQueue` (the shared fixture also used by
+// `ReviewSurface.test.ts`) is untouched by this suite's own additions to
+// the fixture module. Reconciled at pass 2: the review-ui coder (T7)
+// legitimately rewrote `proposalQueue` from the old scalar `docFrequency`
+// shape to the new observation-aggregate shape (`documentFrequency`/
+// `totalOccurrences`/`corpusCount`/`corpora`) and made `graphite-1` its own
+// cross-corpus row -- this assertion is updated to match that real,
+// now-merged shape rather than the pass-1 assumption.
 describe('sanity', () => {
 	it('does not mutate the pre-existing proposalQueue fixture', () => {
 		expect(proposalQueue.length).toBe(4);
-		expect(proposalQueue.every((p) => typeof (p as { docFrequency?: number }).docFrequency === 'number')).toBe(
-			true
-		);
+		expect(
+			proposalQueue.every((p) => typeof (p as unknown as { documentFrequency?: number }).documentFrequency === 'number')
+		).toBe(true);
+		expect(
+			proposalQueue.every((p) => Array.isArray((p as unknown as { corpora?: string[] }).corpora))
+		).toBe(true);
+
+		const graphite = proposalQueue.find((p) => p.id === 'graphite-1') as unknown as {
+			corpusCount: number;
+		};
+		expect(graphite?.corpusCount).toBe(2);
 	});
 });
