@@ -26,14 +26,31 @@ data, with nothing fabricated:
 This change adds the safety branch and the linking edges; it does **not** invent the
 connection — every node and edge is asserted only where a real source sentence supports it.
 
-## Prerequisites (this is a stretch change on not-yet-built foundations)
+## Prerequisites (all foundations now landed; this change is unblocked)
 
 Per `docs/IMPLEMENTATION_PLAN.md`, chunk 11 depends on chunks 6–10 and inherits the P3.5
-trust contract. Built today: chunks 1–6, `provenance-model` (12). **Not yet built and
-required before this change is implemented:** 7 `extract-property-relations`,
-8 `mine-ontology-candidates`, 9 `apply-ontology-changes`, 10 `web-frontend`, and
-13 `shacl-validation`. This proposal is authored now (while the spike sources are fresh and
-cached) as the **stretch/post-M6** change; implementation waits on those chunks.
+trust contract. When this proposal was first authored, chunks 7–9 and 13 were not yet built;
+they have since all landed on `main`. **Now built and on `main`** (archived changes / live
+specs this change builds on directly):
+
+- chunk 6 mention layer — `mention-graph-writing`, `entity-linking`, `kg-schema-prompt`,
+  `llm-disambiguation` (+ `scale-mention-linking`);
+- chunk 7 relation/measurement layer — `relation-extraction`, `salt-role-reactor-edges`,
+  `text-measurement-writing`, `unit-qudt-mapping`, `measurement-store` (archived
+  `extract-property-relations`);
+- chunk 8 evolution miner — `novelty-detection`, `candidate-triage`, `change-proposal-schema`,
+  `proposal-staging`, `instance-auto-accept` (archived `mine-ontology-candidates`, refined by
+  `refine-mine-salience`);
+- chunk 9 approval engine — `approval-typed-routing`, `proposal-lifecycle`,
+  `proposal-review-api`, `store-checkpoint-restore` (archived `apply-ontology-changes`);
+- chunk 12 provenance — `provenance-model`, `provenance-run-lineage`;
+- chunk 13 SHACL — `shacl-validation`.
+
+**Only outstanding dependency:** chunk 10 `web-frontend` is **not** a hard prerequisite —
+this change grows the agent's answer surface, not the frontend contract, so it can be
+implemented and demonstrated through the agent/API without the frontend. With the chunk 7/8/9/13
+foundations now concrete on `main`, this change's design references the built specs rather than
+the assumed ones it was first drafted against (see `design.md`).
 
 ## What Changes
 
@@ -53,9 +70,13 @@ cached) as the **stretch/post-M6** change; implementation waits on those chunks.
   `msr:DesignBasis` are **mined as change proposals** (chunk 8) from the safety genre and approved
   (chunk 9) — **not seeded**. This is the self-evolving-ontology demo on a second, higher-stakes genre.
 - **The digital-thread linking edges**: `msr:servedByProperty` (`SafetyFunction → PhysicalProperty`)
-  and `msr:addressesFunction` (`Requirement → SafetyFunction`), extracted from safety text and
-  **asserted only where a source sentence states the dependency**, each evidence-bearing (linked to
-  the source `Mention`/`Document`) and provenance-complete. Optional `rdfs:seeAlso` from a
+  and `msr:addressesFunction` (`Requirement → SafetyFunction`), extracted from safety text by the
+  built chunk-7 `relation-extraction` stage and **asserted only where a source sentence states the
+  dependency**. Each edge is evidence-bearing via the chunk-7 `rdf:Statement` reification pattern
+  (`salt-role-reactor-edges`): the direct edge plus a deterministic reification node carrying
+  `msr:extractionConfidence`/`msr:extractionRationale` and provenance, with the source span recorded
+  in the chunk-6 mention layer and the whole relation traced in `relations.jsonl`. Optional
+  `rdfs:seeAlso` from a
   `SafetyFunction`/`Requirement` to a named IAEA standard identifier where the text names one
   (the opportunistic standards alignment per `PROVENANCE_AND_TRUST_DESIGN.md` §6). No direct
   safety→salt or safety→value edge is asserted (none is stated in any source); the tie to a salt
@@ -101,12 +122,15 @@ cached) as the **stretch/post-M6** change; implementation waits on those chunks.
   `msr:addressesFunction` relations enter `urn:msr:ontology` **only** via approved chunk-9 proposals;
   the safety-relevant `msr:PhysicalProperty` individuals they link to (`vaporPressure`, `specificHeat`,
   `thermalConductivity`, `meltingPoint`) already exist in the seed T-Box.
-- **Provenance & SHACL**: safety documents, mentions, safety individuals, and the linking edges are
-  fact-bearing → carry the chunk-12 provenance edges; the chunk-13 SHACL shape catalogue is extended to
-  require provenance + a source on the safety node kinds. Requirement thresholds are **not** SHACL-gated
-  (soft criteria).
+- **Provenance & SHACL**: safety documents, mentions, safety individuals, and the linking-edge
+  reification nodes are fact-bearing → carry the chunk-12 provenance edges; the chunk-13 SHACL shape
+  catalogue (native RDF4J `ShaclSail`, versioned Turtle in the reserved shapes graph) is extended with
+  shapes for the safety node kinds. Safety `Mention`s are already covered by the landed `Mention` shape;
+  only `SafetyFunction`/`Requirement` provenance shapes and the two edge-target shapes are added.
+  Requirement thresholds are **not** SHACL-gated (soft criteria).
 - **Docs**: `docs/SAFETY_THREAD_SPIKE.md` (the spike + stakeholder questions, already added) is the
   design input; `docs/DATA_SCOPE.md` §4 updated from "stretch/deferred" to the finalized ingested set +
   section scope + attribution.
-- **Depends on**: chunks 6–10 and 12–13 (see Prerequisites). **Downstream**: none — this is the final
-  stretch genre; it grows the agent's and frontend's answer surface with no change to their contracts.
+- **Depends on**: chunks 6–9 and 12–13, all now landed on `main` (see Prerequisites); chunk 10 is not a
+  hard prerequisite. **Downstream**: none — this is the final stretch genre; it grows the agent's and
+  frontend's answer surface with no change to their contracts.

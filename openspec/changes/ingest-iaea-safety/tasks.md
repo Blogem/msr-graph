@@ -1,7 +1,8 @@
 # Tasks: ingest-iaea-safety
 
-> **Stretch change.** Depends on chunks 6–10 + 12–13 (see `proposal.md` → Prerequisites).
-> All tasks are unchecked; do not start until those chunks are built and M6 + M3.5 are met.
+> **Unblocked.** Chunks 6–9 + 12–13 have all landed on `main` (see `proposal.md` → Prerequisites);
+> this change builds on those merged specs. Chunk 10 (frontend) is not a hard prerequisite. All tasks
+> are unchecked; task wording below references the built specs by name.
 
 ## 1. Safety-source acquisition (`safety-source-acquisition`)
 
@@ -17,23 +18,23 @@
 
 ## 3. Safety branch via the evolution loop (`safety-ontology-evolution`)
 
-- [ ] 3.1 Extend the chunk-8 miner with multi-word (noun-phrase) candidate extraction for the safety genre, keeping document-frequency scoring and evidence sentences
-- [ ] 3.2 Make the chunk-8 triage classifier genre-aware so it proposes the `SafetyFunction` / `Requirement` / `Confinement` / `DefenceInDepth` / `DesignBasis` class kinds; ChangeProposal mini-schema and staging/approval routing unchanged
+- [ ] 3.1 Extend the built `novelty-detection` spaCy noun-chunk pass for the safety genre: relax the 1–3 content-token window / preserve the noun-chunk head phrase so prepositional safety concepts ("confinement of radioactive material", "removal of residual heat") survive as candidates; reuse unchanged the DF floor/ceiling, known/linked exclusion, and `msr:citedIn`+offset evidence capture
+- [ ] 3.2 Make the `candidate-triage` Flash classifier genre-aware: prompt it with the safety genre so it (a) does not reject domain-shaped safety phrases as boilerplate and (b) for `class`-kind safety concepts proposes a Safety broader-class placement, and for the two linking edges proposes `relation`-kind domain/range. Kinds (`property`/`class`/`instance`/`relation`), the `change-proposal-schema` mini-schema, `proposal-staging`, and `approval-typed-routing` are unchanged
 - [ ] 3.3 Verify the three fundamental safety functions (confinement of radioactive material, control of reactivity, heat removal) surface as proposals with evidence from the ingested sources
-- [ ] 3.4 Confirm chunk-9 approval routes the approved safety classes/relations into `urn:msr:ontology` and bumps `owl:versionInfo` (no new engine code — typed routing already handles TBox axioms)
+- [ ] 3.4 Confirm `approval-typed-routing` routes the approved safety classes/relations into `urn:msr:ontology` (and individuals/edges into `urn:msr:data`) and `proposal-lifecycle` minor-bumps `owl:versionInfo` — no new engine code, since routing is by triple type and already handles TBox axioms + mixed bundles
 
 ## 4. Digital-thread linking (`safety-property-linking`)
 
-- [ ] 4.1 Extend the chunk-7 relation extractor (genre-aware, stubbed-Flash) to emit `msr:servedByProperty` (`SafetyFunction → PhysicalProperty`) **only** where a source sentence states the dependency
+- [ ] 4.1 Extend the built `relation-extraction` stage (genre-aware, stubbed-Flash) to emit `msr:servedByProperty` (`SafetyFunction → PhysicalProperty`) **only** where a source sentence states the dependency; run linking extraction as a **second phase** after the safety branch is approved into core, so the closed-set validation resolves the (grown) safety subjects/targets
 - [ ] 4.2 Emit `msr:addressesFunction` (`Requirement → SafetyFunction`) where stated
-- [ ] 4.3 Write the evidence for each edge: the linking `msr:Mention`(s) (surfaceForm, inDocument, offsets, `linksTo`) + the chunk-12 provenance edges; reject an edge whose property/function target IRI is not in core
+- [ ] 4.3 Write each edge's evidence via the chunk-7 `rdf:Statement` reification pattern (`salt-role-reactor-edges`): direct edge + a deterministic reification node carrying `msr:extractionConfidence`/`msr:extractionRationale` + the chunk-12 provenance edges; record every relation (written/skipped/rejected) in `relations.jsonl`; reject an edge whose property/function target IRI is not in core
 - [ ] 4.4 Extract optional `rdfs:seeAlso` from a `SafetyFunction`/`Requirement` to a named IAEA standard identifier **only** where the text names the standard
 - [ ] 4.5 Extract `msr:thresholdValue` / `msr:thresholdComparator` / `msr:thresholdUnit` on a `Requirement` only when the source states a numeric threshold (e.g. liquidus < 500 °C)
 
 ## 5. Provenance & SHACL (extends chunks 12–13)
 
-- [ ] 5.1 Confirm safety documents/mentions/individuals/edges carry the chunk-12 provenance edges (reuse the shared writer; no new provenance model)
-- [ ] 5.2 Extend the chunk-13 SHACL catalogue: `SafetyFunction`/`Requirement`/safety `Mention` require `wasDerivedFrom` + a source; `servedByProperty` target must be an existing `PhysicalProperty`; `addressesFunction` target must be a `SafetyFunction`; no threshold/satisfaction shape
+- [ ] 5.1 Confirm safety documents/mentions/individuals/edge-reification-nodes carry the chunk-12 provenance edges (reuse the shared `provenance.py` writer; no new provenance model)
+- [ ] 5.2 Extend the `shacl-validation` catalogue Turtle (reserved shapes graph): add `SafetyFunction`/`Requirement` provenance shapes (`wasDerivedFrom` + `wasGeneratedBy`), a `servedByProperty`-target-must-be-`PhysicalProperty` shape, and an `addressesFunction`-target-must-be-`SafetyFunction` shape. **No new mention shape** — safety `Mention`s are already covered by the landed `Mention` shape. No threshold/satisfaction shape
 
 ## 6. Agent safety answers (`analysis-agent`)
 
@@ -52,7 +53,7 @@
 - [ ] 8.2 Section-scoping: manifest-driven page/section selection picks the right span from a fixture
 - [ ] 8.3 Multi-word candidate extraction: fixture safety sentences → expected noun-phrase candidates; single-token noise excluded
 - [ ] 8.4 Genre-aware triage (stubbed-Flash): fixed classifications → proposal graphs validate against the chunk-8 mini-schema with the safety class kinds
-- [ ] 8.5 Linking extraction (stubbed-Flash): fixture sentences → expected `servedByProperty` / `addressesFunction` edges + evidence + provenance; a **co-mention without a stated dependency yields no edge**; unknown target IRI rejected
+- [ ] 8.5 Linking extraction (stubbed-Flash): fixture sentences → expected `servedByProperty` / `addressesFunction` edges, each with its `rdf:Statement` reification (confidence/rationale) + provenance + `relations.jsonl` record; a **co-mention without a stated dependency yields no edge**; unknown / not-yet-approved target IRI rejected
 - [ ] 8.6 Threshold extraction: the liquidus-preference sentence → `thresholdValue 500` / `comparator lt` / unit; no-threshold sentence yields none
 - [ ] 8.7 Agent (stubbed LLM + fake pool): evidence-chain traversal returns the provenance chain; gap query returns the missing-measurement set; requirement-satisfaction computes 434 vs 500 margin in a sandbox script with the soft-criterion caveat; ungrounded safety claim stamped ungrounded
 - [ ] 8.8 SHACL (opt-in, GraphDB-required): safety individual missing `wasDerivedFrom` rejected; valid safety facts load

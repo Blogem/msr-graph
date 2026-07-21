@@ -15,10 +15,14 @@ A feasibility spike (`docs/SAFETY_THREAD_SPIKE.md`) established, with cached rea
   digital thread because each edge is individually grounded — no single sentence says
   "requirement R needs property P of salt S", and none is fabricated.
 
-This change is the plan's **chunk 11**, deferred until chunks 6–10 + 13 land (see the proposal's
-Prerequisites). It reuses, per genre, the chunk-5 corpus pipeline, the chunk-6 NER/mention layer,
-the chunk-7 relation extractor, the chunk-8 novelty miner, the chunk-9 approval engine, and the
-chunk-4 agent — adding only what the safety genre needs.
+This change is the plan's **chunk 11**. Its foundations — chunks 6–9 + 12–13 — have all landed
+on `main` (see the proposal's Prerequisites), so the design below references the built specs by
+name. It reuses, per genre, the chunk-5 corpus pipeline, the chunk-6 NER/mention layer
+(`mention-graph-writing`), the chunk-7 relation extractor (`relation-extraction`,
+`salt-role-reactor-edges`, `text-measurement-writing`), the chunk-8 novelty miner
+(`novelty-detection`, `candidate-triage`, `change-proposal-schema`), the chunk-9 approval engine
+(`approval-typed-routing`, `proposal-lifecycle`), and the chunk-4 agent — adding only what the
+safety genre needs.
 
 Binding contracts (unchanged, inherited):
 
@@ -91,16 +95,29 @@ with the chunk-12 provenance edges. Attribution is mandatory (D5) so any surface
 ### D3 — The Safety branch is grown, not seeded (headline demo)
 
 The five safety classes and the two linking relations enter the ontology **only** via approved chunk-9
-proposals mined by chunk 8 over the safety genre. Two genre-specific needs the miner must gain:
+proposals mined by chunk 8 over the safety genre. The built miner already covers more of this than the
+first draft assumed, so the genre-specific work is narrower than originally scoped:
 
-1. **Multi-word candidate extraction.** Chemistry novelties are largely single tokens (`solubility`,
-   `graphite`); safety concepts are noun phrases (_"confinement of radioactive material"_, _"defence in
-   depth"_, _"removal of residual heat"_). The miner's salient-term extraction is extended to noun-phrase
-   candidates for this genre (chunk phrases, not just unigrams), with the same document-frequency scoring
-   over the safety set and evidence sentences from the sources.
-2. **Genre-aware triage.** The chunk-8 DeepSeek-Flash triage classifier is prompted with the safety
-   genre so it proposes the `SafetyFunction`/`Requirement`/… class kinds; the ChangeProposal
-   mini-schema and staging/approval routing are unchanged.
+1. **Multi-word candidate extraction — extend the existing pass, don't add one.** `novelty-detection`
+   already enumerates candidates from a spaCy noun-chunk pass, but keeps only **1–3 surviving content
+   tokens** (alphabetic, non-stopword, lemmatized). Chemistry novelties fit that window (`solubility`,
+   `graphite`); safety concepts are longer prepositional phrases (_"confinement of radioactive material"_,
+   _"removal of residual heat"_) whose surface form is lost once stopwords like _of_/_in_ are dropped and
+   the window caps at three tokens. The genre extension is therefore to **relax the content-token window
+   / preserve the noun-chunk head phrase** for the safety genre so these concepts survive as candidates —
+   reusing, unchanged, the document-frequency floor/ceiling cost bound, the known/linked exclusion, and
+   the curated-set evidence-sentence capture (`msr:citedIn` + offsets) the built miner already provides.
+   Short safety concepts (`confinement`, `defence in depth`) already fit the existing window.
+2. **Genre-aware triage — a prompt change within the fixed kind set.** `candidate-triage`'s kinds are
+   fixed (`property`/`class`/`instance`/`relation`, or reject); the safety classes are **`class`-kind
+   proposals** and the two linking edges are **`relation`-kind proposals** — the `SafetyFunction`/
+   `Requirement`/… names are the *proposed placement* (a broader Safety class / domain+range), not new
+   triage kinds. The genre-aware change is to prompt the Flash classifier with the safety genre so it
+   (a) does not reject domain-shaped safety phrases as boilerplate and (b) proposes a Safety broader-class
+   placement for `class`-kind safety concepts and domain/range for the `relation`-kind edges. The
+   `ChangeProposal` mini-schema (`change-proposal-schema`), staging model (`proposal-staging`), and
+   approval routing (`approval-typed-routing`) are unchanged — a mixed TBox+instance bundle under one
+   proposal is already supported, and routing promotes each triple by type.
 
 - **Why grown, not seeded** — seeding safety classes would violate principle 3 and, worse, remove the
   demo: the whole point is that a _new domain_ (safety) grows the ontology through the same reviewed
@@ -122,15 +139,35 @@ msr:specificHeat , msr:viscosity` (GIF Holcomb: _"heat capacity … and viscosit
 - `msr:addressesFunction` : `Requirement → SafetyFunction`. A requirement statement addresses a
   fundamental safety function (e.g. a coolant-selection requirement addresses heat removal).
 
-Each edge is **evidence-bearing and provenance-complete**: the extractor writes, alongside the edge, the
-linking `msr:Mention`(s) for the source span (reusing the chunk-6 mention layer: `surfaceForm`,
-`inDocument`, `startOffset`/`endOffset`, `linksTo` the safety individual and the property), and the edge
-carries the chunk-12 `prov:wasDerivedFrom` the safety `Document` + `prov:wasGeneratedBy` the
-safety-extraction `Activity`. The **tie to a salt is transitive**, never asserted directly:
+Each edge is **evidence-bearing and provenance-complete**, following the built chunk-7 edge model
+exactly (`salt-role-reactor-edges`, "Extraction provenance on edges via RDF reification"): alongside the
+direct edge the extractor writes a deterministic `rdf:Statement` node reifying it (`rdf:subject` the
+safety individual, `rdf:predicate` `servedByProperty`/`addressesFunction`, `rdf:object` the property/
+function) carrying `msr:extractionConfidence` and `msr:extractionRationale`, and that reification node —
+itself a pipeline-asserted individual — carries the chunk-12 `prov:wasDerivedFrom` the safety `Document`
++ `prov:wasGeneratedBy msrd:activity-extraction` (with the per-run `urn:msr:run:extraction/<ts>`
+generation edge in `urn:msr:provenance`). The source span is recoverable through the chunk-6 mention
+layer, and every proposed relation — written, skipped, or rejected — is recorded in the per-document
+`relations.jsonl` trace with its confidence, rationale, and disposition (`relation-extraction`). A
+below-confidence-threshold edge is skipped, not written. This resolves the first-draft open question on
+edge evidence modeling: chunk 7 settled on reification, so this change follows it rather than reifying
+each edge as a bespoke evidence node. The **tie to a salt is transitive**, never asserted directly:
 
 ```
 SafetyFunction ─servedByProperty▶ PhysicalProperty ◀forProperty─ PropertyMeasurement ─ofSalt▶ MoltenSalt
 ```
+
+**Closed-set validation and ordering.** The chunk-7 extractor validates a relation's referents against
+the run's known-IRI set and rejects any edge naming an entity absent from core (`relation-extraction`).
+`servedByProperty`'s target is a seed `msr:PhysicalProperty`, always in core, so it validates on the
+first pass. But `addressesFunction`'s target — a `SafetyFunction` — and both edges' safety-individual
+subjects are **grown, not seeded**, so they do not exist in core until the safety branch is mined and
+approved. The safety ingest therefore runs in two phases against one closed-set contract: **(1)** mine +
+approve the safety branch (classes, the two object properties, and the safety individuals) so they enter
+core; **(2)** re-run relation extraction over the safety genre, at which point the linking edges'
+subjects and targets resolve and validate. This mirrors the reactor-mint exception the built extractor
+already handles (an edge admitted only once its referent is grounded in core), applied to the safety
+subject/target instead of a minted reactor.
 
 - **Optional standards alignment** — `rdfs:seeAlso` from a `SafetyFunction`/`Requirement` to a named
   IAEA standard identifier (e.g. an IRI/literal for "IAEA SSR-2/1", "IAEA SF-1") **only** where the
@@ -154,13 +191,19 @@ for exceeding a preference.
 
 ### D6 — Provenance & SHACL inheritance (extend, don't reinvent)
 
-Safety documents, mentions, safety individuals, and the two linking edges are fact-bearing and follow
-the chunk-12 model unchanged: stable `Activity` IRI referenced by `prov:wasGeneratedBy` in
-`urn:msr:data`, per-run `Activity` (agent, timestamps, ontology version) appended to `urn:msr:provenance`,
-`prov:wasDerivedFrom` the safety `Document`. The chunk-13 SHACL catalogue is **extended** with shapes
-requiring: every `SafetyFunction`/`Requirement`/safety `Mention` carries `wasDerivedFrom` + a source;
-every `servedByProperty` edge has a `PhysicalProperty` target that exists in core; every
-`addressesFunction` edge targets a `SafetyFunction`. No threshold/satisfaction shape (D5).
+Safety documents, mentions, safety individuals, and the two linking-edge reification nodes are
+fact-bearing and follow the chunk-12 model unchanged: stable `msrd:activity-extraction` IRI referenced by
+`prov:wasGeneratedBy` in `urn:msr:data`, per-run `Activity` (agent, timestamps, ontology version)
+appended to `urn:msr:provenance`, `prov:wasDerivedFrom` the safety `Document`. The chunk-13 catalogue
+(native RDF4J `ShaclSail`, a versioned Turtle artifact in the reserved shapes graph, validated per
+transaction — `shacl-validation`) is **extended** with the safety-specific shapes. Note what is already
+covered: safety `Mention`s satisfy the landed `Mention` shape (which already requires `inDocument`,
+`startOffset`/`endOffset`, `surfaceForm`, and both PROV edges), so **no new mention shape is added**. The
+additions, mirroring the existing catalog-individual provenance shape, are: `SafetyFunction` and
+`Requirement` each require `prov:wasDerivedFrom` + `prov:wasGeneratedBy`; a `servedByProperty` edge's
+target must be an existing core `PhysicalProperty`; an `addressesFunction` edge's target must be a
+`SafetyFunction`. No threshold/satisfaction shape (D5). Each safety write commits atomically against the
+sail (`approval-typed-routing` already rolls back a whole promotion on any shape violation).
 
 ### D7 — The agent answers the stakeholder questions with no new tools
 
@@ -197,8 +240,9 @@ safety genre. `make ingest-safety` is a one-shot Compose run of the extraction c
 - **Genre-aware triage** — stubbed-Flash returns fixed classifications → proposal graphs validate against
   the chunk-8 mini-schema with the `SafetyFunction`/`Requirement` kinds.
 - **Linking extraction** — stubbed-Flash fixture sentences → the expected `servedByProperty` /
-  `addressesFunction` edges + evidence mentions + provenance; a sentence that does **not** state a
-  dependency yields **no** edge (precision guard); an edge to an unknown property IRI is rejected.
+  `addressesFunction` edges, each with its `rdf:Statement` reification (confidence/rationale) +
+  provenance and a `relations.jsonl` record; a sentence that does **not** state a dependency yields
+  **no** edge (precision guard); an edge to an unknown/not-yet-approved target IRI is rejected.
 - **Threshold extraction** — the ORNL/TM-2006/12 liquidus-preference sentence → `thresholdValue 500`,
   `comparator lt`, `unit K/°C`; a sentence with no threshold yields none.
 - **Agent** (stubbed LLM + fake pool) — evidence-chain traversal returns the provenance chain; the gap
@@ -232,8 +276,9 @@ exact evidence the spike relied on.
 - **A GIF MSR-specific Safety Design Criteria (SDC) report is not yet public** (only VHTR/LFR SDC exist).
   → Accepted: the GIF Holcomb MSR safety analysis is the public stand-in for the requirement-function
   layer; when an MSR SDC lands it is a new source added to the manifest, no schema change.
-- **Depends on five not-yet-built chunks** (7–10, 13). → Accepted: authored now as the stretch change so
-  the cached sources and grounded thread are captured; implementation is sequenced after M6 + P3.5.
+- **~~Depends on five not-yet-built chunks~~** — no longer a risk: chunks 6–9 + 12–13 have all landed on
+  `main` (see Prerequisites), so this change now builds on concrete, merged specs. Chunk 10 (frontend) is
+  not a hard prerequisite. The design above references the built specs by name.
 
 ## Migration Plan
 
@@ -247,10 +292,10 @@ or delete `data/safety/` + the safety triples; nothing outside `data/safety/`, `
 
 ## Open Questions
 
-- **`servedByProperty` cardinality and evidence modeling** — whether to reify each edge as a small
-  evidence node (edge + `citedIn` + span) or keep the edge plus separate linking `Mention`s (current
-  design, D4). Resolve at build against how chunk 7 ends up modeling measurement evidence, to stay
-  consistent with the built relation extractor.
+- **~~`servedByProperty` evidence modeling~~ — RESOLVED.** Chunk 7 shipped `rdf:Statement` reification
+  carrying `msr:extractionConfidence`/`msr:extractionRationale` + provenance for its text-derived edges
+  (`salt-role-reactor-edges`). This change follows that pattern for both linking edges (D4), rather than
+  a bespoke evidence node or separate linking `Mention`s.
 - **Standard-identifier IRIs for `rdfs:seeAlso`** — mint local IRIs for named IAEA standards vs. link to
   an external scheme (e.g. an IAEA/OSTI identifier). Decide when the first standard is actually named in
   the ingested sections; keep it opportunistic, not a loaded standards catalogue.

@@ -12,19 +12,23 @@ The system SHALL introduce the `Safety` ontology branch — `msr:SafetyFunction`
 - **THEN** the class is routed into `urn:msr:ontology`, `owl:versionInfo` is bumped with a PROV record, and the class becomes visible to the core-dataset client
 
 ### Requirement: Multi-word safety-concept candidate mining
-The system SHALL extend the novelty miner to surface multi-word (noun-phrase) candidates for the safety genre — e.g. "confinement of radioactive material", "defence in depth", "removal of residual heat" — using the same document-frequency scoring and evidence-sentence capture as single-token candidates. The three fundamental safety functions (confinement of radioactive material, control of reactivity, heat removal) MUST surface as proposals from the ingested sources.
+The system SHALL extend the built `novelty-detection` spaCy noun-chunk candidate pass for the safety genre so prepositional multi-word safety concepts survive enumeration — e.g. "confinement of radioactive material", "removal of residual heat" — rather than being lost to the existing 1–3 content-token window that drops stopwords such as _of_/_in_. The extension SHALL relax that window / preserve the noun-chunk head phrase for the safety genre while reusing unchanged the document-frequency floor/ceiling cost bound, the known/linked exclusion, and the curated-set evidence-sentence capture (`msr:citedIn` + offsets). The three fundamental safety functions (confinement of radioactive material, control of reactivity, heat removal) MUST surface as proposals from the ingested sources.
 
 #### Scenario: Fundamental safety functions surface as proposals
 - **WHEN** the miner runs over the ingested safety genre
 - **THEN** proposals corresponding to confinement of radioactive material, control of reactivity, and heat removal are present in staging, each with an evidence sentence and `msr:citedIn` a safety `Document`
 
-#### Scenario: Multi-word candidates are extracted, not just unigrams
-- **WHEN** a safety sentence contains a multi-word safety concept
+#### Scenario: A prepositional safety concept survives the token window
+- **WHEN** a safety sentence contains a multi-word safety concept whose surface form exceeds the existing 1–3 content-token window (e.g. "removal of residual heat")
 - **THEN** the miner emits the noun-phrase candidate (not only its constituent unigrams) with document-frequency evidence
 
-### Requirement: Genre-aware triage into safety class kinds
-The system SHALL make the triage classifier genre-aware so safety candidates are classified into the safety class kinds (`SafetyFunction`/`Requirement`/`Confinement`/`DefenceInDepth`/`DesignBasis`), while the ChangeProposal mini-schema, staging graphs, and approval routing remain unchanged. Proposals SHALL remain invisible via the core-dataset client until approved.
+### Requirement: Genre-aware triage places safety candidates within the fixed kind set
+The system SHALL make the `candidate-triage` classifier genre-aware for the safety genre **without adding new triage kinds**: safety concepts are triaged as `class`-kind proposals whose proposed placement is a Safety broader class (`SafetyFunction`/`Requirement`/`Confinement`/`DefenceInDepth`/`DesignBasis`), and the two linking edges are triaged as `relation`-kind proposals with proposed domain/range. The genre prompt SHALL keep the classifier from rejecting domain-shaped safety phrases as boilerplate. The `change-proposal-schema` mini-schema, `proposal-staging` graphs, and `approval-typed-routing` remain unchanged. Proposals SHALL remain invisible via the core-dataset client until approved.
 
-#### Scenario: A safety candidate is triaged to a safety class kind
-- **WHEN** triage classifies a mined safety candidate
-- **THEN** the emitted `msr:ChangeProposal` carries a safety `msr:kind` and validates against the existing mini-schema, and its proposed triples sit in `urn:msr:proposal/{id}` (invisible to the core-dataset client)
+#### Scenario: A safety concept is triaged as a class proposal with a Safety placement
+- **WHEN** triage classifies a mined safety concept such as "heat removal"
+- **THEN** the emitted `msr:ChangeProposal` carries `msr:kind "class"` with a proposed Safety broader-class placement, validates against the existing mini-schema, and its proposed triples sit in `urn:msr:proposal/{id}` (invisible to the core-dataset client)
+
+#### Scenario: A linking edge is triaged as a relation proposal
+- **WHEN** triage classifies a mined linking concept (e.g. a safety-function-to-property dependency)
+- **THEN** the emitted proposal carries `msr:kind "relation"` with proposed domain/range, and its object-property triples route to `urn:msr:ontology` on approval by triple type

@@ -16,18 +16,26 @@ The system SHALL extract `msr:servedByProperty` edges (`msr:SafetyFunction → m
 - **THEN** no triple directly relates a `msr:SafetyFunction` to a `msr:MoltenSalt` or to a numeric value; the only salt tie is the transitive path `SafetyFunction → servedByProperty → PhysicalProperty ← forProperty ← PropertyMeasurement → ofSalt → MoltenSalt`
 
 ### Requirement: Requirement to safety-function links
-The system SHALL extract `msr:addressesFunction` edges (`msr:Requirement → msr:SafetyFunction`) where a source states that a requirement addresses a fundamental safety function.
+The system SHALL extract `msr:addressesFunction` edges (`msr:Requirement → msr:SafetyFunction`) where a source states that a requirement addresses a fundamental safety function. Because a `msr:SafetyFunction` is a grown (not seeded) individual, the `relation-extraction` closed-set validation resolves an `addressesFunction` target only after the safety branch is approved into core; linking extraction therefore runs as a second phase, after the mine+approve phase that promotes the safety individuals.
 
 #### Scenario: Requirement addresses a function
-- **WHEN** a source states a coolant-selection requirement that serves heat removal
+- **WHEN** a source states a coolant-selection requirement that serves heat removal, and the target `msrd:sf-heat-removal` `SafetyFunction` has been approved into core
 - **THEN** `msr:addressesFunction` is asserted from the `Requirement` individual to `msrd:sf-heat-removal`
 
-### Requirement: Linking edges are evidence-bearing and provenance-complete
-The system SHALL write, alongside each `msr:servedByProperty` / `msr:addressesFunction` edge, the linking `msr:Mention`(s) for the source span (`msr:surfaceForm`, `msr:inDocument`, `msr:startOffset`/`msr:endOffset`, `msr:linksTo`) and SHALL attach the provenance edges (`prov:wasDerivedFrom` the safety `Document`, `prov:wasGeneratedBy` the safety-extraction `Activity`). Edges and evidence use deterministic IRIs and additive writes so re-runs are no-ops.
+#### Scenario: An edge to a not-yet-approved function is rejected
+- **WHEN** linking extraction proposes an `addressesFunction` edge whose target `SafetyFunction` is not yet in core
+- **THEN** the edge is rejected and nothing is written, exactly as the closed-set validation rejects any relation naming an entity absent from core
 
-#### Scenario: Edge carries resolvable evidence and provenance
+### Requirement: Linking edges are evidence-bearing and provenance-complete
+The system SHALL write each `msr:servedByProperty` / `msr:addressesFunction` edge following the built chunk-7 edge model (`salt-role-reactor-edges`): the direct edge PLUS a deterministic `rdf:Statement` node reifying it (`rdf:subject` the safety individual, `rdf:predicate` the linking property, `rdf:object` the property/function) carrying `msr:extractionConfidence` and `msr:extractionRationale`. That reification node SHALL carry the provenance edges (`prov:wasDerivedFrom` the safety `Document`, `prov:wasGeneratedBy msrd:activity-extraction`, with the per-run generation edge in `urn:msr:provenance`). Every proposed edge — written, skipped, or rejected — SHALL be recorded in the per-document `relations.jsonl` trace with its confidence, rationale, and disposition; a below-threshold edge is skipped, not written. Edges and reification nodes use deterministic IRIs and additive writes so re-runs are no-ops.
+
+#### Scenario: Edge carries queryable confidence and provenance
 - **WHEN** a `msr:servedByProperty` edge is written
-- **THEN** its source span is recoverable via the linked `msr:Mention` in a safety `Document`, and the edge carries `prov:wasDerivedFrom` that document and `prov:wasGeneratedBy` the extraction activity
+- **THEN** the graph gains the direct edge and an `rdf:Statement` reifying it that carries `msr:extractionConfidence`, `msr:extractionRationale`, `prov:wasDerivedFrom` the safety `Document`, and `prov:wasGeneratedBy` the extraction activity — all queryable — and the relation is recorded in `relations.jsonl`
+
+#### Scenario: A below-confidence-threshold edge is skipped
+- **WHEN** a proposed linking edge's extraction confidence is below the configured threshold
+- **THEN** no edge or reification node is written and the relation is recorded in `relations.jsonl` with `disposition:"skipped"`
 
 ### Requirement: Opportunistic standards alignment
 The system SHALL assert `rdfs:seeAlso` from a `msr:SafetyFunction`/`msr:Requirement` to a named IAEA safety-standard identifier **only** where the source text names the standard. Standards SHALL NOT be imported wholesale, and the alignment SHALL NOT be forced where the text does not name a standard.
