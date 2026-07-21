@@ -1,5 +1,11 @@
 # `ingest-iaea-safety` (chunk 11) — feasibility spike: one grounded thread, end to end
 
+> **Realized.** This spike's grounded thread (requirement → safety function → property
+> → measurement → salt) and the six stakeholder questions below are now implemented by
+> the `ingest-iaea-safety` change — the finalized four-source ingested set, section
+> scope, and attribution rule are recorded in
+> [`docs/DATA_SCOPE.md` §4](DATA_SCOPE.md#4-iaeagifornl-safety-sources-chunk-11-ingest-iaea-safety).
+
 **Question.** Can the safety/requirements ambition be realized by *tying real NIST +
 OCR salt-property data to real IAEA safety requirements*, with **nothing fabricated** —
 in the same all-real spirit as `ground-demo-in-real-docs`?
