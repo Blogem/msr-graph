@@ -81,6 +81,31 @@ func TestRequireGraphDB_Guard(t *testing.T) {
 				"GRAPHDB_REPO":      "production",
 			},
 		},
+		{
+			// D2: literal "msr" is always forbidden regardless of
+			// GRAPHDB_REPO -- prove the guard still trips even when
+			// GRAPHDB_REPO is overridden to a different value, so route A
+			// (testRepo == defaultProdRepo) can't be bypassed by
+			// reconfiguring GRAPHDB_REPO.
+			name: "explicit msr trips guard even when GRAPHDB_REPO points elsewhere",
+			env: map[string]string{
+				"GRAPHDB_URL":       srv.URL,
+				"GRAPHDB_TEST_REPO": "msr",
+				"GRAPHDB_REPO":      "some-other-prod-repo",
+			},
+		},
+		{
+			// GRAPHDB_TEST_REPO unset resolves to the default "msr-test",
+			// which is safe UNLESS GRAPHDB_REPO has been (mis)configured to
+			// equal that same default -- prove the guard still trips via
+			// route B (testRepo == prodRepo) in that case, even though no
+			// GRAPHDB_TEST_REPO was ever set explicitly.
+			name: "unset GRAPHDB_TEST_REPO trips guard when GRAPHDB_REPO is misconfigured to match the default test repo",
+			env: map[string]string{
+				"GRAPHDB_URL":  srv.URL,
+				"GRAPHDB_REPO": "msr-test",
+			},
+		},
 	}
 
 	for _, tc := range guardCases {
