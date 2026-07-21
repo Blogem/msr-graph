@@ -216,8 +216,10 @@ export const proposalQueue: ProposalSummary[] = [
 // firstObserved, lastObserved}]}]`), the casts below become redundant and
 // can be dropped.
 
-const CORPUS_CHEMISTRY = 'msrd:corpus-chemistry';
-const CORPUS_SAFETY = 'msrd:corpus-safety';
+// CURIE-form corpus IRIs (distinct from the full-IRI constants above) so
+// these fixtures also exercise `corpusLabel`'s CURIE handling path.
+const CORPUS_CHEMISTRY_CURIE = 'msrd:corpus-chemistry';
+const CORPUS_SAFETY_CURIE = 'msrd:corpus-safety';
 
 /** A single queue row for a term mined from BOTH corpora (the historical
  * `moderator` case design.md D4 cites: ~269 chemistry docs + a couple of
@@ -232,7 +234,7 @@ export const crossCorpusQueueRow = {
 	documentFrequency: 271,
 	totalOccurrences: 540,
 	corpusCount: 2,
-	corpora: [CORPUS_CHEMISTRY, CORPUS_SAFETY]
+	corpora: [CORPUS_CHEMISTRY_CURIE, CORPUS_SAFETY_CURIE]
 } as unknown as ProposalSummary;
 
 /** The queue as the (already-merged, aggregating) server actually returns
@@ -248,7 +250,7 @@ export const crossCorpusProposalQueue = [
 		documentFrequency: 3,
 		totalOccurrences: 4,
 		corpusCount: 1,
-		corpora: [CORPUS_CHEMISTRY]
+		corpora: [CORPUS_CHEMISTRY_CURIE]
 	},
 	crossCorpusQueueRow
 ] as unknown as ProposalSummary[];
@@ -274,7 +276,7 @@ export const moderatorProposal = {
 	],
 	observations: [
 		{
-			corpus: CORPUS_CHEMISTRY,
+			corpus: CORPUS_CHEMISTRY_CURIE,
 			documents: [
 				{
 					documentId: 'ORNL-TM-2316',
@@ -291,7 +293,7 @@ export const moderatorProposal = {
 			]
 		},
 		{
-			corpus: CORPUS_SAFETY,
+			corpus: CORPUS_SAFETY_CURIE,
 			documents: [
 				{
 					documentId: 'IAEA-SAFETY-1',
