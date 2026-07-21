@@ -20,8 +20,8 @@
 
 - [x] 3.1 Extend the built `novelty-detection` spaCy noun-chunk pass for the safety genre: relax the 1–3 content-token window / preserve the noun-chunk head phrase so prepositional safety concepts ("confinement of radioactive material", "removal of residual heat") survive as candidates; reuse unchanged the DF floor/ceiling, known/linked exclusion, and `msr:citedIn`+offset evidence capture
 - [x] 3.2 Make the `candidate-triage` Flash classifier genre-aware: prompt it with the safety genre so it (a) does not reject domain-shaped safety phrases as boilerplate and (b) for `class`-kind safety concepts proposes a Safety broader-class placement, and for the two linking edges proposes `relation`-kind domain/range. Kinds (`property`/`class`/`instance`/`relation`), the `change-proposal-schema` mini-schema, `proposal-staging`, and `approval-typed-routing` are unchanged
-- [ ] 3.3 Verify the three fundamental safety functions (confinement of radioactive material, control of reactivity, heat removal) surface as proposals with evidence from the ingested sources
-- [ ] 3.4 Confirm `approval-typed-routing` routes the approved safety classes/relations into `urn:msr:ontology` (and individuals/edges into `urn:msr:data`) and `proposal-lifecycle` minor-bumps `owl:versionInfo` — no new engine code, since routing is by triple type and already handles TBox axioms + mixed bundles
+- [x] 3.3 Verify the three fundamental safety functions (confinement of radioactive material, control of reactivity, heat removal) surface as proposals with evidence from the ingested sources
+- [x] 3.4 Confirm `approval-typed-routing` routes the approved safety classes/relations into `urn:msr:ontology` (and individuals/edges into `urn:msr:data`) and `proposal-lifecycle` minor-bumps `owl:versionInfo` — no new engine code, since routing is by triple type and already handles TBox axioms + mixed bundles
 
 ## 4. Digital-thread linking (`safety-property-linking`)
 
