@@ -44,23 +44,23 @@
 
 ## 7. Extraction CLI & run model
 
-- [ ] 7.1 Add the `safety` subcommand group (`fetch`, `extract`, `ingest` umbrella running extract → normalize/segment → documents → NER → relations → mine over the safety genre)
-- [ ] 7.2 Add the `make ingest-safety` target (one-shot Compose run of the extraction container), additive to the root `Makefile`
+- [x] 7.1 Add the `safety` subcommand group (`fetch`, `extract`, `ingest` umbrella running extract → normalize/segment → documents → NER → relations → mine over the safety genre)
+- [x] 7.2 Add the `make ingest-safety` target (one-shot Compose run of the extraction container), additive to the root `Makefile`
 
 ## 8. Tests
 
-- [ ] 8.1 pypdf extractor: a committed text-layer PDF fixture → expected text (offline)
-- [ ] 8.2 Section-scoping: manifest-driven page/section selection picks the right span from a fixture
-- [ ] 8.3 Multi-word candidate extraction: fixture safety sentences → expected noun-phrase candidates; single-token noise excluded
-- [ ] 8.4 Genre-aware triage (stubbed-Flash): fixed classifications → proposal graphs validate against the chunk-8 mini-schema with the safety class kinds
-- [ ] 8.5 Linking extraction (stubbed-Flash): fixture sentences → expected `servedByProperty` / `addressesFunction` edges, each with its `rdf:Statement` reification (confidence/rationale) + provenance + `relations.jsonl` record; a **co-mention without a stated dependency yields no edge**; unknown / not-yet-approved target IRI rejected
-- [ ] 8.6 Threshold extraction: the liquidus-preference sentence → `thresholdValue 500` / `comparator lt` / unit; no-threshold sentence yields none
+- [x] 8.1 pypdf extractor: a committed text-layer PDF fixture → expected text (offline)
+- [x] 8.2 Section-scoping: manifest-driven page/section selection picks the right span from a fixture
+- [x] 8.3 Multi-word candidate extraction: fixture safety sentences → expected noun-phrase candidates; single-token noise excluded
+- [x] 8.4 Genre-aware triage (stubbed-Flash): fixed classifications → proposal graphs validate against the chunk-8 mini-schema with the safety class kinds
+- [x] 8.5 Linking extraction (stubbed-Flash): fixture sentences → expected `servedByProperty` / `addressesFunction` edges, each with its `rdf:Statement` reification (confidence/rationale) + provenance + `relations.jsonl` record; a **co-mention without a stated dependency yields no edge**; unknown / not-yet-approved target IRI rejected
+- [x] 8.6 Threshold extraction: the liquidus-preference sentence → `thresholdValue 500` / `comparator lt` / unit; no-threshold sentence yields none
 - [x] 8.7 Agent (stubbed LLM + fake pool): evidence-chain traversal returns the provenance chain; gap query returns the missing-measurement set; requirement-satisfaction computes 434 vs 500 margin in a sandbox script with the soft-criterion caveat; ungrounded safety claim stamped ungrounded
 - [x] 8.8 SHACL (opt-in, GraphDB-required): safety individual missing `wasDerivedFrom` rejected; valid safety facts load
-- [ ] 8.9 Guarded corpus integration (opt-in env flag): four safety `Document` nodes with attribution present; three fundamental safety functions surfaced as proposals; after approval `msrd:sf-heat-removal msr:servedByProperty msr:specificHeat` resolvable and traceable to a salt measurement; second run leaves `urn:msr:data` triple counts unchanged
+- [x] 8.9 Guarded corpus integration (opt-in env flag): four safety `Document` nodes with attribution present; three fundamental safety functions surfaced as proposals; after approval `msrd:sf-heat-removal msr:servedByProperty msr:specificHeat` resolvable and traceable to a salt measurement; second run leaves `urn:msr:data` triple counts unchanged
 
 ## 9. Documentation
 
-- [ ] 9.1 Update `docs/DATA_SCOPE.md` §4 from "stretch/deferred" to the finalized ingested set + section scope + attribution
-- [ ] 9.2 Document `make ingest-safety`, the `data/safety/` layout, and the attribution/licensing rule in the README
-- [ ] 9.3 Cross-link `docs/SAFETY_THREAD_SPIKE.md` (the grounded thread + stakeholder questions) as the realized-capability reference
+- [x] 9.1 Update `docs/DATA_SCOPE.md` §4 from "stretch/deferred" to the finalized ingested set + section scope + attribution
+- [x] 9.2 Document `make ingest-safety`, the `data/safety/` layout, and the attribution/licensing rule in the README
+- [x] 9.3 Cross-link `docs/SAFETY_THREAD_SPIKE.md` (the grounded thread + stakeholder questions) as the realized-capability reference
