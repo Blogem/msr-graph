@@ -1,13 +1,6 @@
 # candidate-triage Specification
 
-## Purpose
-
-Define how a scored candidate is classified into a change kind and given a proposed placement:
-cheap context signals propose a kind, a DeepSeek V4 Flash classifier (injected, stubbed in
-tests) on the reused chunk-6 KG-schema prompt confirms it and proposes placement/grounding,
-and all model output is validated app-side before it becomes a proposal.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: Triage into one of four change kinds, or reject
 Each candidate SHALL be triaged into exactly one primary kind — `property`, `class`, `instance`,
@@ -34,29 +27,6 @@ dependency parse).
 #### Scenario: A non-concept candidate is rejected
 - **WHEN** a candidate is an OCR fragment, an acronym, a proper noun (e.g. an author surname or a laboratory name), or generic boilerplate
 - **THEN** the classifier rejects it, no proposal is written, and it is counted as rejected
-
-### Requirement: Flash classifier is injected and stubbed in tests
-The triage classifier SHALL call DeepSeek V4 Flash through an injected OpenAI-compatible
-client — the chunk-6 `msr_extraction.disambiguation.FlashClient` (satisfying the `Completer`
-protocol, `DEEPSEEK_BASE_URL` / `LLM_MODEL_EXTRACT`) — and every test SHALL run against a stub
-`Completer`, never a live model. The classifier prompt prefix SHALL reuse the chunk-6
-`msr_extraction.kg_prompt` builder (`KGSchemaPromptCache`, imported not re-derived); the
-candidate term and its evidence reach the model only as per-call context, never baked into the
-cached prefix.
-
-#### Scenario: Tests use a stubbed classifier
-- **WHEN** the triage suite runs
-- **THEN** the Flash client is a stub returning fixed classifications, and no network call is made
-
-### Requirement: Proposed placement is recorded as reviewer-verifiable claims
-The classifier SHALL propose placement for the candidate — a broader class for a `class`
-kind; a `quantityKind` and `canonicalUnit` for a `property` kind; domain/range for a
-`relation` kind — and any external (QUDT / INIS) reference. These SHALL be recorded as
-LLM-asserted claims (evidence for the reviewer), not validated against external catalogs.
-
-#### Scenario: Placement recorded without external validation
-- **WHEN** the classifier proposes a broader class and an INIS descriptor for a candidate
-- **THEN** both are recorded on the candidate as claims, and no external catalog is dereferenced to confirm them
 
 ### Requirement: Model output is validated app-side
 The classifier SHALL request DeepSeek JSON output mode and MUST validate the parsed object

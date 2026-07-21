@@ -30,7 +30,17 @@ KIND_CLASS = "class"
 KIND_INSTANCE = "instance"
 KIND_RELATION = "relation"
 
-#: The complete set of valid :attr:`TriagedCandidate.kind` values.
+#: The explicit "not a genuine novel ontology concept" triage verdict
+#: (design.md D4/refine-mine-salience) -- an OCR fragment, an acronym, a
+#: proper noun that slipped candidate enumeration, or generic boilerplate.
+#: Deliberately NOT a member of :data:`VALID_KINDS`: it is a terminal
+#: drop-the-candidate verdict, not a routable kind a downstream module
+#: (proposals/auto_accept) ever builds a bundle for.
+KIND_REJECT = "reject"
+
+#: The complete set of valid, *routable* :attr:`TriagedCandidate.kind`
+#: values -- excludes :data:`KIND_REJECT`, which is a distinct terminal
+#: verdict handled separately by callers (see ``triage.classify``).
 VALID_KINDS = frozenset({KIND_PROPERTY, KIND_CLASS, KIND_INSTANCE, KIND_RELATION})
 
 _SLUG_NON_ALNUM_RE = re.compile(r"[^a-z0-9]+")
@@ -217,6 +227,8 @@ class TriagedCandidate:
     """
 
     candidate: Candidate
-    #: One of :data:`VALID_KINDS`.
+    #: One of :data:`VALID_KINDS`, or :data:`KIND_REJECT` for a well-formed
+    #: reject verdict (design.md D4) -- callers routing by kind MUST check
+    #: for :data:`KIND_REJECT` before treating ``kind`` as routable.
     kind: str
     placement: Placement
