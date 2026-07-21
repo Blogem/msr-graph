@@ -1,16 +1,6 @@
 # novelty-detection Specification
 
-## Purpose
-
-Define how the miner surfaces novel candidate terms: enumerate concept-shaped candidates via a
-spaCy noun-chunk pass over the curated documents' text and from the chunk-6 salt-formula misses
-(without re-running the chunk-6 linker), exclude anything already known to the core dataset or
-already linked (normalization/token-sequence aware), bound the candidate set by document
-frequency used only as a coarse cost floor plus a hard maximum-candidate ceiling (never a
-novelty rank), and attach curated-set evidence sentences with document citations and offsets.
-Precision is deferred to the LLM triage reject verdict and human review, not a novelty score.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: Candidate terms are enumerated from the curated text and the chunk-6 misses
 The miner SHALL enumerate candidate terms from two sources: (a) a **spaCy noun-chunk pass** over
@@ -92,14 +82,3 @@ frequency novelty score.
 #### Scenario: Ordering is not treated as a novelty ranking
 - **WHEN** candidates are passed to triage
 - **THEN** they are not ranked or prioritized by a novelty score; precision is deferred to the triage reject verdict and human review
-
-### Requirement: Curated-set evidence with citations and offsets
-Each retained candidate SHALL carry one or more evidence items drawn from the curated set —
-each an evidence sentence text, the source `Document` (via `msr:citedIn`), and the span's
-start/end offsets into that document's `normalized.txt` — so the reviewer sees the term in
-context. Evidence MUST come from the curated ~12 (where offsets and `Document` nodes exist),
-even though the frequency count spans all 637 documents.
-
-#### Scenario: Evidence carries document and offsets
-- **WHEN** a candidate is retained
-- **THEN** it has at least one evidence item with sentence text, a `msr:citedIn` document reference, and start/end offsets

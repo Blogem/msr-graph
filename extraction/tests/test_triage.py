@@ -11,6 +11,17 @@ isolated pass-1 branch. Every test below is written against the agreed
 module-interface contract, not against any implementation, and is
 expected to fail with a collection error until the coder's ``triage.py``
 lands.
+
+refine-mine-salience (7.4) addition below: the triage reject verdict.
+Per the pinned mining_types contract, ``KIND_REJECT`` is a distinct
+"reject" kind NOT included in ``VALID_KINDS`` -- ``triage.classify``
+returns a ``TriagedCandidate`` with ``kind == KIND_REJECT`` for a
+well-formed reject verdict (not ``None``), so ``mine_runner`` can count it
+distinctly from a malformed/unrecognized-output drop (which still returns
+``None``). ``KIND_REJECT`` does not exist yet in ``mining_types.py`` on
+this pass-1 branch, so it is imported LOCALLY inside the tests that need
+it (not at module level) -- this keeps the rest of this file's existing,
+already-passing tests collectable regardless of merge state.
 """
 
 from __future__ import annotations
@@ -24,6 +35,7 @@ from msr_extraction.mining_types import (
     KIND_CLASS,
     KIND_INSTANCE,
     KIND_PROPERTY,
+    KIND_RELATION,
     VALID_KINDS,
     term_slug,
 )
@@ -193,3 +205,45 @@ def test_property_proposal_bundle_contains_governance_predicates() -> None:
     assert 'msr:reviewStatus "pending"' in bundle.staging_triples
     assert "msr:hasProposalGraph" in bundle.staging_triples
     assert "msr:hasEvidence" in bundle.staging_triples
+
+
+# --- refine-mine-salience 7.4: the triage reject verdict -----------------
+
+
+def test_kind_reject_is_not_a_valid_routing_kind() -> None:
+    """Pinned mining_types contract: KIND_REJECT == "reject" and is NOT one
+    of the four routing kinds in VALID_KINDS."""
+    from msr_extraction.mining_types import KIND_REJECT
+
+    assert KIND_REJECT == "reject"
+    assert KIND_REJECT not in VALID_KINDS
+    assert VALID_KINDS == frozenset(
+        {KIND_PROPERTY, KIND_CLASS, KIND_INSTANCE, KIND_RELATION}
+    )
+
+
+def test_triage_candidate_returns_reject_kind_for_well_formed_reject_verdict() -> None:
+    """Scenario: "An explicit reject verdict drops the candidate"
+    (candidate-triage spec) -- combined with the mining_types KIND_REJECT
+    contract: classify/triage_candidate returns a TriagedCandidate with
+    kind==KIND_REJECT (NOT None), so mine_runner can count this distinctly
+    from a malformed-output drop."""
+    from msr_extraction.mining_types import KIND_REJECT
+
+    candidate = _candidate("ornl", "ORNL supported this research effort in 1955.")
+    stub = StubCompleter({"kind": "reject"})
+
+    result = triage_candidate(candidate, PROMPT_PREFIX, stub)
+
+    assert result is not None
+    assert result.kind == KIND_REJECT
+
+
+def test_triage_candidate_drops_on_unrecognized_kind_distinct_from_reject() -> None:
+    """An unrecognized kind string -- neither "reject" nor one of the four
+    valid kinds -- is a malformed-shape drop (None), never confused with an
+    explicit reject verdict."""
+    candidate = _candidate("gibberish", "Some gibberish OCR fragment appeared here.")
+    stub = StubCompleter({"kind": "not-a-real-kind"})
+
+    assert triage_candidate(candidate, PROMPT_PREFIX, stub) is None

@@ -248,3 +248,25 @@ class GraphReader:
         """
         bindings = self._select(_REACTOR_CONCEPTS_QUERY)
         return {binding["c"]["value"] for binding in bindings}
+
+    def read_role_reactor_labels(self) -> set[str]:
+        """Read chunk-7's role/reactor-layer labels (refine-mine-salience D2/4.1).
+
+        Reactor labels are already covered by :meth:`read_known_entities`:
+        every reactor SKOS concept is still a plain ``skos:Concept`` and its
+        ``prefLabel``/``altLabel`` already flows through
+        :data:`_SKOS_CONCEPTS_QUERY`. The one gap is ``msr:SaltRole``
+        individuals (``msr:FuelSalt``/``msr:CoolantSalt``/``msr:FlushSalt``):
+        they carry an ``rdfs:label`` but are not ``owl:Class``/
+        ``msr:PhysicalProperty``/``msr:MoltenSalt`` subjects, so
+        :meth:`read_known_entities` never sees them. Reuses
+        :data:`_SALT_ROLES_QUERY` (which already selects ``?label``;
+        :meth:`read_salt_roles` discards it in favor of the IRI) rather than
+        adding a near-duplicate query.
+        """
+        bindings = self._select(_SALT_ROLES_QUERY)
+        return {
+            binding["label"]["value"].strip()
+            for binding in bindings
+            if binding.get("label") and binding["label"]["value"].strip()
+        }
