@@ -13,7 +13,10 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
+import subprocess
 import sys
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from msr_extraction import (
@@ -30,6 +33,8 @@ from msr_extraction import (
     mine_runner,
     provenance,
     relations,
+    safety_acquire,
+    safety_manifest,
     segmenter,
     units,
 )
@@ -37,10 +42,18 @@ from msr_extraction.config import Config
 from msr_extraction.disambiguation import FlashClient, disambiguate
 from msr_extraction.graph_reader import GraphReader
 from msr_extraction.kg_prompt import KGSchemaPromptCache
+from msr_extraction.safety_manifest import SafetySource
 from msr_extraction.seeding import build_matcher
 from msr_extraction.sparql import SparqlClient
 
 logger = logging.getLogger(__name__)
+
+#: Path to the safety-source fetch script (design.md D8, task 7.1), relative
+#: to the process cwd -- mirrors every other `Config` path default
+#: (`corpus_dir`, `ontology_dir`, ...) in assuming the CLI runs from the
+#: repo root. Overridable via env for a container layout that differs.
+_SAFETY_FETCH_SCRIPT_ENV = "MSR_SAFETY_FETCH_SCRIPT"
+_SAFETY_FETCH_SCRIPT_DEFAULT = "scripts/fetch-safety-sources.sh"
 
 
 def _load_manifest_records(config: Config) -> list[manifest.ManifestRecord]:
@@ -489,6 +502,349 @@ def _cmd_extract(config: Config, reports: list[str] = curated.CURATED_REPORTS) -
     return 0
 
 
+# --- `safety` subcommand group (design.md D8, OpenSpec task 7.1) -----------
+#
+# Wires the already-merged safety-genre modules (`safety_manifest`,
+# `safety_acquire`, `documents.write_safety_documents`, the genre-aware
+# `linker`/`novelty`/`triage`/`mine_runner`/`relations`/`edges`/
+# `graph_reader`) into the same fetch -> extract -> documents -> link ->
+# mine -> relations shape as the chemistry `ingest` umbrella, over the four
+# fixed `safety_manifest.SAFETY_SOURCES` instead of `curated.CURATED_REPORTS`.
+
+
+def _cmd_safety_fetch(
+    config: Config, runner: Callable[..., object] = subprocess.run
+) -> int:
+    """Fetch the cached safety-source PDFs (design.md D1, task 1.1).
+
+    Invokes `scripts/fetch-safety-sources.sh`, mirroring
+    `acquisition.acquire`'s injectable-runner convention so tests can
+    supply a fake and assert the constructed command without touching the
+    network; the script itself is already idempotent (skips any file
+    already present in `data/safety/`).
+    """
+    script = os.environ.get(_SAFETY_FETCH_SCRIPT_ENV, _SAFETY_FETCH_SCRIPT_DEFAULT)
+    logger.info("safety fetch: running %s", script)
+    runner(["bash", script], check=True)
+    logger.info("safety fetch: done")
+    return 0
+
+
+def _cmd_safety_extract(
+    config: Config, sources: tuple[SafetySource, ...] = safety_manifest.SAFETY_SOURCES
+) -> int:
+    """pypdf-extract, normalize, and segment every cached safety-source PDF
+    (design.md D1, tasks 1.3/1.4): `safety_acquire.extract_pdf_text` then
+    `safety_acquire.normalize_and_segment`, per source, honoring the
+    manifest's declared section/page scope.
+    """
+    logger.info("safety extract: %d source(s) to process", len(sources))
+    for source in sources:
+        text_path = safety_acquire.extract_pdf_text(source, config)
+        normalized_path, segments_path = safety_acquire.normalize_and_segment(
+            source, config
+        )
+        summary = (
+            f"safety extract: source={source.id} text={text_path} "
+            f"normalized={normalized_path} segments={segments_path}"
+        )
+        logger.info(summary)
+        print(summary)
+    logger.info("safety extract: done")
+    return 0
+
+
+def _cmd_safety_documents(
+    config: Config, sources: tuple[SafetySource, ...] = safety_manifest.SAFETY_SOURCES
+) -> int:
+    """Write the four attributed safety `Document` nodes (design.md D2, task 2.1/2.2)."""
+    logger.info("safety documents: writing %d document node(s)", len(sources))
+    client = SparqlClient.from_config(config)
+    run_ts = provenance.run_timestamp()
+    provenance.write_stable_activity(client)
+    provenance.write_activity(run_ts, client)
+    documents.write_safety_documents(list(sources), client, run_ts)
+    logger.info("safety documents: done")
+    return 0
+
+
+def _run_safety_link(
+    config: Config, sources: tuple[SafetySource, ...] = safety_manifest.SAFETY_SOURCES
+) -> None:
+    """Genre-aware link stage for the safety corpus (design.md D8, task 7.1).
+
+    Minimal viable version of `_cmd_link` for the safety genre: reuses the
+    identical layered resolution (`linker.link_segment`'s layers 2-5) via
+    `linker.link_report(..., genre="safety")` (reading
+    `config.safety_segments_path`) and `linker.write_mentions_jsonl(...,
+    genre="safety")` (writing `config.safety_mentions_path`), so the safety
+    corpus's `mentions.jsonl` lands in the identical format the relation
+    extractor already consumes.
+
+    Deliberately does NOT wire `_cmd_link`'s persistent cross-run
+    disambiguation cache (`disambig_cache`) or its concurrent per-report
+    pre-warm fan-out: those are throughput optimizations for the
+    hundreds-of-documents chemistry corpus, and the safety corpus is four
+    documents, so the added surface area isn't worth it here (a limitation
+    noted, not a correctness gap -- every span still resolves through the
+    same `disambiguate` call when a `FlashClient` is configured).
+    """
+    reader = GraphReader.from_config(config)
+    prompt_prefix = KGSchemaPromptCache().get(reader)
+    known = reader.read_known_entities()
+    known_iris = reader.known_iris()
+    matcher = build_matcher(known)
+
+    client = FlashClient.from_config(config)
+    disambiguator: linker.Disambiguator | None = None
+    if client is not None:
+
+        def disambiguator(surface: str, sentence: str) -> tuple[str, str | None]:
+            result = disambiguate(surface, sentence, prompt_prefix, known_iris, client)
+            return (result.status, result.target_iri)
+
+    else:
+        logger.warning(
+            "safety link: DEEPSEEK_BASE_URL not configured; spans fall to novel"
+        )
+
+    sparql = SparqlClient.from_config(config)
+    run_ts = provenance.run_timestamp()
+    provenance.write_stable_activity(sparql)
+    provenance.write_activity(run_ts, sparql)
+
+    logger.info("safety link: %d source(s) to process", len(sources))
+    for source in sources:
+        segments_path = config.safety_segments_path(source.id)
+        if not segments_path.exists():
+            logger.warning(
+                "safety link: source=%s missing %s, skipping", source.id, segments_path
+            )
+            continue
+
+        records = linker.link_report(
+            source.id,
+            config,
+            matcher,
+            known,
+            known_iris,
+            prompt_prefix=prompt_prefix,
+            disambiguator=disambiguator,
+            genre="safety",
+        )
+        linker.write_mentions_jsonl(source.id, records, config, genre="safety")
+
+        document_iri = mentions.MSRD + source.id
+        linked_mentions = [
+            mentions.Mention(
+                report=record.report,
+                start=record.char_start,
+                end=record.char_end,
+                surface_form=record.surface_form,
+                target_iri=record.target_iri,
+                document_iri=document_iri,
+            )
+            for record in records
+            if record.status == "linked"
+        ]
+        mentions.write_mentions(
+            linked_mentions, sparql, run_ts, batch_size=config.mention_write_batch_size
+        )
+
+        linked_count = len(linked_mentions)
+        summary = (
+            f"safety link: source={source.id} spans={len(records)} "
+            f"linked={linked_count} novel={len(records) - linked_count}"
+        )
+        logger.info(summary)
+        print(summary)
+
+    logger.info("safety link: complete")
+
+
+def _run_safety_relations(
+    config: Config, sources: tuple[SafetySource, ...] = safety_manifest.SAFETY_SOURCES
+) -> None:
+    """The safety digital-thread linking relations, second phase (design.md D4).
+
+    Populates `relations.KnownSets`'s `safety_functions`/`requirements` from
+    `graph_reader.read_safety_functions`/`read_requirements` -- the *grown*
+    (not seeded) closed sets the two linking relations validate their
+    safety-individual subjects/targets against -- then runs
+    `relations.extract_report(..., genre="safety")` per source and
+    `edges.write_safety_edges` for whatever validates.
+
+    Per design.md D4, this is legitimately a two-phase process: until the
+    mined `SafetyFunction`/`Requirement` proposals (and the two linking
+    object properties) are reviewed and approved into core via the chunk-9
+    approval API, both closed sets read empty here, so every proposed
+    `servedByProperty`/`addressesFunction` edge is rejected as
+    unknown-target -- not written, but each is still recorded (with its
+    rejection reason) in `relations.jsonl`. This is NOT a bug: re-run this
+    phase (or `safety ingest` as a whole) after approval to pick up the
+    now-resolvable safety individuals.
+    """
+    reader = GraphReader.from_config(config)
+    known = relations.KnownSets(
+        molten_salts=reader.read_molten_salts(),
+        physical_properties=reader.read_physical_properties(),
+        salt_roles=reader.read_salt_roles(),
+        reactor_concepts=reader.read_reactor_concepts(),
+        safety_functions=frozenset(reader.read_safety_functions()),
+        requirements=frozenset(reader.read_requirements()),
+    )
+    if not known.safety_functions or not known.requirements:
+        logger.warning(
+            "safety relations: safety_functions=%d requirements=%d in core -- "
+            "until the mined safety branch is reviewed and approved "
+            "(design.md D4's two-phase ordering), servedByProperty/"
+            "addressesFunction edges will legitimately validate to ZERO; "
+            "this is the designed gate, not a bug",
+            len(known.safety_functions),
+            len(known.requirements),
+        )
+
+    unit_mapper = units.UnitMapper.from_config(config)
+    client = FlashClient.from_config(config)
+    if client is None:
+        logger.warning(
+            "safety relations: DEEPSEEK_BASE_URL not configured; no relations "
+            "will be extracted"
+        )
+        return
+
+    sparql = SparqlClient.from_config(config)
+    run_ts = provenance.run_timestamp()
+    provenance.write_stable_activity(sparql)
+    provenance.write_activity(run_ts, sparql)
+    prompt_prefix = KGSchemaPromptCache().get(reader)
+
+    logger.info("safety relations: %d source(s) to process", len(sources))
+    for source in sources:
+        segments_path = config.safety_segments_path(source.id)
+        if not segments_path.exists():
+            logger.warning(
+                "safety relations: source=%s missing %s, skipping",
+                source.id,
+                segments_path,
+            )
+            continue
+
+        result = relations.extract_report(
+            source.id,
+            config,
+            prompt_prefix,
+            client,
+            known,
+            unit_mapper,
+            concurrency=config.disambig_concurrency,
+            genre="safety",
+        )
+
+        served_by_edges = [
+            edges.ServedByEdge(
+                safety_function_iri=r.safety_function_iri,
+                property_iri=r.property_iri,
+                report=r.report,
+                document_iri=f"msrd:{r.report}",
+                confidence=r.confidence,
+                rationale=r.rationale,
+                standard_name=r.standard_name,
+            )
+            for r in result.served_by_property
+        ]
+        addresses_function_edges = [
+            edges.AddressesFunctionEdge(
+                requirement_iri=r.requirement_iri,
+                safety_function_iri=r.safety_function_iri,
+                report=r.report,
+                document_iri=f"msrd:{r.report}",
+                confidence=r.confidence,
+                rationale=r.rationale,
+                standard_name=r.standard_name,
+                threshold_value=r.threshold_value,
+                threshold_comparator=r.threshold_comparator,
+                threshold_unit=r.threshold_unit,
+            )
+            for r in result.addresses_function
+        ]
+        edges.write_safety_edges(served_by_edges, addresses_function_edges, sparql, run_ts)
+
+        rejected = sum(1 for record in result.records if record.disposition == "rejected")
+        skipped = sum(1 for record in result.records if record.disposition == "skipped")
+        summary = (
+            f"safety relations: source={source.id} sentences={result.sentences_seen} "
+            f"servedByProperty={len(result.served_by_property)} "
+            f"addressesFunction={len(result.addresses_function)} "
+            f"rejected={rejected} skipped={skipped} "
+            f"malformed_calls={result.malformed_calls}"
+        )
+        logger.info(summary)
+        print(summary)
+
+    logger.info("safety relations: complete")
+
+
+def _cmd_safety_ingest(config: Config) -> int:
+    """The `safety ingest` umbrella (design.md D8): extract -> documents ->
+    link -> mine -> the second-phase relations, in order, over the fixed
+    `safety_manifest.SAFETY_SOURCES` set.
+
+    Per design.md D4, mine+approve is a manual reviewer step (the chunk-9
+    approval API) between the mine stage and the relations stage -- this
+    umbrella still runs the relations stage immediately afterward in the
+    same invocation (so a single `safety ingest` run exercises the whole
+    pipeline shape end-to-end), but it will legitimately write zero
+    `servedByProperty`/`addressesFunction` edges until a human has approved
+    the mined safety branch. `_run_safety_relations` logs this clearly.
+    Re-running `safety ingest` after approval picks up the now-resolvable
+    safety individuals (idempotent: deterministic IRIs, `INSERT DATA`
+    no-ops on repeat).
+    """
+    sources = safety_manifest.SAFETY_SOURCES
+
+    logger.info("safety ingest: stage 1/5 extract")
+    _cmd_safety_extract(config, sources=sources)
+
+    logger.info("safety ingest: stage 2/5 documents")
+    _cmd_safety_documents(config, sources=sources)
+
+    logger.info("safety ingest: stage 3/5 link")
+    _run_safety_link(config, sources=sources)
+
+    logger.info("safety ingest: stage 4/5 mine")
+    summary = mine_runner.run_mine(config, genre="safety")
+    by_kind = summary["proposals_by_kind"]
+    kind_summary = " ".join(f"{kind}={count}" for kind, count in sorted(by_kind.items()))
+    mine_line = (
+        f"safety ingest: mine candidates={summary['candidates']} "
+        f"proposals=[{kind_summary}] "
+        f"auto_accepted={summary['auto_accepted']} "
+        f"rejected={summary['rejected']} "
+        f"dropped={summary['dropped']}"
+    )
+    logger.info(mine_line)
+    print(mine_line)
+
+    logger.info(
+        "safety ingest: stage 5/5 relations (second phase -- see design.md D4; "
+        "requires the mined safety branch to already be reviewer-approved to "
+        "produce any edges)"
+    )
+    _run_safety_relations(config, sources=sources)
+
+    logger.info("safety ingest: complete")
+    return 0
+
+
+_SAFETY_HANDLERS = {
+    "fetch": _cmd_safety_fetch,
+    "extract": _cmd_safety_extract,
+    "documents": _cmd_safety_documents,
+    "ingest": _cmd_safety_ingest,
+}
+
+
 _HANDLERS = {
     "acquire": _cmd_acquire,
     "manifest": _cmd_manifest,
@@ -564,6 +920,36 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Process only the first N of the (possibly --report-filtered) selection.",
     )
 
+    safety_parser = subparsers.add_parser(
+        "safety",
+        help=(
+            "Safety-genre pipeline over the four IAEA/GIF/ORNL sources "
+            "(design.md D8, ingest-iaea-safety chunk 11)."
+        ),
+    )
+    safety_subparsers = safety_parser.add_subparsers(
+        dest="safety_command", required=True
+    )
+    safety_subparsers.add_parser(
+        "fetch",
+        help="Fetch the cached safety-source PDFs (scripts/fetch-safety-sources.sh; idempotent).",
+    )
+    safety_subparsers.add_parser(
+        "extract",
+        help="pypdf-extract, normalize, and segment every cached safety-source PDF.",
+    )
+    safety_subparsers.add_parser(
+        "documents",
+        help="Write the four attributed safety Document provenance nodes to the graph.",
+    )
+    safety_subparsers.add_parser(
+        "ingest",
+        help=(
+            "Run extract, documents, link, mine, and the second-phase safety "
+            "relations extraction over the safety genre, in order."
+        ),
+    )
+
     return parser
 
 
@@ -595,6 +981,10 @@ def main(argv: list[str] | None = None) -> int:
             print(f"extract: {exc}", file=sys.stderr)
             return 1
         return _cmd_extract(config, reports=reports)
+
+    if args.command == "safety":
+        safety_handler = _SAFETY_HANDLERS[args.safety_command]
+        return safety_handler(config)
 
     handler = _HANDLERS[args.command]
     return handler(config)
