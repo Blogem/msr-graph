@@ -294,6 +294,10 @@ func TestBuildInsertData_DatasetNodeWithDOI(t *testing.T) {
 
 	assertContains(t, out, nistDatasetIRI+" a msr:Dataset")
 	assertContains(t, out, "dcterms:identifier "+quoteLiteral(nistDatasetDOI))
+	// The Dataset node also carries a human-readable name so a grounded
+	// answer can cite the source dataset, not just its bare IRI.
+	assertContains(t, out, "rdfs:label "+quoteLiteral(nistDatasetTitle))
+	assertContains(t, out, "dcterms:title "+quoteLiteral(nistDatasetTitle))
 }
 
 // TestBuildInsertData_CatalogIndividualsCarryProvenance covers 6.1's

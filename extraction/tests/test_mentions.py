@@ -9,7 +9,10 @@ client (no network).
 
 from __future__ import annotations
 
+import math
 import re
+
+import pytest
 
 from msr_extraction.mentions import (
     Mention,
@@ -250,6 +253,78 @@ def test_write_mentions_distinct_run_ts_yields_distinct_generation_edges() -> No
     assert f"urn:msr:run:extraction/{OTHER_RUN_TS}" not in client_a.calls[1]
     assert f"urn:msr:run:extraction/{OTHER_RUN_TS}" in client_b.calls[1]
     assert f"urn:msr:run:extraction/{RUN_TS}" not in client_b.calls[1]
+
+
+# --- openspec/changes/scale-mention-linking: batched writes (D1) -----------
+
+
+def _make_mentions(n: int) -> list[Mention]:
+    """`n` distinct mentions with unique offsets (hence unique IRIs)."""
+    return [
+        Mention(
+            report="ORNL-TM-2316",
+            start=i,
+            end=i + 5,
+            surface_form=f"span{i}",
+            target_iri=SALT_IRI,
+            document_iri=DOCUMENT_IRI,
+        )
+        for i in range(n)
+    ]
+
+
+def test_write_mentions_batches_data_and_provenance_updates() -> None:
+    """With more mentions than the batch size, the writer sends
+    ceil(n/batch_size) urn:msr:data updates followed by the same number of
+    urn:msr:provenance updates -- not one giant request."""
+    client = _FakeSparqlClient()
+    n, batch_size = 7, 3
+    write_mentions(_make_mentions(n), client, RUN_TS, batch_size=batch_size)
+
+    expected_batches = math.ceil(n / batch_size)  # 3
+    assert len(client.calls) == 2 * expected_batches
+
+    data_updates = [c for c in client.calls if "GRAPH <urn:msr:data>" in c]
+    prov_updates = [c for c in client.calls if "GRAPH <urn:msr:provenance>" in c]
+    assert len(data_updates) == expected_batches
+    assert len(prov_updates) == expected_batches
+    # All data updates precede all provenance updates (preserves calls[0]
+    # == data, trailing == provenance ordering the single-mention tests rely on).
+    assert client.calls[:expected_batches] == data_updates
+
+
+def test_write_mentions_batches_cover_every_mention_exactly_once() -> None:
+    """Every mention IRI appears in exactly one urn:msr:data batch and gets
+    exactly one per-run generation edge across the urn:msr:provenance batches
+    -- batching changes request count, not the written set."""
+    client = _FakeSparqlClient()
+    n, batch_size = 7, 3
+    write_mentions(_make_mentions(n), client, RUN_TS, batch_size=batch_size)
+
+    data_blob = "\n".join(c for c in client.calls if "GRAPH <urn:msr:data>" in c)
+    prov_blob = "\n".join(c for c in client.calls if "GRAPH <urn:msr:provenance>" in c)
+    for i in range(n):
+        iri = mention_iri("ORNL-TM-2316", i, i + 5)
+        assert data_blob.count(f"{iri} a msr:Mention") == 1
+        assert (
+            prov_blob.count(f"{iri} prov:wasGeneratedBy <urn:msr:run:extraction/{RUN_TS}>")
+            == 1
+        )
+
+
+def test_write_mentions_single_batch_when_under_batch_size() -> None:
+    """Fewer mentions than the batch size -> exactly two updates (data, prov),
+    matching the pre-batching call shape."""
+    client = _FakeSparqlClient()
+    write_mentions(_make_mentions(2), client, RUN_TS, batch_size=500)
+    assert len(client.calls) == 2
+
+
+def test_write_mentions_rejects_nonpositive_batch_size() -> None:
+    client = _FakeSparqlClient()
+    with pytest.raises(ValueError, match="batch_size"):
+        write_mentions([MENTION], client, RUN_TS, batch_size=0)
+    assert client.calls == []
 
 
 def test_write_mentions_data_graph_update_is_idempotent_across_run_ts() -> None:

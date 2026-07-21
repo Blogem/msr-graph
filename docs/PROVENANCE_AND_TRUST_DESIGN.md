@@ -135,8 +135,13 @@ repository capability, not roll-your-own:
   sufficient for the shapes below. Bulk loads can be validated incrementally or
   load-then-validate to manage cost. Works fine with inference **off** (our configuration).
 
-> Implementation note: confirm the exact repo-config parameter and shapes-graph IRI against
-> the pinned GraphDB version (11.4.2) before relying on it.
+> Implementation note (resolved, chunk 13 delivered): the repo-config parameter and
+> shapes-graph IRI were confirmed live against the pinned GraphDB version (11.4.2). The
+> SHACL wrapping sail's type literal is `rdf4j:ShaclSail` (not the GraphDB-native-looking
+> `graphdb:ShaclSail`, which GraphDB rejects with HTTP 400) and the shapes graph is the
+> RDF4J reserved IRI `http://rdf4j.org/schema/rdf4j#SHACLShapeGraph`, as expected. See
+> `openspec/changes/shacl-validation/design.md` D1 and the delivered
+> `deploy/graphdb/msr-repo-config.ttl`.
 
 ### Shape catalogue (initial)
 
@@ -152,6 +157,18 @@ repository capability, not roll-your-own:
 - Units constrained to the QUDT allowlist (`sh:in` over `ontology/qudt-units.json`).
 - Valid-temperature-range present and `validTempMin ≤ validTempMax`.
 - `linksTo` may only reference an existing concept/class/individual of the expected kind.
+
+**Delivered (chunk 13, cross-checked against `deploy/graphdb/msr-shapes.ttl` +
+`deploy/graphdb/msr-shapes-units.ttl`):** every invariant above is installed as designed, plus
+one addition the initial catalogue sketch above did not call out by name: a **catalog-individual
+provenance shape** targeting `msr:MoltenSalt`, `msr:Constituent`, and `msr:ChemicalCompound`
+(each requiring `prov:wasGeneratedBy` + `prov:wasDerivedFrom`), mirroring the same provenance
+invariant already required of measurements and mentions — the landed `provenance-model` stamps
+these on every pipeline-asserted individual, not only measurements/mentions, so the shape
+catalogue enforces the full set. As here, `msr:citedIn` is deliberately **not** required
+(deferred to chunk 7 — no writer asserts it yet). The bulk-load question is resolved:
+**per-transaction (incremental) validation**, confirmed by observed transaction sizes far below
+`transactionalValidationLimit` (500000) — see `openspec/changes/shacl-validation/design.md` D6.
 
 ## 3. Human-in-the-loop (chunk 9)
 

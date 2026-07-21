@@ -46,6 +46,65 @@ class Config:
     # design.md D5) doesn't broaden precision risk the way lowering a
     # general-prose fuzzy floor would.
     fuzzy_min_token_length: int = 3
+    # Novelty miner's document-frequency FLOOR (refine-mine-salience D3): a
+    # coarse cost bound, NOT a novelty rank — the POC showed document
+    # frequency does not separate genuine targets from common/known phrases
+    # (`solubility` at df 271 is rarer than `molten salt` at df 423), so this
+    # value only drops rare OCR one-offs before the shaped candidate set
+    # reaches triage. 50 is conservative — well below the demo targets
+    # `solubility` (280/637 docs) and `graphite` (388/637 docs), so both clear
+    # it, while still filtering out low-frequency OCR noise terms.
+    salience_threshold: int = 50
+    # Novelty miner's hard runaway ceiling (refine-mine-salience D3): after
+    # spaCy shaping + hardened exclusion + the `salience_threshold` floor, if
+    # more candidates remain than this, keep only the top-N by document
+    # frequency (deterministic tie-break) and log the count cut. This is
+    # purely a cost bound on LLM triage fan-out — explicitly not a novelty
+    # ranking (see `salience_threshold` above) — so it is set generously
+    # rather than tuned to surface targets. Override with
+    # MSR_MINE_MAX_CANDIDATES.
+    mine_max_candidates: int = 5000
+    # The pinned statistical spaCy model loaded for noun-chunk candidate
+    # enumeration (refine-mine-salience D5): deterministic at inference (no
+    # sampling), pinned as a wheel dependency so no runtime download occurs.
+    # Override with MSR_SPACY_MODEL (e.g. to swap models in a test double).
+    spacy_model: str = "en_core_web_sm"
+    # Chunk 7 (extract-property-relations) — the SQLite measurement_value
+    # store's path (D-mirrors the Go loader/server `defaultDBPath =
+    # "data/msr.db"` and `MSR_DB_PATH` env), so text-derived measurements can
+    # be written to the same store as the NIST loader's rows.
+    db_path: Path = Path("data/msr.db")
+    # Precision knob for accepting an LLM-proposed relation as a written
+    # msr:PropertyMeasurement (chunk 7). 0.5 is a deliberately precision-biased
+    # default: a proposed relation must clear at least even odds before it is
+    # written to the graph, favoring fewer false positives over recall at POC
+    # scale.
+    confidence_threshold: float = 0.5
+    # Mirrors the loader's `MSR_ONTOLOGY_DIR=/app/ontology` (chunk 7) — the
+    # directory containing the QUDT unit allowlist used to validate
+    # LLM-proposed units before they are written.
+    ontology_dir: Path = Path("ontology")
+    # Mention-writer batch size (scale-mention-linking, D1): a report's
+    # mentions are written as multiple additive INSERT DATA POSTs of at most
+    # this many mentions each, keeping any single POST body well under
+    # GraphDB's Tomcat maxPostSize (a single unbatched POST of a large
+    # OCR-heavy report — e.g. NSRDS-NBS-61-p4's ~3.8k mentions — otherwise
+    # exceeds it and is rejected with an HTTP 500).
+    mention_write_batch_size: int = 500
+    # Layer-5 disambiguation concurrency (scale-mention-linking, D2): the
+    # bounded worker-pool size used to resolve a run's distinct unresolved
+    # surfaces in parallel. The DeepSeek/openai client is blocking I/O, so
+    # threads overlap the network round-trips that otherwise dominate the
+    # link wall-clock. 24 is a safe, effective default for this workload:
+    # comfortably below DeepSeek's concurrency ceiling and any practical
+    # rate limit, while enough to overlap the per-call latency that
+    # otherwise dominates. Override with MSR_DISAMBIG_CONCURRENCY. Reused by
+    # chunk 7's extract as the per-sentence relation-extraction fan-out size.
+    disambig_concurrency: int = 24
+    # When true, ignore any persisted disambiguation cache on load and
+    # re-resolve every layer-5 surface via the model, rewriting the store
+    # (persist-disambiguation-cache D4). Env MSR_DISAMBIG_REFRESH.
+    disambig_cache_refresh: bool = False
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> Config:
@@ -71,6 +130,30 @@ class Config:
             fuzzy_min_token_length=int(
                 env.get("MSR_FUZZY_MIN_TOKEN_LENGTH", cls.fuzzy_min_token_length)
             ),
+            salience_threshold=int(
+                env.get("MSR_SALIENCE_THRESHOLD", cls.salience_threshold)
+            ),
+            mine_max_candidates=int(
+                env.get("MSR_MINE_MAX_CANDIDATES", cls.mine_max_candidates)
+            ),
+            spacy_model=env.get("MSR_SPACY_MODEL", cls.spacy_model),
+            db_path=Path(env.get("MSR_DB_PATH", str(cls.db_path))),
+            confidence_threshold=float(
+                env.get(
+                    "MSR_EXTRACT_CONFIDENCE_THRESHOLD", cls.confidence_threshold
+                )
+            ),
+            ontology_dir=Path(env.get("MSR_ONTOLOGY_DIR", str(cls.ontology_dir))),
+            mention_write_batch_size=int(
+                env.get("MSR_MENTION_WRITE_BATCH_SIZE", cls.mention_write_batch_size)
+            ),
+            disambig_concurrency=int(
+                env.get("MSR_DISAMBIG_CONCURRENCY", cls.disambig_concurrency)
+            ),
+            disambig_cache_refresh=(
+                env.get("MSR_DISAMBIG_REFRESH", "").strip().lower()
+                in ("1", "true", "yes")
+            ),
         )
 
     @property
@@ -86,6 +169,16 @@ class Config:
     def report_dir(self, report: str) -> Path:
         """Directory holding the processed artifacts for a given report number."""
         return self.corpus_dir / report
+
+    @property
+    def disambig_cache_path(self) -> Path:
+        """Path to the persisted layer-5 disambiguation cache (corpus-scoped).
+
+        Under ``corpus_dir`` (the ./data bind mount) so it survives across
+        `make link` container runs, and gitignored so it is never committed
+        (persist-disambiguation-cache D1).
+        """
+        return self.corpus_dir / "disambiguation-cache.json"
 
     @property
     def sparql_update_endpoint(self) -> str:
@@ -114,3 +207,12 @@ class Config:
     def normalized_path(self, report: str) -> Path:
         """Path to the chunk-5 OCR-normalized text for a given report."""
         return self.report_dir(report) / "normalized.txt"
+
+    def relations_path(self, report: str) -> Path:
+        """Path to the chunk-7 relation-extraction artifact for a given report."""
+        return self.report_dir(report) / "relations.jsonl"
+
+    @property
+    def qudt_units_path(self) -> Path:
+        """Path to the QUDT unit allowlist consulted by relation extraction."""
+        return self.ontology_dir / "qudt-units.json"

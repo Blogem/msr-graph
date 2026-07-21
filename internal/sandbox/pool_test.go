@@ -712,3 +712,78 @@ func contains(ids []string, id string) bool {
 	}
 	return false
 }
+
+// firstExecID returns the container id of the first Exec call in the log, or
+// "" if none occurred.
+func firstExecID(calls []callRecord) string {
+	for _, c := range calls {
+		if c.Method == callExec {
+			return c.ID
+		}
+	}
+	return ""
+}
+
+// Age-aware acquisition (stale-container "No such container" fix): a warm
+// container's PID 1 is `sleep <IdleTTL>` with AutoRemove, so one that has sat
+// idle in the pool past its TTL has self-reaped. Run must detect the stale
+// container by its expiry, remove it, and create a fresh replacement inline
+// so the run still succeeds -- never exec the vanished container.
+func TestPool_StaleContainerReplacedBeforeExec(t *testing.T) {
+	rt := newFakeRuntime()
+	cfg := testConfig(1, 40*time.Millisecond)
+	cfg.IdleTTL = 80 * time.Millisecond // must exceed Timeout (New validates)
+	p, err := sandbox.New(context.Background(), cfg, rt)
+	if err != nil {
+		t.Fatalf("sandbox.New: %v", err)
+	}
+	defer p.Close()
+
+	warmed := rt.CreatedIDs()
+	if len(warmed) != 1 {
+		t.Fatalf("expected exactly 1 warmed container, got %v", warmed)
+	}
+	staleID := warmed[0]
+
+	// Wait until the warmed container has less than a full run's timeout of
+	// life left (remaining <= Timeout), which marks it stale.
+	time.Sleep(60 * time.Millisecond)
+
+	if _, _, _, err := p.Run(context.Background(), []byte("print('hi')")); err != nil {
+		t.Fatalf("Run over a stale pool should succeed via inline replacement, got error: %v", err)
+	}
+
+	if !contains(rt.RemovedIDs(), staleID) {
+		t.Fatalf("expected the stale container %q to be removed, removed=%v", staleID, rt.RemovedIDs())
+	}
+	execID := firstExecID(rt.Calls())
+	if execID == "" {
+		t.Fatalf("expected an Exec call, calls=%v", rt.Calls())
+	}
+	if execID == staleID {
+		t.Fatalf("Run exec'd the stale container %q instead of a fresh replacement", staleID)
+	}
+}
+
+// The age check must NOT recreate a healthy (fresh) container: a normal run
+// execs the warmed container as-is, adding no replacement create on the hot
+// path.
+func TestPool_HealthyContainerUsedWithoutReplacement(t *testing.T) {
+	rt := newFakeRuntime()
+	p, err := sandbox.New(context.Background(), testConfig(1, time.Second), rt) // IdleTTL 1h
+	if err != nil {
+		t.Fatalf("sandbox.New: %v", err)
+	}
+	defer p.Close()
+
+	warmed := rt.CreatedIDs()[0]
+
+	if _, _, _, err := p.Run(context.Background(), []byte("print('hi')")); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	execID := firstExecID(rt.Calls())
+	if execID != warmed {
+		t.Fatalf("expected Run to exec the warmed container %q as-is, but exec'd %q (unexpected inline replacement)", warmed, execID)
+	}
+}

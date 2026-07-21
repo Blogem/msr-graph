@@ -39,7 +39,8 @@ Run these in order on a fresh clone:
 make up         # preflight the license, bring up GraphDB + the server scaffold,
                 # build the extraction and sandbox base images, wait for GraphDB
                 # to be healthy, and ensure the `msr` repository exists
-                # (inference disabled)
+                # (inference disabled, SHACL validation enabled — see
+                # "SHACL validation" below) with the shape catalogue loaded
 
 make load-seed  # initialize the SQLite measurement_value schema and load the
                 # two seed graphs (graph-replace, idempotent):
@@ -48,7 +49,11 @@ make load-seed  # initialize the SQLite measurement_value schema and load the
                 # and ensure urn:msr:staging exists. There is no seed A-Box —
                 # urn:msr:data starts empty and is populated exclusively by
                 # `make load-nist` below and the extraction pipeline
-                # (`make ingest` + `make link`).
+                # (`make ingest` + `make link` + `make extract`). Because this
+                # PUTs only the TBox/vocab graphs and never touches
+                # urn:msr:data, it is safe to re-run at any point after data
+                # has been loaded — that is how a `msr.ttl` TBox edit gets
+                # applied to a live store.
 
 make load-nist  # ingest the 4 vendored NIST SRD 27 fluoride CSVs: coefficient
                 # rows -> SQLite measurement_value (source='nist'); MoltenSalt /
@@ -76,9 +81,33 @@ make link       # one-shot Compose run of the extraction container: seed the
                 # `make load-seed` to have run first (the mention T-Box lives
                 # in ontology/msr.ttl) as well as `make ingest` (segments.jsonl).
 
+make extract    # one-shot Compose run of the extraction container:
+                # LLM-assisted property-relation extraction over each curated
+                # document's linked mentions (see
+                # openspec/changes/extract-property-relations/design.md).
+                # Requires `make link` to have run first (mentions.jsonl and
+                # the msr:Mention graph). See "Property-relation extraction
+                # (`make extract`)" below for what it writes.
+make mine       # one-shot Compose run of the extraction container: enumerate
+                # novel candidates -> score -> triage -> write msr:ChangeProposal
+                # proposals + auto-accepted instances (see
+                # openspec/changes/mine-ontology-candidates/design.md). Requires
+                # `make load-seed` to have run first (the ChangeProposal
+                # governance T-Box lives in ontology/msr.ttl) as well as
+                # `make link` (mentions to mine candidates from).
+
 make test       # GRAPHDB_REQUIRED=1 go test ./...
                 # integration tests FAIL (not skip) if the stack isn't up
 ```
+
+The `msr:ChangeProposal` governance T-Box (design.md D4) loads into
+`urn:msr:ontology` at bootstrap via `make load-seed`'s graph-replace PUT —
+i.e. before `load-nist`, `link`, and `mine` ever run. `load-seed` PUT-replaces
+only the T-Box and vocab graphs (`urn:msr:ontology`, `urn:msr:vocab`) and
+never touches `urn:msr:data`: all instance data, including salts, mentions,
+and `msr:autoAccepted` proposal instances, is written additively via SPARQL
+`INSERT DATA` by the real writers, never `PUT`. Re-running `load-seed` is
+therefore harmless to already-mined candidates and accepted instances.
 
 A bare `go test ./...` (without `GRAPHDB_REQUIRED=1` and without the stack
 running) stays green by **skipping** the integration tests.
@@ -93,13 +122,65 @@ or mentions until the real pipeline has run. To reproduce the density demo
 end to end on a fresh stack:
 
 ```bash
-make up && make load-nist && make ingest && make link && make demo-density
+make up && make load-nist && make ingest && make link && make extract && make demo-density
 ```
 
 `make link`'s Flash disambiguation layer may need `DEEPSEEK_API_KEY` set in
 the environment (the deterministic composed-salt match itself needs no LLM).
-`make demo-density` depends on that full build having populated
-`urn:msr:data` — it is not a standalone fixture.
+`make extract`'s LLM-assisted relation extraction likewise needs
+`DEEPSEEK_API_KEY` set. `make demo-density` depends on that full build having
+populated `urn:msr:data` — it is not a standalone fixture.
+
+## SHACL validation (write-time enforcement)
+
+The `msr` GraphDB repository has native SHACL validation (RDF4J `ShaclSail`)
+enabled — **every transaction is validated against the installed shapes on
+commit**, not just documented as an ontology convention. The shape catalogue
+lives in [`deploy/graphdb/msr-shapes.ttl`](deploy/graphdb/msr-shapes.ttl)
+(provenance/completeness shapes for `msr:PropertyMeasurement`, `msr:Mention`,
+and the catalog individuals `msr:MoltenSalt`/`msr:Constituent`/
+`msr:ChemicalCompound`; data-quality shapes for the unit allowlist,
+valid-temperature-range ordering, and `msr:linksTo` target-kind) plus the
+generated companion fragment
+[`deploy/graphdb/msr-shapes-units.ttl`](deploy/graphdb/msr-shapes-units.ttl)
+(the `msr:hasUnit` QUDT allowlist, regenerated from `ontology/qudt-units.json`
+by `cmd/gen-unit-shape` so the shape and the loader's allowlist never drift
+apart). `scripts/ensure-repo.sh` loads both into the reserved RDF4J shapes
+graph (`http://rdf4j.org/schema/rdf4j#SHACLShapeGraph`) as part of `make up`,
+so a fresh stack enforces shapes with no manual step. See
+[`openspec/changes/shacl-validation/design.md`](openspec/changes/shacl-validation/design.md)
+for the full design.
+
+**Reading a rejection.** A write that would leave the store in violation of a
+shape is rejected atomically (none of that transaction's triples persist). At
+the `internal/graph` write boundary (`Client.Update`, `Client.PutGraph`) a
+rejection is returned as a `*graph.ValidationError` (see
+[`internal/graph/errors.go`](internal/graph/errors.go)), not a generic
+transport error — callers distinguish it with `errors.As(err, &ve)`. Its
+`Error()` names each violation's failing constraint (`sourceConstraintComponent`,
+e.g. `sh:MinCountConstraintComponent`), the offending `focusNode`, and, where
+present, the `resultPath` and `resultMessage` — so a rejection reads as "which
+record failed which rule," not an opaque HTTP 500. `cmd/loader` prints a
+`ValidationError` distinctly from other write failures rather than folding it
+into a generic error log line.
+
+**Upgrading an existing (pre-SHACL) volume.** SHACL is a repository capability
+fixed at creation time in GraphDB — it cannot be enabled on a repository that
+already exists. `scripts/ensure-repo.sh` therefore fails loudly, instead of
+silently no-op'ing, when it finds an already-present `msr` repository that
+predates this change (no `ShaclSail` wrapper in its config). If you hit that
+error, drop the GraphDB data volume and let `make up` recreate the repository
+from the SHACL-enabled config, then replay the seed/NIST/extraction loads:
+
+```bash
+docker compose down -v   # or: make down
+make up                  # recreates `msr` from the SHACL-enabled repo config
+                          # and loads the shape catalogue
+```
+
+POC data is disposable and fully replayable (`make load-seed`, `make
+load-nist`, `make ingest`, `make link`), so this volume drop is expected and
+safe — there is no migration path for existing data, only recreation.
 
 ## Corpus ingest
 
@@ -149,6 +230,33 @@ spans the lexical layers can't settle, and writes the results both as
 
   The file is regenerated wholesale on each `make link` run, so it is
   idempotent like the graph writes.
+
+## Property-relation extraction (`make extract`)
+
+`make extract` runs the `extraction` container's LLM-assisted
+property-relation extraction pipeline (see
+[`openspec/changes/extract-property-relations/design.md`](openspec/changes/extract-property-relations/design.md)
+for the full design): for each curated document, it prompts the configured
+LLM with the document's linked mentions and text, proposes
+property/value/unit relations, validates proposed units against the QUDT
+allowlist (`ontology/qudt-units.json`) and filters by
+`MSR_EXTRACT_CONFIDENCE_THRESHOLD` (default 0.5, precision-biased), and
+writes the accepted relations as:
+
+- **`measurement_value` rows** (`source='document'`) in the SQLite store at
+  `MSR_DB_PATH`, alongside the NIST loader's `source='nist'` rows.
+- **`msr:PropertyMeasurement`** nodes in `urn:msr:data`, each carrying
+  `msr:extractionConfidence`, `msr:extractionRationale`, and `msr:citedIn`
+  back to the source `msr:Document`.
+- Minted **`msr:MoltenSaltReactor`** individuals and `msr:hasRole` /
+  `msr:usedIn` edges where the text supports them, each reified as an
+  `rdf:Statement` so the edge itself can carry the same provenance
+  properties.
+- Per-run lineage in `urn:msr:provenance` (the same run-Activity pattern used
+  by `make ingest`/`make link`; see `provenance.py`).
+- **`data/corpus/{report#}/relations.jsonl`** — one JSON object per proposed
+  relation (accepted or rejected), regenerated wholesale on each run like
+  `mentions.jsonl`, for inspection/debugging of the extraction pass.
 
 ## `data/` bind-mount ownership
 

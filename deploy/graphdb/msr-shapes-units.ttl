@@ -1,0 +1,29 @@
+# GENERATED FILE — do not hand-edit.
+#
+# Generated from ontology/qudt-units.json by cmd/gen-unit-shape.
+# Re-run `go run ./cmd/gen-unit-shape` to regenerate after the allowlist changes.
+#
+# Constrains msr:hasUnit on msr:PropertyMeasurement to the QUDT unit
+# allowlist, so the shape and the loader's allowlist share one source of
+# truth (openspec/changes/shacl-validation/design.md D3). This fragment is
+# loaded into the reserved SHACL shapes graph alongside the hand-authored
+# deploy/graphdb/msr-shapes.ttl, which owns the minCount/cardinality
+# constraint on msr:hasUnit — this fragment only constrains the value set.
+
+@prefix msr: <https://w3id.org/msr-kg/ontology#> .
+@prefix sh:  <http://www.w3.org/ns/shacl#> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+
+msr:PropertyMeasurementUnitAllowlistShape
+    a sh:NodeShape ;
+    sh:targetClass msr:PropertyMeasurement ;
+    sh:property [
+        sh:path msr:hasUnit ;
+        sh:in (
+            <http://qudt.org/vocab/unit/GM-PER-CentiM3>
+            <http://qudt.org/vocab/unit/MilliPA-SEC>
+            <http://qudt.org/vocab/unit/MilliN-PER-M>
+            <http://qudt.org/vocab/unit/S-PER-CentiM>
+        ) ;
+        sh:message "msr:hasUnit must be one of the QUDT units in ontology/qudt-units.json's allowedUnits." ;
+    ] .

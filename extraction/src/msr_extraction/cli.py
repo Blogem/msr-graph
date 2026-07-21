@@ -14,16 +14,24 @@ from __future__ import annotations
 import argparse
 import logging
 import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from msr_extraction import (
     acquisition,
     curated,
+    disambig_cache,
     documents,
+    edges,
     linker,
     manifest,
+    measurement_store,
+    measurements,
     mentions,
+    mine_runner,
     provenance,
+    relations,
     segmenter,
+    units,
 )
 from msr_extraction.config import Config
 from msr_extraction.disambiguation import FlashClient, disambiguate
@@ -170,11 +178,102 @@ def _cmd_link(config: Config, reports: list[str] = curated.CURATED_REPORTS) -> i
 
     client = FlashClient.from_config(config)
     disambiguator: linker.Disambiguator | None = None
+    prewarm_report: "Callable[[str], None] | None" = None
+    save_disambig_cache: "Callable[[], None] | None" = None
     if client is not None:
+        # Per-run disambiguation cache keyed on surface form
+        # (cache-disambiguation-by-surface): layer-5 candidates are
+        # formula-shaped, so the surface determines identity and the same
+        # unresolved formula recurring across segments/reports need only be
+        # resolved once. A "novel" outcome is cached too. The known-IRI
+        # validation inside `disambiguate` still gates every link, so a
+        # cached outcome can never be a link to an unloaded IRI.
+        _disambig_cache: dict[str, tuple[str, str | None]] = {}
+
+        # Cross-run persistence (persist-disambiguation-cache D2/D3): seed the
+        # cache from the on-disk store, but only when it was written against
+        # the same known-IRI set (the hash guards staleness). Seeded surfaces
+        # are skipped by the pre-warm collector, so an unchanged graph makes
+        # zero model calls on re-run. Seeded `linked` entries are re-validated
+        # against the live known-IRI set (belt-and-suspenders against a
+        # hand-edited store).
+        _iris_hash = disambig_cache.known_iris_hash(known_iris)
+        if not config.disambig_cache_refresh:
+            seeded = disambig_cache.load_cache(config.disambig_cache_path, _iris_hash)
+            for surface, (status, target_iri) in seeded.items():
+                if status == "linked" and target_iri not in known_iris:
+                    continue
+                _disambig_cache[surface] = (status, target_iri)
+            if _disambig_cache:
+                logger.info(
+                    "link: seeded %d disambiguation outcome(s) from %s",
+                    len(_disambig_cache),
+                    config.disambig_cache_path,
+                )
+
+        def save_disambig_cache() -> None:
+            disambig_cache.save_cache(
+                config.disambig_cache_path, _iris_hash, _disambig_cache
+            )
+            logger.info(
+                "link: wrote %d disambiguation outcome(s) to %s",
+                len(_disambig_cache),
+                config.disambig_cache_path,
+            )
+
+        def _resolve(surface: str, sentence: str) -> tuple[str, str | None]:
+            result = disambiguate(surface, sentence, prompt_prefix, known_iris, client)
+            return (result.status, result.target_iri)
 
         def disambiguator(surface: str, sentence: str) -> tuple[str, str | None]:
-            result = disambiguate(surface, sentence, prompt_prefix, known_iris, client)
-            return result.status, result.target_iri
+            cached = _disambig_cache.get(surface)
+            if cached is not None:
+                return cached
+            outcome = _resolve(surface, sentence)
+            _disambig_cache[surface] = outcome
+            return outcome
+
+        def prewarm_report(report: str) -> None:
+            # Concurrent pre-warm (scale-mention-linking D2). A cheap collect
+            # scan gathers this report's distinct not-yet-cached layer-5
+            # surfaces (the collector returns "novel" so linking proceeds and
+            # the throwaway records are discarded), then a bounded thread pool
+            # resolves them in parallel into the shared cache — so the real
+            # link pass below issues no model calls. Threads are correct here
+            # because the DeepSeek client is blocking I/O; `disambiguate`
+            # never raises, so worker futures never do. `pending` maps each
+            # distinct surface to the first sentence context seen for it.
+            pending: dict[str, str] = {}
+
+            def collector(surface: str, sentence: str) -> tuple[str, str | None]:
+                if surface not in _disambig_cache and surface not in pending:
+                    pending[surface] = sentence
+                return ("novel", None)
+
+            linker.link_report(
+                report,
+                config,
+                matcher,
+                known,
+                known_iris,
+                prompt_prefix=prompt_prefix,
+                disambiguator=collector,
+            )
+            if not pending:
+                return
+            with ThreadPoolExecutor(max_workers=config.disambig_concurrency) as pool:
+                futures = {
+                    pool.submit(_resolve, surface, sentence): surface
+                    for surface, sentence in pending.items()
+                }
+                for future in as_completed(futures):
+                    _disambig_cache[futures[future]] = future.result()
+            logger.info(
+                "link: report=%s pre-warmed %d distinct layer-5 surface(s) (concurrency=%d)",
+                report,
+                len(pending),
+                config.disambig_concurrency,
+            )
 
     else:
         logger.warning("link: DEEPSEEK_BASE_URL not configured; layer 5 spans fall to novel")
@@ -190,6 +289,9 @@ def _cmd_link(config: Config, reports: list[str] = curated.CURATED_REPORTS) -> i
         if not segments_path.exists():
             logger.warning("link: report=%s missing %s, skipping", report, segments_path)
             continue
+
+        if prewarm_report is not None:
+            prewarm_report(report)
 
         records = linker.link_report(
             report,
@@ -215,7 +317,9 @@ def _cmd_link(config: Config, reports: list[str] = curated.CURATED_REPORTS) -> i
             for record in records
             if record.status == "linked"
         ]
-        mentions.write_mentions(linked_mentions, sparql, run_ts)
+        mentions.write_mentions(
+            linked_mentions, sparql, run_ts, batch_size=config.mention_write_batch_size
+        )
 
         linked_count = len(linked_mentions)
         novel_count = len(records) - linked_count
@@ -231,7 +335,157 @@ def _cmd_link(config: Config, reports: list[str] = curated.CURATED_REPORTS) -> i
         logger.info(summary)
         print(summary)
 
+    if save_disambig_cache is not None:
+        save_disambig_cache()
+
     logger.info("link: complete")
+    return 0
+
+
+def _cmd_mine(config: Config) -> int:
+    """Run the full ontology-mining pipeline and print a one-line run summary.
+
+    Thin wrapper (design.md, OpenSpec task 1.1-CLI): all orchestration --
+    enumerate/exclude/score candidates, triage each, build proposal
+    bundles + rides-with individuals, write proposals and auto-accepted
+    instances, and wire the per-run provenance activity nodes -- lives in
+    :func:`msr_extraction.mine_runner.run_mine`, mirroring how ``_cmd_link``
+    delegates its per-report work to ``linker.link_report``.
+    """
+    summary = mine_runner.run_mine(config)
+    by_kind = summary["proposals_by_kind"]
+    kind_summary = " ".join(f"{kind}={count}" for kind, count in sorted(by_kind.items()))
+    line = (
+        f"mine: candidates={summary['candidates']} "
+        f"proposals=[{kind_summary}] "
+        f"auto_accepted={summary['auto_accepted']} "
+        f"rejected={summary['rejected']} "
+        f"dropped={summary['dropped']}"
+    )
+    logger.info(line)
+    print(line)
+    return 0
+
+
+def _cmd_extract(config: Config, reports: list[str] = curated.CURATED_REPORTS) -> int:
+    """Extract salt<->property<->value measurements and salt<->role/reactor
+    edges from linked sentences, write both measurement stores + role/reactor
+    edges (+ minted reactors) with per-fact generation provenance, and print
+    a per-doc run summary (design.md D2/D4/D5/D6/D7, tasks 7.1/5.6/2.2).
+
+    `reports` defaults to the full `curated.CURATED_REPORTS` set; callers
+    (e.g. the CLI dispatcher) may pass a `--report`/`--limit`-filtered subset
+    to bound a run to fewer documents.
+
+    Guards a missing `segments.jsonl` per report (logs a warning and skips
+    it) so a partial corpus doesn't crash the whole run.
+
+    Generates a single run timestamp for this invocation and writes the
+    stable per-pipeline `Activity` typing plus the per-run extraction
+    `Activity` node into `urn:msr:provenance` *before* processing any
+    report, so the run node exists before any measurement/edge write emits
+    a generation edge referencing it. Reuses the cached KG-schema prompt
+    prefix (task 2.2) rather than re-deriving it.
+    """
+    reader = GraphReader.from_config(config)
+    prompt_prefix = KGSchemaPromptCache().get(reader)
+
+    known = relations.KnownSets(
+        molten_salts=reader.read_molten_salts(),
+        physical_properties=reader.read_physical_properties(),
+        salt_roles=reader.read_salt_roles(),
+        reactor_concepts=reader.read_reactor_concepts(),
+    )
+    unit_mapper = units.UnitMapper.from_config(config)
+
+    client = FlashClient.from_config(config)
+    if client is None:
+        logger.warning(
+            "extract: DEEPSEEK_BASE_URL not configured; no relations will be extracted"
+        )
+        return 0
+
+    sparql = SparqlClient.from_config(config)
+    conn = measurement_store.connect(config.db_path)
+
+    run_ts = provenance.run_timestamp()
+    provenance.write_stable_activity(sparql)
+    provenance.write_activity(run_ts, sparql)
+
+    logger.info("extract: %d curated report(s) to process", len(reports))
+    logger.info("extract: fan-out concurrency=%d", config.disambig_concurrency)
+    for report in reports:
+        segments_path = config.segments_path(report)
+        if not segments_path.exists():
+            logger.warning("extract: report=%s missing %s, skipping", report, segments_path)
+            continue
+
+        result = relations.extract_report(
+            report,
+            config,
+            prompt_prefix,
+            client,
+            known,
+            unit_mapper,
+            concurrency=config.disambig_concurrency,
+        )
+
+        for m in result.measurements:
+            measurements.write_measurement(
+                salt_iri=m.salt_iri,
+                property_iri=m.property_iri,
+                property_name=m.property_name,
+                unit_curie=m.unit_curie,
+                equation=m.equation,
+                uncertainty=m.uncertainty,
+                confidence=m.confidence,
+                rationale=m.rationale,
+                report=m.report,
+                client=sparql,
+                conn=conn,
+                run_ts=run_ts,
+            )
+
+        role_edges = [
+            edges.RoleEdge(
+                salt_iri=r.salt_iri,
+                role_iri=r.role_iri,
+                report=r.report,
+                document_iri=f"msrd:{r.report}",
+                confidence=r.confidence,
+                rationale=r.rationale,
+            )
+            for r in result.roles
+        ]
+        reactor_edges = [
+            edges.ReactorEdge(
+                salt_iri=r.salt_iri,
+                reactor_slug=edges.slugify(r.reactor_label).lower(),
+                reactor_label=r.reactor_label,
+                grounding_concept_iri=r.reactor_concept_iri,
+                report=r.report,
+                document_iri=f"msrd:{r.report}",
+                confidence=r.confidence,
+                rationale=r.rationale,
+            )
+            for r in result.reactors
+        ]
+        edges.write_edges(role_edges, reactor_edges, sparql, run_ts)
+
+        rejected = sum(1 for record in result.records if record.disposition == "rejected")
+        skipped = sum(1 for record in result.records if record.disposition == "skipped")
+        summary = (
+            f"extract: report={report} sentences={result.sentences_seen} "
+            f"relations={len(result.records)} measurements={len(result.measurements)} "
+            f"roles={len(result.roles)} reactors={len(result.reactors)} "
+            f"rejected={rejected} skipped={skipped} "
+            f"malformed_calls={result.malformed_calls}"
+        )
+        logger.info(summary)
+        print(summary)
+
+    conn.close()
+    logger.info("extract: complete")
     return 0
 
 
@@ -242,6 +496,8 @@ _HANDLERS = {
     "documents": _cmd_documents,
     "ingest": _cmd_ingest,
     "link": _cmd_link,
+    "mine": _cmd_mine,
+    "extract": _cmd_extract,
 }
 
 
@@ -281,6 +537,32 @@ def _build_parser() -> argparse.ArgumentParser:
         metavar="N",
         help="Process only the first N of the (possibly --report-filtered) selection.",
     )
+    subparsers.add_parser(
+        "mine",
+        help=(
+            "Mine novel ontology candidates from curated text + chunk-6 misses; "
+            "write proposals to staging + auto-accepted instances to data."
+        ),
+    )
+    extract_parser = subparsers.add_parser(
+        "extract",
+        help=(
+            "Extract salt<->property<->value measurements and salt<->role/reactor "
+            "edges from linked sentences; write both stores + relations.jsonl."
+        ),
+    )
+    extract_parser.add_argument(
+        "--report",
+        action="append",
+        metavar="ID",
+        help="Restrict extraction to this curated report id (repeatable). Default: all curated reports.",
+    )
+    extract_parser.add_argument(
+        "--limit",
+        type=int,
+        metavar="N",
+        help="Process only the first N of the (possibly --report-filtered) selection.",
+    )
 
     return parser
 
@@ -303,6 +585,16 @@ def main(argv: list[str] | None = None) -> int:
             print(f"link: {exc}", file=sys.stderr)
             return 1
         return _cmd_link(config, reports=reports)
+
+    if args.command == "extract":
+        try:
+            reports = _resolve_link_reports(
+                curated.CURATED_REPORTS, args.report, args.limit
+            )
+        except ValueError as exc:
+            print(f"extract: {exc}", file=sys.stderr)
+            return 1
+        return _cmd_extract(config, reports=reports)
 
     handler = _HANDLERS[args.command]
     return handler(config)
