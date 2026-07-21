@@ -9,9 +9,16 @@ where the reusable code and the domain content are entangled — and the *un-ent
 that separates them. The goal is a shopping list for a from-scratch, production-quality
 rebuild in a new domain: what to lift, what to replace, and what to refactor into a plug-in.
 
-Target rebuild constraints (from the owner): still RDF/SPARQL; still a SQL value store but
-**DuckDB instead of SQLite**; LLM via an OpenAI-compatible API. Those choices are reflected
-throughout (see especially §5, DuckDB migration).
+Target rebuild constraints (from the owner): still RDF/SPARQL; **structured (numeric/tabular)
+data lives in external stores reached through pluggable connectors** — not one fixed engine
+(DuckDB, Postgres, Databricks, Athena, InfluxDB, … are all connector implementations); LLM via
+an OpenAI-compatible API. The division of labour is: the **graph holds *where to look*** (a
+locator that names a store + an address within it) and the **connector fetches the values**.
+Those choices are reflected throughout (see especially §3.8, the store-connector model).
+
+Two capabilities are treated as **first-class trust pillars**, not incidental features, because
+they are what make a self-evolving, LLM-driven KG trustworthy: **provenance everywhere** (§3.5)
+and **constraint validation / SHACL** (§3.13). Both must survive a change of graph engine.
 
 ## Verified at
 
@@ -21,7 +28,23 @@ throughout (see especially §5, DuckDB migration).
   grepping for domain leakage to validate (not just assert) the classification. File:line
   references below were verified at this commit.
 
-See §6 for how to refresh this map after further POC changes.
+See §5 for how to refresh this map after further POC changes.
+
+## Links
+
+Code and spec references link to **permalinks pinned to the audited commit** so line numbers
+stay valid forever:
+
+```
+https://github.com/Blogem/msr-graph/blob/928936e/<path>#L<start>-L<end>
+```
+
+Each Part 1 subsection opens with linked **directory entry points**, and §1.6 links the specs by
+name; inline `path:NN` citations in the prose are plain text but reconstructable against the same
+base (append `#L<start>-L<end>`). Because the links pin to
+`928936e`, they always show *exactly what was audited* — when you re-verify against a newer
+commit (§5), regenerate the base SHA. (Relative links would track the latest `main` but drift
+as line numbers move, which is why pinned permalinks are used here.)
 
 ## The big picture
 
@@ -29,7 +52,8 @@ Three layers, along a deliberate language boundary (Python only where spaCy is a
 dependency; Go everywhere else; SvelteKit for the one frontend):
 
 1. **Generic platform core** — RDF dataset client with named-graph staging isolation, the
-   SQL value store, the warm Python sandbox pool, the conversational analysis agent, the
+   structured value store (behind pluggable connectors), the warm Python sandbox pool, the
+   conversational analysis agent, the
    self-evolution proposal/apply engine, checkpoints, the web server + review/chat/admin UI,
    provenance, SHACL enforcement, and the LLM client. *Mechanism is domain-agnostic; MSR
    content is quarantined in description strings, namespace literals, and data files — never
@@ -37,8 +61,8 @@ dependency; Go everywhere else; SvelteKit for the one frontend):
 
 2. **Domain plug-in points** — a small, nameable set of things a new domain supplies:
    the ontology + vocab, an entity canonicalizer, a structured-source parser, the seed-source
-   queries, a relation schema, a units/grounding allowlist, and the value-store payload
-   columns.
+   queries, a relation schema, controlled value sets, and the structured-store connector(s) +
+   locator scheme.
 
 3. **Domain instance (MSR)** — NIST fluoride chemistry: the salt canonicalizer, the NIST CSV
    loader, the MSR ontology, the chemistry SHACL shapes, the safety corpus.
@@ -62,12 +86,14 @@ machinery, staging graphs, and approval routing **unchanged**.
 
 ## 1.1 Generic platform core (Go)
 
+Entry points: [`internal/graph`](https://github.com/Blogem/msr-graph/tree/928936e/internal/graph) · [`internal/store`](https://github.com/Blogem/msr-graph/tree/928936e/internal/store) · [`internal/sandbox`](https://github.com/Blogem/msr-graph/tree/928936e/internal/sandbox) · [`internal/checkpoint`](https://github.com/Blogem/msr-graph/tree/928936e/internal/checkpoint) · [`internal/testutil`](https://github.com/Blogem/msr-graph/tree/928936e/internal/testutil)
+
 | Module | Bucket | Note |
 |---|---|---|
 | `internal/sandbox/` | 🟢 | Warm single-use hardened Docker pool. Only branding constants (`MSR_SANDBOX_IMAGE`, `msr-sandbox-` prefix, `msr.sandbox` label). Lift as-is. |
 | `internal/testutil/` | 🟢 | GraphDB reachability probe + prod-repo guard; repo names env-driven (`graphdb.go:37-43`). See §4.1. |
 | `internal/graph/` | 🟡 | RDF client: core-read restriction, `FROM`-injection rejection, SHACL report parsing (all domain-clean); the `urn:msr:` graph IRIs are the only coupling. |
-| `internal/store/` | 🟡 | SQLite value store. `Open`/`Init`/`Upsert` control flow is generic; the `measurement_value` schema + SQLite pragmas are domain+engine-coupled. **The DuckDB seam.** |
+| `internal/store/` | 🟡 | Embedded value store (SQLite). `Open`/`Init`/`Upsert` control flow is generic; the `measurement_value` schema + SQLite pragmas are domain+engine-coupled. **This is the structured-store connector seam — see §3.8.** |
 | `internal/checkpoint/` | 🟡 | Whole-store checkpoint/restore. Export/import/rollback/label flow generic; `VACUUM INTO`, the `owl:versionInfo` query, and `msr.db` filename are the coupling. |
 
 **`internal/graph/` — Seam:** the hardcoded named-graph IRIs (`graph.go:32-47`:
@@ -85,17 +111,23 @@ the `MeasurementRow` struct (`upsert.go:11-26`), and the column-bound `upsertSQL
 plus the SQLite driver + DSN pragmas (`store.go:30,38-41`). **Entanglement:** `Upsert` binds
 `MeasurementRow`'s fields positionally against the hardcoded SQL, so the row type, DDL, and
 INSERT column list must all agree — the generic transaction loop can't be reused without
-editing the schema. **Un-entangle:** split into `store/core` (generic `Open`, `Init(ddl string)`,
-`Upsert(table string, cols []string, rows [][]any)` binding by slice) + `store/measurement`
-(the DDL + `MeasurementRow`→`[]any` mapping); swap driver/DSN behind `Open` for DuckDB.
+editing the schema. **Un-entangle:** don't just swap the driver — introduce a **`StructuredStore`
+connector interface** (see §3.8) that abstracts *read* (run a query, return rows) and *snapshot*
+(for checkpoints) over whatever technology holds the values. The current SQLite code becomes the
+`embedded-file` connector; new deployments register connectors for Postgres, Databricks, Athena,
+InfluxDB, etc. The write path (`Init`/`Upsert`) is only needed by *embedded* connectors the
+pipeline populates itself; external/federated stores (a warehouse, a time-series DB) are
+read-only sources the connector queries but never writes.
 
 **`internal/checkpoint/` — Seam:** `sqliteFileName="msr.db"` (`checkpoint.go:36`), the
 `versionQuery` embedding `GRAPH <urn:msr:ontology>` + `owl:versionInfo` (`checkpoint.go:44-47`),
 and the SQLite-only `VACUUM INTO` snapshot (`checkpoint.go:332`). **Un-entangle:** inject a
 `VersionReader` func and a `Snapshotter` interface (`Snapshot(dst)`, `Swap(dst)`) into
-`NewEngine`; the DuckDB build supplies its own `Snapshotter`.
+`NewEngine`; an embedded-connector build (e.g. DuckDB) supplies its own `Snapshotter`.
 
 ## 1.2 Self-evolution engine — the crown jewel (Go)
+
+Entry points: [`internal/proposal`](https://github.com/Blogem/msr-graph/tree/928936e/internal/proposal) · [`internal/agent`](https://github.com/Blogem/msr-graph/tree/928936e/internal/agent)
 
 Verdict: **cleanly extractable.** Every executable path is domain-agnostic mechanism; MSR
 content is quarantined in (a) model-facing description/prompt strings and (b)
@@ -136,6 +168,8 @@ namespace/predicate literals, never in control flow.
 
 ## 1.3 Web layer (Go + SvelteKit)
 
+Entry points: [`cmd/server`](https://github.com/Blogem/msr-graph/tree/928936e/cmd/server) · [`cmd/chatcli`](https://github.com/Blogem/msr-graph/tree/928936e/cmd/chatcli) · [`webapp/src`](https://github.com/Blogem/msr-graph/tree/928936e/webapp/src)
+
 Verdict: highly reusable; the review-diff UI is **data-driven, not MSR-coupled**.
 
 | Module | Bucket | Note |
@@ -156,6 +190,8 @@ route would fall through to the SPA catch-all instead of net/http's built-in `40
 fallback, empty pattern + 405 → forward the 405. Documented at `handler.go:16-33`.
 
 ## 1.4 Extraction pipeline (Python)
+
+Entry point: [`extraction/src/msr_extraction`](https://github.com/Blogem/msr-graph/tree/928936e/extraction/src/msr_extraction)
 
 Generic skeleton: **acquire → normalize OCR → segment (offsets) → build EntityRuler from a
 graph read → layered precision-biased linker (exact→resolver→fuzzy→LLM→novel) → schema-
@@ -185,6 +221,8 @@ Domain-clean (🟢, lift as-is): `sparql.py`, `disambiguation.py`, `disambig_cac
 
 ## 1.5 Mining / triage / proposal loop (Python)
 
+Entry point: [`extraction/src/msr_extraction`](https://github.com/Blogem/msr-graph/tree/928936e/extraction/src/msr_extraction) (the `novelty` / `triage` / `proposals` / `mine_*` / `safety_*` modules)
+
 Verdict: **cleanly generic in mechanism, domain content isolated at nameable seams.** DF is a
 coarse *cost bound*, never a novelty rank; thresholds are all env-config. The four kinds
 (property/class/instance/relation + reject) are a domain-neutral ontology-evolution taxonomy
@@ -204,6 +242,8 @@ coarse *cost bound*, never a novelty rank; thresholds are all env-config. The fo
 
 ## 1.6 Domain ingest — NIST loader + ontology (mostly 🔴, generic skeleton inside)
 
+Entry points: [`internal/nist`](https://github.com/Blogem/msr-graph/tree/928936e/internal/nist) · [`cmd/loader`](https://github.com/Blogem/msr-graph/tree/928936e/cmd/loader) · [`ontology`](https://github.com/Blogem/msr-graph/tree/928936e/ontology)
+
 **Generic "structured loader" skeleton (chemistry removed):** `cmd/loader/main.go` dispatch +
 `initdb.go` + `seed.go`'s PUT-loop/staging idempotency + `nist.go`'s runX orchestration shape
 (load allowlist → transform → open/init SQL → idempotent Upsert → additive catalog
@@ -220,12 +260,20 @@ manifest), (2) the scope filter (`filter.go` `IsFluoride`), (3) the canonicalize
 `cmd/loader/nist.go:209-325`).
 
 Pure domain (🔴): `internal/nist/{canonical,filter,equationform,measurement,nist}.go`,
-`ontology/{msr.ttl,vocab.ttl}`, and specs `salt-canonicalization`, `salt-formula-normalization`,
-`salt-role-reactor-edges`, `nist-structured-loading`.
+`ontology/{msr.ttl,vocab.ttl}`, and specs
+[salt-canonicalization](https://github.com/Blogem/msr-graph/blob/928936e/openspec/specs/salt-canonicalization/spec.md),
+[salt-formula-normalization](https://github.com/Blogem/msr-graph/blob/928936e/openspec/specs/salt-formula-normalization/spec.md),
+[salt-role-reactor-edges](https://github.com/Blogem/msr-graph/blob/928936e/openspec/specs/salt-role-reactor-edges/spec.md),
+[nist-structured-loading](https://github.com/Blogem/msr-graph/blob/928936e/openspec/specs/nist-structured-loading/spec.md).
 
-Generic-mechanism specs (🟢/🟡): `seed-graph-loading` (graph-replace PUT + staging idempotency),
-`kg-schema-prompt` (deterministic serialization + version-gated rebuild), `qudt-unit-allowlist`
-& `unit-qudt-mapping` (vendored allowlist, validate-before-write, values-only).
+Generic-mechanism specs (🟢/🟡):
+[seed-graph-loading](https://github.com/Blogem/msr-graph/blob/928936e/openspec/specs/seed-graph-loading/spec.md)
+(graph-replace PUT + staging idempotency),
+[kg-schema-prompt](https://github.com/Blogem/msr-graph/blob/928936e/openspec/specs/kg-schema-prompt/spec.md)
+(deterministic serialization + version-gated rebuild),
+[qudt-unit-allowlist](https://github.com/Blogem/msr-graph/blob/928936e/openspec/specs/qudt-unit-allowlist/spec.md)
+& [unit-qudt-mapping](https://github.com/Blogem/msr-graph/blob/928936e/openspec/specs/unit-qudt-mapping/spec.md)
+(vendored allowlist, validate-before-write, values-only).
 
 ---
 
@@ -234,7 +282,7 @@ Generic-mechanism specs (🟢/🟡): `seed-graph-loading` (graph-replace PUT + s
 ## Reusable building blocks (the platform to keep)
 
 - **RDF dataset client** with named-graph staging isolation + `FROM`-injection rejection (`internal/graph`).
-- **SQL value store** contract: row keyed by `locator`, tagged by `source`+`doc_id`, numbers kept out of RDF (`internal/store`) — schema becomes domain-defined; engine becomes DuckDB.
+- **Structured value store** contract: row keyed by `locator`, tagged by `source`+`doc_id`, numbers kept out of RDF (`internal/store`) — schema becomes domain-defined; the engine becomes a pluggable connector (embedded SQLite/DuckDB, or federated Postgres/warehouse/time-series), see §3.8.
 - **Warm sandbox pool** (`internal/sandbox`) — lift as-is.
 - **Analysis agent runtime** (`internal/agent`) — loop, tool interface, SQL guard, LLM client, events, provenance-by-var-name — all generic; descriptions/prompt injected.
 - **Self-evolution engine** (`internal/proposal`) — lifecycle state machine, typed router, version bump — config-parameterized.
@@ -250,25 +298,48 @@ Generic-mechanism specs (🟢/🟡): `seed-graph-loading` (graph-replace PUT + s
 2. **Entity canonicalizer** — Python `normalize_span(surface, known) -> IRI|None` (replaces `formula.py`) + the candidate-finder regex in the linker; Go canonicalizer + IRI minter (replaces `canonical.go`/`iri.go` locator half).
 3. **Structured-source parser + scope filter + triple emitter** — replaces `internal/nist` core + `cmd/loader/nist.go` emitter.
 4. **Seed-source queries** — the SPARQL query set in `graph_reader.py` deciding what the EntityRuler seeds from.
-5. **Relation schema** — kind names + per-kind field spec + prompt fragment + validator + closed-set key (replaces the hardcoded kinds in `relations.py`/`edges.py`).
-6. **Grounding / units allowlist** — the `qudt-units.json`-style file (already a path-loaded plug-in) + the surface-form→property table.
-7. **Value-store payload columns** — the `measurement_value` schema becomes domain-defined columns (or a JSON/EAV payload).
+5. **Relation schema** — *the declarative model of the typed edges the LLM extracts between
+   entities.* A "relation" is an edge like *salt→property→value* or *reactor→moderatedBy→
+   material*; relations are how the graph gains structure beyond isolated nodes. Today each
+   relation *kind* is hardcoded in three places at once — the extraction prompt
+   (`relations.py:435-483`), the `validate_relation` dispatch (`relations.py:706+`), and the
+   triple emitter (`edges.py`) — so a new domain must edit all three. The plug-in makes it one
+   declarative object per kind: `{name, field spec, prompt fragment, per-field validator,
+   which closed-set each field resolves against}`. Then a new domain's edges = a config list,
+   not a code+prompt rewrite. This is the **weakest-factored seam today** and the highest-value
+   one to design cleanly, because relations are exactly what differs most between domains.
+6. **Controlled value sets ("allowlists")** — any set of values the domain constrains and
+   validates. MSR's is the `qudt-units.json` unit allowlist (already a path-loaded plug-in) +
+   the surface-form→property table; generalise to "one canonical file per controlled vocabulary,
+   validated at write time (§3.13) and generated into every consumer (§3.9)."
+7. **Structured-store connector(s) + locator scheme** — instead of "value-store columns," a
+   `StructuredStore` connector per technology and a locator convention the graph uses to name
+   *which store* + *the address within it* (see §3.8). The MSR `measurement_value` schema is one
+   embedded connector's payload; other domains point locators at a warehouse, a SQL DB, or a
+   time-series store.
 8. **Governance + graph-name config** — the `urn:msr:` prefix, graph names, and proposal/review CURIEs (one config struct threaded through graph/proposal/checkpoint).
 
-## The ontology contract (what the platform assumes a domain TBox provides)
+## The ontology contract (what the platform needs from *any* domain model)
 
-1. An **entity class** + a reified **constituent/composition** pattern.
-2. A **`PhysicalProperty`-equivalent class** whose individuals each declare `quantityKind` +
-   `canonicalUnit` (`ontology/msr.ttl:40-64`).
-3. A **`PropertyMeasurement`-equivalent class** linking entity×property×unit×equationForm with a
-   `dataLocator` string pointer into the SQL store (`msr.ttl:81-93`).
-4. An optional **equation-form vocabulary** if values are parametric (`msr.ttl:95-111`).
-5. A **SKOS ConceptScheme** of NER-target terms with pref/altLabels (`vocab.ttl`).
-6. A **PROV-O slice** (Entity/Activity/Agent + wasGeneratedBy/wasDerivedFrom) — already
-   domain-agnostic and reusable (`msr.ttl:113-127`).
-7. A **units allowlist JSON** mirroring `properties` + `allowedUnits`.
-8. **`owl:versionInfo`** on the ontology node (`msr.ttl:17`) — the required cache key for the
-   prompt builder.
+The platform does **not** assume physics, chemistry, or "measurements" — those are the MSR
+*instantiation*. What it structurally requires is a small set of **roles** a domain ontology
+must fill. MSR fills them with `PhysicalProperty` / `PropertyMeasurement` / units, but any domain
+supplies its own classes for the same roles.
+
+| Role the platform needs | Why | MSR's instantiation (example only) |
+|---|---|---|
+| **Entities / individuals** the KG is about | the nodes NER links mentions to and the subjects of relations | `MoltenSalt`, `Constituent`, reactors |
+| **A SKOS ConceptScheme** — the domain vocabulary with pref/altLabels | seeds the EntityRuler; the NER target set. *(You confirmed a domain vocabulary is genuinely expected — this role is kept verbatim.)* | `vocab.ttl` (29 INIS concepts) |
+| **A relation model** — the typed edges between entities (the domain's *relation schema*, plug-in point 5) | the graph's structure; what the LLM extracts | measurement / role / reactor / safety edges |
+| **External-value references** — a class/pattern whose individuals carry a **locator** into a connected structured store, plus whatever typing the domain needs to interpret the value | keeps unbounded/numeric data out of RDF and in the right store (§3.8) — the federation boundary | `PropertyMeasurement` + `dataLocator` (+ property, unit, equation-form) |
+| **Controlled value sets** the domain constrains + validates | data quality, enforced via SHACL (§3.13), generated-from-one-source to avoid drift (§3.9) | the QUDT unit allowlist — generalises to *any* declared set of allowed values |
+| **A PROV-O slice** (Entity/Activity/Agent + wasGeneratedBy/wasDerivedFrom) | provenance-everywhere (§3.5) — already domain-agnostic, lift as-is | `msr.ttl:113-127` |
+| **`owl:versionInfo`** on the ontology node | the cache key for the prompt builder (§3.4) | `msr.ttl:17` |
+
+The generalisation from MSR: "property + measurement + unit + equation-form" is just *one* shape
+of **external-value reference + controlled value set**. A different domain might model events with
+timestamps in a time-series store, or documents with embeddings in a vector store, filling the
+same two roles with entirely different classes. The platform only cares about the roles.
 
 ---
 
@@ -338,6 +409,15 @@ whether any provenance event fired this turn (`loop.go:194-202`) — grounding i
 orchestrator, never self-reported by the model. **Reuse:** typed event stream + loop-enforced
 groundedness verdict.
 
+> **Known limitation (do not ship as-is).** `Grounded = anyProvenance` is a coarse OR over the
+> whole turn: a **single** provenance event flips the entire answer to "grounded," even if other
+> sentences are hallucinated or drawn from the model's parametric memory rather than the graph.
+> It is a demo-grade signal, not a guarantee. **Production hardening:** move from turn-level to
+> **claim-level** grounding — attribute each factual/numeric assertion to the specific
+> tool_result that supports it and stamp any unsupported claim as ungrounded; or add a verifier
+> pass asserting every cited number appears verbatim in a tool result. The trace-as-deliverable
+> mechanism is sound and reusable; the *verdict function* is the part to strengthen.
+
 ### 3.6 Named-graph isolation as a query-layer contract
 
 Core reads inject protocol dataset params and reject self-supplied `FROM`/`FROM NAMED`
@@ -355,20 +435,52 @@ each run (no refresh signal). Safe because of §3.3's determinism. **Reuse:** de
 as a pure function of inputs → deterministic outputs, so re-running is idempotent and recovery
 is trivial.
 
-### 3.8 SQLite runtime discipline → DuckDB translation
+### 3.8 Structured-data store — from an embedded file to a connector model
 
-The value store is mounted **read-only** into the sandbox, which breaks several SQLite defaults.
-Each choice, with its DuckDB analog:
+**The generalisation:** the POC uses one embedded SQLite file for all numeric values, but the
+reusable design is *the graph holds a locator, a connector fetches the values*. Production domains
+pull structured data from many technologies — a warehouse (Databricks, BigQuery), a query engine
+over object storage (Athena, Trino), a relational DB (Postgres), a time-series DB (InfluxDB), or an
+embedded file (SQLite/DuckDB) — so the store must be a **pluggable connector**, not a fixed engine.
+"DuckDB instead of SQLite" is just *one more embedded connector*, not the abstraction.
 
-| SQLite choice | Why | DuckDB equivalent |
+**The abstraction — a `StructuredStore` connector interface with two capabilities:**
+- **read** — run a read-only query, return rows. This is what the agent's sandbox scripts and the
+  `sql_query` tool call.
+- **snapshot** *(optional)* — a consistent point-in-time copy for checkpoints. Federated/external
+  stores (a warehouse, a live time-series DB) are **read-only sources you don't own** and often
+  can't snapshot; for those a checkpoint records the **query + a timestamp/version pointer**, not a
+  data copy, and restore re-reads. Only embedded connectors the pipeline populates itself are fully
+  snapshottable.
+
+**The locator is the routing key.** Today `dataLocator` is an opaque string into the one SQLite
+file. Generalise it to name **which store** + **the address within it**, e.g.
+`store://warehouse/schema.table?filter=…` or `sqlite:///data/msr.db#measurement_value/<key>`. A
+**connector registry** resolves scheme → connector. This is precisely "know where to go for data,
+then use the right connector": the graph is the catalog of *where*, the connectors are the *how*.
+
+**Capability differences matter.** Connectors are not interchangeable — some push compute down (a
+warehouse aggregates server-side), others only return rows (the sandbox does the math, the POC's
+model). The interface should advertise capabilities so the agent/planner knows whether to aggregate
+in-store or in the sandbox. Auth, cost, and latency also differ per connector and live in its
+config, not the core.
+
+**The embedded connector's runtime discipline (the POC/SQLite case, and the DuckDB case).** When a
+connector *is* an embedded file mounted read-only into the sandbox, these settings are load-bearing;
+a DuckDB embedded connector must re-derive each from the same *constraint*:
+
+| SQLite choice | Why (the constraint) | DuckDB equivalent |
 |---|---|---|
-| `journal_mode=DELETE`, never WAL (`store.go:33,39`) | WAL's `-wal`/`-shm` sidecars can't be created on a read-only mount → unreadable | Single-file; open the sandbox mount with `ACCESS_MODE=READ_ONLY`; mind DuckDB's own write-time `.wal` |
-| `busy_timeout` on every conn (`:24-25,39-42`) | Avoid "database is locked" under concurrent chat + checkpoint | Single-writer/multi-reader model — serialize writes or use separate RO connections |
+| `journal_mode=DELETE`, never WAL (`store.go:33,39`) | WAL's `-wal`/`-shm` sidecars can't be created on a read-only mount → unreadable | Single-file; open the sandbox mount `ACCESS_MODE=READ_ONLY`; mind DuckDB's write-time `.wal` |
+| `busy_timeout` on every conn (`:24-25,39-42`) | Avoid "database is locked" under concurrent chat + checkpoint | Single-writer/multi-reader — serialise writes or use separate RO connections |
 | Directory-not-file read-only mount | Journal sidecars stay visible to siblings | Mount the directory holding the `.duckdb` file |
-| `VACUUM INTO` on a dedicated RW conn (`checkpoint.go:309-332`), never the `mode=ro` chat conn | Consistent point-in-time snapshot without stopping the server | `EXPORT DATABASE` / `ATTACH`+`COPY FROM DATABASE`, or a checkpointed file copy (no `VACUUM INTO`) |
+| `VACUUM INTO` on a dedicated RW conn (`checkpoint.go:309-332`), never the `mode=ro` chat conn | Consistent snapshot without stopping the server | `EXPORT DATABASE` / `ATTACH`+`COPY FROM DATABASE`, or a checkpointed file copy (no `VACUUM INTO`) |
 
-**Reuse:** re-derive each from the *constraint*, not the SQLite mechanism; keep the "checkpoint
-uses a dedicated RW connection distinct from the RO chat connection" separation regardless of engine.
+**Reuse:** design the `StructuredStore` connector interface (read + optional snapshot +
+capabilities) and the scheme-based locator + registry *first*; make SQLite/DuckDB the embedded
+connector and warehouse/query-engine/time-series the federated read-only connectors. Keep
+"checkpoint uses a dedicated RW connection distinct from the RO read connection" for any embedded
+connector; for federated ones, checkpoint the query pointer, not the data.
 
 ### 3.9 Fail-loud gates + single source of truth (anti-drift)
 
@@ -394,15 +506,41 @@ injection-safe deterministic IRI minting (`iri.go:15-31`) + Graph-Store-Protocol
 edits. **Principles:** make dangerous capabilities structurally unreachable; fix isolation as
 non-negotiable policy; parse with a state machine when guards must survive quoting tricks.
 
-### 3.11 Inference disabled on purpose (a deliberate constraint)
+### 3.11 Inference: a deliberate choice, and how to enable it
 
-Rationale (`docs/ARCHITECTURE.md:354-366`): (1) forward-chaining materializes inferred triples
-outside their premises' named graph → breaks staging isolation; (2) inferred triples carry no
-provenance and silently repair typing mistakes the review loop should surface; (3) low payoff —
-the shallow TBox only needs `rdfs:subClassOf*` property paths. Fixed at repo creation
-(`deploy/graphdb/msr-repo-config.ttl`, `graphdb:ruleset "empty"`). **Reuse:** if the rebuild
-keeps staging isolation + provenance-everywhere + count-based idempotency tests, keep inference
-off and answer hierarchy via property paths — and record *why* so it isn't "fixed" by accident.
+The POC disables inference — but that is a *choice*, and OWL/RDFS reasoning (GraphDB's, or any
+reasoner's) is genuinely powerful: subsumption/classification, consistency checking, and richer
+queries without hand-written property paths. A generic platform should treat inference as a
+**supported mode**, not a permanent constraint. Both branches:
+
+**Why the POC turned it off** (`docs/ARCHITECTURE.md:354-366`): (1) forward-chaining materialises
+inferred triples into the *implicit* graph, not their premises' named graph → **breaks the
+named-graph staging isolation** (§3.6/§1.2), so a pending proposal could spawn statements outside
+its proposal graph; (2) inferred triples carry **no provenance** and silently repair typing
+mistakes the review loop should surface; (3) **low payoff** for a shallow TBox that only needs
+`rdfs:subClassOf*`, answerable by property paths. Fixed at repo creation
+(`deploy/graphdb/msr-repo-config.ttl`, `graphdb:ruleset "empty"`).
+
+**How to build it *with* inference enabled** — address each of the three tensions:
+- **Staging isolation:** don't rely on named-graph membership as the isolation boundary when a
+  reasoner materialises across graphs. Options: (a) isolate proposals in a **separate repository/
+  dataset** (or a reasoning-off overlay) and only merge into the reasoned graph on approval — the
+  cleanest fit for the existing typed-routing apply engine; (b) reason over the **core dataset
+  only** and keep proposals in a non-reasoned staging store; (c) use a store that scopes reasoning
+  per named graph.
+- **Provenance of inferred triples:** enable the reasoner's **explanation / axiom-pinpointing** so
+  each inferred triple can be traced to the asserted triples + rule that produced it, and treat
+  inferred statements as `prov:wasDerivedFrom` their premises. Never let domain/range inference
+  *silently* fix data the review loop should see — surface it as a proposal instead.
+- **Exactness of tests/checkpoints:** make idempotency and count assertions run against the
+  **explicit (asserted) graph** (GraphDB exposes an explicit-only query context), so materialised
+  triples don't perturb counts; checkpoint the asserted triples and re-materialise on restore.
+
+**Reuse guidance:** make inference a **config flag on the graph engine**, defaulting off for the
+staging-isolated / provenance-strict / exact-count posture, but with the three mechanisms above
+available so a deployment that wants classification/consistency-checking can opt in. Note that
+some engines fix the ruleset at repo creation (GraphDB does), so decide per deployment and
+provision accordingly — starting reasoned is harder to walk back than starting unreasoned.
 
 ### 3.12 Build/orchestration surface & secrets hygiene
 
@@ -416,6 +554,39 @@ python -m pytest`. Secrets/licenses gitignored with an explicit `!` allowlist fo
 empty default. **Reuse:** Make-as-facade; preflight required secrets and fail fast; source all
 keys from env.
 
+### 3.13 Constraint validation as a first-class, portable trust gate (SHACL)
+
+Alongside provenance (§3.5), **SHACL is a trust pillar** (see the trust-pillars note at the top):
+it is what stops the self-evolution loop and the LLM extractors from writing malformed or
+out-of-vocabulary data into the graph. In the POC it runs as a **commit-time gate** — GraphDB's
+`ShaclSail` validates every transaction *including proposal/staging writes*, so a violating bundle
+can't even be staged; the shape catalogue lives in a reserved graph and is regenerated from the
+same source the loader uses (§3.9); `ensure-repo.sh` fails loudly if a pre-SHACL repo is detected;
+and a rejection surfaces as a typed **HTTP 422 with structured `violations`**
+(`cmd/server/apierror.go:34-119`), never an opaque 500.
+
+**Why it needs its own pattern:** the *shapes* are portable, but the *enforcement point* is
+engine-specific. If you leave GraphDB, `ShaclSail`'s automatic commit-time validation leaves with
+it — and losing the gate silently would be a major regression. So the platform must own the
+validation step explicitly rather than delegate it to the store.
+
+**Portability (SHACL without GraphDB).** SHACL is a W3C standard; the shapes are just RDF and port
+verbatim. Only the *where/when* changes:
+- **Enforce at the application write boundary.** Wrap every graph write in a validate-then-commit
+  step using a SHACL library — `pySHACL` (Python), Apache Jena / `rdf4j` SHACL, TopBraid SHACL API
+  (JVM), or a JS engine (`shacl-engine`/Zazuko) — and reject on violation, reproducing the 422
+  contract. This makes the gate engine-independent (works over Neptune, Blazegraph, Oxigraph, a
+  plain triple file, etc.).
+- **Keep shapes generated-from-one-source** (§3.9) so controlled-value-set constraints can't drift
+  from what the loader/validator enforce.
+- **Validate proposal bundles before staging**, exactly as the sail does today, so the "a violating
+  bundle can't be staged" invariant survives the engine swap.
+
+**Reuse:** treat "validate against the shape catalogue, reject with structured violations" as a
+core platform service with a **pluggable validator backend** (sail-integrated where available,
+library-at-the-write-boundary otherwise). It pairs with provenance as the two non-negotiable trust
+gates.
+
 ---
 
 # Part 4 — Suggested rebuild sequence
@@ -423,11 +594,14 @@ keys from env.
 A pragmatic order that front-loads the generic core and defers domain choices:
 
 1. **Config spine first** — `GraphConfig` (prefix + graph names), `GovernanceVocab`, and the
-   value-store schema abstraction. These unlock everything downstream (§1.1–1.2 seams).
+   structured-store connector abstraction (§3.8). These unlock everything downstream (§1.1–1.2 seams).
 2. **Generic platform core** — graph client, sandbox pool, agent runtime (with injected
    descriptions/prompt), proposal engine (config-driven routing), checkpoints (Snapshotter
    interface), server + UI. Lift with the non-functional patterns baked in (§3).
-3. **DuckDB value store** — implement the `store/core` split + `Snapshotter` per §3.8.
+3. **Structured-store connectors** — implement the `StructuredStore` interface (read + optional
+   snapshot + capabilities) + the scheme-based locator registry (§3.8); ship the embedded
+   (SQLite/DuckDB) connector first, add federated ones (Postgres, warehouse, time-series) as the
+   domain needs them.
 4. **Domain plug-in interfaces** — define the seams as interfaces (entity canonicalizer, source
    parser, seed-source queries, `RelationSchema`, grounding allowlist).
 5. **First domain instance** — supply the ontology contract + the plug-in implementations.
