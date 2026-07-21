@@ -255,21 +255,18 @@ Run it once as a migration after upgrading to this model (checkpoint first —
 path is restoring that checkpoint):
 
 ```bash
-docker compose run --rm extraction mine backfill-observations
+docker compose run --rm extraction backfill-observations
 ```
 
-**Status note:** as of this writing the backfill (`proposal-observation-provenance` tasks
-4.x) has not yet landed in `extraction/src/msr_extraction/cli.py` — the observation model,
-writer, and read-time-aggregate API (tasks 1–3, 5) are implemented and merged, but no
-`backfill-observations` subcommand exists in the CLI parser yet. `mine backfill-observations`
-above is the **planned name from `openspec/changes/proposal-observation-provenance/tasks.md`
-(4.4)** and `design.md`'s Migration Plan step 4 ("a `mine`/`safety` CLI subcommand, no
-triage"), not a confirmed, shipped command — treat it as provisional until task 4.4 lands
-and update this snippet to match the real `_build_parser()` wiring at that point. There is
-no Makefile wrapper for it yet either way (it's a one-shot migration, not a routine
-pipeline stage); once it exists, invoke the extraction container's CLI subcommand directly
-as shown above. It is designed to be safe to re-run: a second run over the same corpora
-should leave triple counts stable.
+`backfill-observations` is a **top-level** `msr-extraction` subcommand (`_HANDLERS` in
+`extraction/src/msr_extraction/cli.py`, alongside `mine`/`extract`/`link` — not nested
+under `mine` or `safety`), implemented by `backfill_observations.run_backfill` and wired
+through the thin `_cmd_backfill_observations` handler. Its idempotency doesn't rely on
+naturally-idempotent SPARQL alone: every observation/tag/removal it writes is stamped with
+a **fixed** run token, `BACKFILL_RUN_TS = "backfill"` (not a wall-clock timestamp), so
+re-running the exact same backfill re-asserts the exact same triples — a set-semantics
+no-op — rather than accumulating a new "run" each time. Re-running therefore leaves triple
+counts stable, which is what "safe to re-run" means concretely here.
 
 ## Worked self-evolution example — the birth of *solubility*
 
