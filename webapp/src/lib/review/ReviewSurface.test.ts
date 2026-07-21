@@ -141,7 +141,18 @@ describe('ReviewSurface - diff render (task 8.3)', () => {
 
 	it('shows a not-found state when the proposal 404s', async () => {
 		listProposalsMock.mockResolvedValue(
-			queueResponse([{ id: 'missing-1', kind: 'property', status: 'pending', term: 'missing', docFrequency: 1 }])
+			queueResponse([
+				{
+					id: 'missing-1',
+					kind: 'property',
+					status: 'pending',
+					term: 'missing',
+					documentFrequency: 1,
+					totalOccurrences: 1,
+					corpusCount: 1,
+					corpora: ['https://w3id.org/msr-kg/data#corpus-chemistry']
+				}
+			])
 		);
 		getProposalMock.mockRejectedValue(new ApiError(404, { error: 'not_found', message: 'proposal not found' }));
 
@@ -299,7 +310,18 @@ describe('ReviewSurface - legible row hierarchy (redesign 5.3)', () => {
 
 	it('humanizes a document frequency of 1 as singular ("seen in 1 document")', async () => {
 		listProposalsMock.mockResolvedValue(
-			queueResponse([{ id: 'single-doc-1', kind: 'property', status: 'pending', term: 'viscosity', docFrequency: 1 }])
+			queueResponse([
+				{
+					id: 'single-doc-1',
+					kind: 'property',
+					status: 'pending',
+					term: 'viscosity',
+					documentFrequency: 1,
+					totalOccurrences: 1,
+					corpusCount: 1,
+					corpora: ['https://w3id.org/msr-kg/data#corpus-chemistry']
+				}
+			])
 		);
 
 		render(ReviewSurface);
@@ -311,7 +333,18 @@ describe('ReviewSurface - legible row hierarchy (redesign 5.3)', () => {
 
 	it('humanizes a large document frequency as plural ("seen in 47 documents")', async () => {
 		listProposalsMock.mockResolvedValue(
-			queueResponse([{ id: 'many-doc-1', kind: 'property', status: 'pending', term: 'conductivity', docFrequency: 47 }])
+			queueResponse([
+				{
+					id: 'many-doc-1',
+					kind: 'property',
+					status: 'pending',
+					term: 'conductivity',
+					documentFrequency: 47,
+					totalOccurrences: 47,
+					corpusCount: 1,
+					corpora: ['https://w3id.org/msr-kg/data#corpus-chemistry']
+				}
+			])
 		);
 
 		render(ReviewSurface);

@@ -10,6 +10,12 @@ import type { ProposalDetail, ProposalSummary } from '../types';
 
 const XSD_STRING = 'http://www.w3.org/2001/XMLSchema#string';
 
+// Corpus IRIs mirror the real ontology's msr:inCorpus resources (design D7
+// migration plan): the deterministic chemistry archive vs. the four safety
+// documents.
+const CORPUS_CHEMISTRY = 'https://w3id.org/msr-kg/data#corpus-chemistry';
+const CORPUS_SAFETY = 'https://w3id.org/msr-kg/data#corpus-safety';
+
 /** `GET /api/proposals/solubility-1` -- a new `msr:solubility` datatype
  * property, not present anywhere in the returned neighborhood (so a diff
  * view has nothing to overlay it against except by "it's new"). */
@@ -50,6 +56,22 @@ export const solubilityProposal: ProposalDetail = {
 			endOffset: 174
 		}
 	],
+	// Single-corpus observation breakdown (chemistry only) -- exercises the
+	// non-empty, single-group rendering path (review-ui spec "Observation
+	// breakdown is shown grouped by corpus").
+	observations: [
+		{
+			corpus: CORPUS_CHEMISTRY,
+			documents: [
+				{
+					documentId: 'ORNL-TM-2316',
+					occurrenceCount: 3,
+					firstObserved: '2026-01-05T00:00:00Z',
+					lastObserved: '2026-01-12T00:00:00Z'
+				}
+			]
+		}
+	],
 	neighborhood: [
 		{ subject: 'msr:Salt', predicate: 'rdf:type', object: 'owl:Class' },
 		{ subject: 'msr:density', predicate: 'rdf:type', object: 'owl:DatatypeProperty' },
@@ -87,6 +109,39 @@ export const graphiteProposal: ProposalDetail = {
 			endOffset: 111
 		}
 	],
+	// Multi-corpus observation breakdown (chemistry + safety) -- exercises
+	// the cross-corpus grouped rendering path (review-ui spec "Observation
+	// breakdown is shown grouped by corpus").
+	observations: [
+		{
+			corpus: CORPUS_CHEMISTRY,
+			documents: [
+				{
+					documentId: 'ORNL-TM-2316',
+					occurrenceCount: 5,
+					firstObserved: '2026-01-03T00:00:00Z',
+					lastObserved: '2026-01-10T00:00:00Z'
+				}
+			]
+		},
+		{
+			corpus: CORPUS_SAFETY,
+			documents: [
+				{
+					documentId: 'IAEA-SAFETY-1',
+					occurrenceCount: 2,
+					firstObserved: '2026-02-01T00:00:00Z',
+					lastObserved: '2026-02-01T00:00:00Z'
+				},
+				{
+					documentId: 'IAEA-SAFETY-2',
+					occurrenceCount: 4,
+					firstObserved: '2026-02-02T00:00:00Z',
+					lastObserved: '2026-02-06T00:00:00Z'
+				}
+			]
+		}
+	],
 	neighborhood: [
 		{ subject: 'msr:Graphite', predicate: 'rdf:type', object: 'owl:Class' },
 		{ subject: 'msr:Coolant', predicate: 'rdf:type', object: 'owl:Class' }
@@ -95,10 +150,49 @@ export const graphiteProposal: ProposalDetail = {
 
 /** `GET /api/proposals[?status=]` queue rows backing the solubility/
  * graphite detail fixtures above, plus one already-approved and one
- * already-rejected row so the status filter has something to filter. */
+ * already-rejected row so the status filter has something to filter.
+ * `graphite-1` is the cross-corpus fixture (`corpusCount: 2`), matching
+ * its multi-corpus `observations` breakdown above (review-ui spec
+ * "Cross-corpus proposals render without duplicate rows"). */
 export const proposalQueue: ProposalSummary[] = [
-	{ id: 'solubility-1', kind: 'property', status: 'pending', term: 'solubility', docFrequency: 3 },
-	{ id: 'graphite-1', kind: 'class', status: 'pending', term: 'graphite', docFrequency: 5 },
-	{ id: 'thorium-1', kind: 'individual', status: 'approved', term: 'thorium', docFrequency: 12 },
-	{ id: 'noise-1', kind: 'property', status: 'rejected', term: 'noise', docFrequency: 1 }
+	{
+		id: 'solubility-1',
+		kind: 'property',
+		status: 'pending',
+		term: 'solubility',
+		documentFrequency: 3,
+		totalOccurrences: 3,
+		corpusCount: 1,
+		corpora: [CORPUS_CHEMISTRY]
+	},
+	{
+		id: 'graphite-1',
+		kind: 'class',
+		status: 'pending',
+		term: 'graphite',
+		documentFrequency: 3,
+		totalOccurrences: 11,
+		corpusCount: 2,
+		corpora: [CORPUS_CHEMISTRY, CORPUS_SAFETY]
+	},
+	{
+		id: 'thorium-1',
+		kind: 'individual',
+		status: 'approved',
+		term: 'thorium',
+		documentFrequency: 12,
+		totalOccurrences: 12,
+		corpusCount: 1,
+		corpora: [CORPUS_CHEMISTRY]
+	},
+	{
+		id: 'noise-1',
+		kind: 'property',
+		status: 'rejected',
+		term: 'noise',
+		documentFrequency: 1,
+		totalOccurrences: 1,
+		corpusCount: 1,
+		corpora: [CORPUS_CHEMISTRY]
+	}
 ];
