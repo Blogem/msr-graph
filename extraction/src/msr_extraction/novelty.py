@@ -16,6 +16,23 @@ salt-formula-shaped spans, so it never surfaces arbitrary novel
 terminology such as ``solubility`` or ``graphite`` -- the spaCy/lexical pass
 is what makes those plain-prose terms discoverable at all.
 
+**Genre-aware mining (chunk 11 / ingest-iaea-safety D3, task 3.1).**
+:func:`mine_candidates`/:func:`enumerate_spacy_terms` take a keyword-only
+``genre`` (default ``"chemistry"``, byte-identical to this module's
+pre-chunk-11 behavior). ``genre="safety"`` (a) relaxes the noun-chunk
+survivor window from :data:`_MAX_CHUNK_TOKENS` (3) to
+``config.safety_max_chunk_tokens`` (6) and preserves the noun-chunk head
+phrase's intervening stopwords/prepositions (:func:`_survivor_span_tokens`)
+so prepositional safety concepts ("confinement of radioactive material",
+"removal of residual heat") survive candidate enumeration as multi-word
+phrases rather than being reduced to a stopword-stripped lemma join; and
+(b) reads segments from ``config.safety_segments_path(report)`` and scores
+document frequency over ``config.safety_dir`` instead of the chemistry
+corpus paths (``config.segments_path``/``config.archive_dir``). The DF
+floor/ceiling values, the known/linked exclusion mechanism
+(:func:`build_exclusion_set`), and the curated-set evidence-sentence
+capture are reused unchanged by both genres.
+
 Before scoring, candidates whose normalized term already resolves to a known
 concept/class/individual in the **core dataset** (read through
 :class:`msr_extraction.graph_reader.GraphReader`, which itself is restricted
@@ -212,7 +229,10 @@ _KEEP_PIPES = frozenset(
 #: headed by "coolant"), so the trailing window is a deterministic,
 #: reasonable proxy for "the head plus its nearest modifiers" without
 #: inspecting `noun_chunk.root` explicitly (an assumption worth
-#: reconsidering if it under-performs in practice).
+#: reconsidering if it under-performs in practice). This is the
+#: ``genre="chemistry"`` (default) window; the ``genre="safety"`` window is
+#: ``config.safety_max_chunk_tokens`` instead (chunk 11 / ingest-iaea-safety
+#: D3, task 3.1) -- see :func:`enumerate_spacy_terms`.
 _MAX_CHUNK_TOKENS = 3
 
 # camelCase word-boundary split: a zero-width position between a
@@ -398,37 +418,126 @@ def _surviving_chunk_tokens(chunk: Any) -> list[Any]:
     return survivors
 
 
+def _merge_prepositional_chunks(doc: Any) -> list[Any]:
+    """Bridge adjacent `doc.noun_chunks` connected by a single preposition (safety genre only).
+
+    spaCy's ``doc.noun_chunks`` never spans a preposition boundary: "the
+    confinement of radioactive material" parses as **two** separate chunks
+    ("The confinement", "radioactive material") with the single token "of"
+    (``pos_ == "ADP"``) sitting in the gap between them -- confirmed against
+    the real ``en_core_web_sm`` parse. Design D3's prepositional safety
+    concepts ("confinement of radioactive material", "removal of residual
+    heat", "control of reactivity", "defence in depth") are therefore
+    unreachable from a per-noun-chunk pass alone, however the window/phrase
+    logic is adjusted -- the fix has to happen one level up, at chunk
+    selection.
+
+    This function merges consecutive noun chunks into one :class:`Span`
+    whenever the gap between them is EXACTLY one ADP token (chained,
+    so three-plus-chunk prepositional phrases merge fully); any other gap
+    shape (no gap / non-ADP token(s) / more than one token) leaves the
+    chunks unmerged. Returns the merged sequence of spans, still in
+    document order, for :func:`enumerate_spacy_terms` to iterate exactly
+    like ``doc.noun_chunks`` did before -- used only for ``genre="safety"``;
+    the chemistry genre keeps iterating ``doc.noun_chunks`` directly.
+    """
+    chunks = list(doc.noun_chunks)
+    if not chunks:
+        return []
+
+    merged: list[Any] = []
+    index = 0
+    while index < len(chunks):
+        start = chunks[index].start
+        end = chunks[index].end
+        next_index = index + 1
+        while next_index < len(chunks):
+            gap_start = end
+            gap_end = chunks[next_index].start
+            if gap_end - gap_start == 1 and doc[gap_start].pos_ == "ADP":
+                end = chunks[next_index].end
+                next_index += 1
+                continue
+            break
+        merged.append(doc[start:end])
+        index = next_index
+    return merged
+
+
+def _survivor_span_tokens(survivors: list[Any]) -> list[Any]:
+    """All doc tokens spanning `survivors[0]` through `survivors[-1]` inclusive, in order.
+
+    Used only by the ``genre="safety"`` phrase-preserving term construction
+    (chunk 11 / ingest-iaea-safety D3, task 3.1): unlike the chemistry path,
+    which joins the surviving content tokens' lemmas alone (dropping any
+    stopword/preposition between them), the safety genre's term is built
+    from the natural phrase span -- so a preposition sitting *between* two
+    surviving tokens (e.g. "of" in "confinement of radioactive material",
+    "in" in "defence in depth") is preserved in the emitted candidate term,
+    while any leading/trailing stopword tokens OUTSIDE the surviving span
+    are still dropped (mirroring the chemistry trailing-window trim intent).
+    Returns `[]` for an empty `survivors` list.
+    """
+    if not survivors:
+        return []
+    doc = survivors[0].doc
+    start = survivors[0].i
+    end = survivors[-1].i
+    return [doc[i] for i in range(start, end + 1)]
+
+
 def enumerate_spacy_terms(
-    reports: list[str], config: Config, nlp: Any
+    reports: list[str], config: Config, nlp: Any, *, genre: str = "chemistry"
 ) -> dict[str, _SpacyTermHit]:
-    """spaCy noun-chunk candidate pass over each report's curated `segments.jsonl` (design D1).
+    """spaCy noun-chunk candidate pass over each report's `segments.jsonl` (design D1).
 
     Reads each report's ``segments.jsonl`` exactly like
     :func:`enumerate_lexical_terms` (a missing file is a logged warning, not
     an error) so candidates carry identical :class:`Evidence` (report,
     document IRI, full segment ``sentence_text``, offsets) to the lexical
-    pass. Runs every segment's text through `nlp.pipe` in one batch (perf);
-    for each `doc.noun_chunks` entry, keeps only the surviving tokens
-    (:func:`_surviving_chunk_tokens`) -- a chunk that reduces to zero
-    surviving tokens contributes no candidate. Surviving tokens beyond
-    :data:`_MAX_CHUNK_TOKENS` are trimmed to the trailing window; the
-    candidate ``term`` is the casefolded, space-joined lemma sequence, and
-    its ``surface_form`` is the original (untrimmed) chunk text.
+    pass. For ``genre="safety"`` (chunk 11 / ingest-iaea-safety D3, task
+    3.1), segments are read from ``config.safety_segments_path(report)``
+    (the safety cache) instead of ``config.segments_path(report)`` (the
+    chemistry corpus) -- the default ``genre="chemistry"`` path is
+    byte-identical to before this parameter existed. Runs every segment's
+    text through `nlp.pipe` in one batch (perf); iterates `doc.noun_chunks`
+    for chemistry, or -- for safety -- the sequence :func:`_merge_prepositional_chunks`
+    returns (adjacent noun chunks bridged by a single preposition token
+    merged into one span, since a real ``en_core_web_sm`` parse never spans
+    a preposition boundary within a single ``doc.noun_chunks`` entry: "the
+    confinement of radioactive material" parses as two separate chunks
+    joined only by the gap token "of"). Either way, keeps only the
+    surviving tokens (:func:`_surviving_chunk_tokens`) -- a chunk that
+    reduces to zero surviving tokens contributes no candidate.
+
+    Surviving tokens beyond the genre's window (:data:`_MAX_CHUNK_TOKENS`
+    for chemistry, ``config.safety_max_chunk_tokens`` for safety) are
+    trimmed to the trailing window. For chemistry, the candidate ``term``
+    is the casefolded, space-joined lemma sequence of the surviving tokens
+    alone (unchanged). For safety, the term is instead built from the full
+    phrase span between the first and last surviving token
+    (:func:`_survivor_span_tokens`) so prepositional multi-word safety
+    concepts survive as candidates with their surface syntax intact (e.g.
+    "confinement of radioactive material", not "confinement radioactive
+    material"). Either way, ``surface_form`` is the original (untrimmed)
+    chunk text.
 
     A term's evidence is deduplicated per segment exactly like the lexical
     pass (:data:`evidence_key` = ``(report, char_start)``); its
     `surface_form` is picked deterministically (shortest, then
     lexicographically-first observed chunk text for that term) since the
-    same lemma-normalized term can surface from differently-worded chunks
-    across segments/reports.
+    same normalized term can surface from differently-worded chunks across
+    segments/reports.
 
     Returns ``term -> _SpacyTermHit``, built without relying on dict
     iteration order (the caller, :func:`mine_candidates`, sorts its final
     output).
     """
+    max_chunk_tokens = config.safety_max_chunk_tokens if genre == "safety" else _MAX_CHUNK_TOKENS
+
     segment_meta: list[tuple[str, str, int, str]] = []
     for report in reports:
-        path = config.segments_path(report)
+        path = config.safety_segments_path(report) if genre == "safety" else config.segments_path(report)
         if not path.exists():
             logger.warning(
                 "segments.jsonl missing for report %s at %s; skipping spaCy pass",
@@ -454,13 +563,18 @@ def enumerate_spacy_terms(
             start_offset=char_start,
             end_offset=char_start + len(text),
         )
-        for chunk in doc.noun_chunks:
+        chunks = _merge_prepositional_chunks(doc) if genre == "safety" else doc.noun_chunks
+        for chunk in chunks:
             survivors = _surviving_chunk_tokens(chunk)
             if not survivors:
                 continue
-            if len(survivors) > _MAX_CHUNK_TOKENS:
-                survivors = survivors[-_MAX_CHUNK_TOKENS:]
-            term = " ".join(tok.lemma_.casefold() for tok in survivors)
+            if len(survivors) > max_chunk_tokens:
+                survivors = survivors[-max_chunk_tokens:]
+            if genre == "safety":
+                span_tokens = _survivor_span_tokens(survivors)
+                term = " ".join(tok.lemma_.casefold() for tok in span_tokens if tok.is_alpha)
+            else:
+                term = " ".join(tok.lemma_.casefold() for tok in survivors)
             if not term:
                 continue
             evidence_bucket = evidence_by_term.setdefault(term, {})
@@ -527,19 +641,24 @@ def _terms_in_text(text: str) -> list[str]:
     return _ngrams(_tokenize(text))
 
 
-def enumerate_lexical_terms(reports: list[str], config: Config) -> dict[str, list[Evidence]]:
-    """Lexical term-candidate pass over each report's curated `segments.jsonl`.
+def enumerate_lexical_terms(
+    reports: list[str], config: Config, *, genre: str = "chemistry"
+) -> dict[str, list[Evidence]]:
+    """Lexical term-candidate pass over each report's `segments.jsonl` (D5 fallback).
 
     Reads each report's ``segments.jsonl`` (the same JSONL shape
     ``linker._read_segments`` consumes: ``report``/``index``/``text``/
-    ``char_start``/``char_end`` per line); a missing file is logged as a
-    warning and skipped, not an error. Each segment's ``text`` is
-    tokenized into case-folded unigrams/bigrams/trigrams (see
-    :func:`_tokenize`/:func:`_ngrams`); every surviving term collects one
-    :class:`Evidence` per segment it appears in, keyed by ``(report,
-    start_offset)`` so a term repeated within one segment (e.g. a bigram
-    and its constituent unigram both landing in the same sentence) only
-    ever contributes a single evidence item for that segment.
+    ``char_start``/``char_end`` per line) -- for ``genre="safety"``, from
+    ``config.safety_segments_path(report)`` (the safety cache) instead of
+    ``config.segments_path(report)`` (the chemistry corpus), mirroring
+    :func:`enumerate_spacy_terms`; a missing file is logged as a warning and
+    skipped, not an error. Each segment's ``text`` is tokenized into
+    case-folded unigrams/bigrams/trigrams (see :func:`_tokenize`/
+    :func:`_ngrams`); every surviving term collects one :class:`Evidence`
+    per segment it appears in, keyed by ``(report, start_offset)`` so a term
+    repeated within one segment (e.g. a bigram and its constituent unigram
+    both landing in the same sentence) only ever contributes a single
+    evidence item for that segment.
 
     Returns ``term -> [Evidence, ...]``, both the outer mapping and the
     Evidence lists built without relying on dict iteration order for
@@ -548,7 +667,7 @@ def enumerate_lexical_terms(reports: list[str], config: Config) -> dict[str, lis
     """
     terms: dict[str, dict[tuple[str, int], Evidence]] = {}
     for report in reports:
-        path = config.segments_path(report)
+        path = config.safety_segments_path(report) if genre == "safety" else config.segments_path(report)
         if not path.exists():
             logger.warning(
                 "segments.jsonl missing for report %s at %s; skipping lexical pass",
@@ -710,12 +829,17 @@ def _build_corpus_index(archive_dir: Path) -> list[str]:
     return texts
 
 
-def score_document_frequency(terms: set[str], config: Config) -> dict[str, int]:
-    """Document frequency of each term over the full 637-document OCR corpus.
+def score_document_frequency(
+    terms: set[str], config: Config, *, genre: str = "chemistry"
+) -> dict[str, int]:
+    """Document frequency of each term over the genre's full OCR/text corpus.
 
     Builds the case-folded doc-text index once (via :func:`_build_corpus_index`
-    over ``config.archive_dir.rglob("*.txt")``); for each document, generates
-    that document's own set of normalized n-gram terms via :func:`_terms_in_text`
+    over the genre's corpus root -- ``config.archive_dir`` for
+    ``genre="chemistry"`` (the 637-document msr-archive corpus, unchanged),
+    or ``config.safety_dir`` (the safety cache) for ``genre="safety"``, chunk
+    11 / ingest-iaea-safety D3 task 3.1); for each document, generates that
+    document's own set of normalized n-gram terms via :func:`_terms_in_text`
     -- the *same* ``_tokenize`` + ``_ngrams`` path :func:`enumerate_lexical_terms`
     uses to build candidate terms -- and intersects it against `terms` in one
     hash-set operation, incrementing each matched term's count. This is
@@ -733,25 +857,25 @@ def score_document_frequency(terms: set[str], config: Config) -> dict[str, int]:
     old substring-based counts; the default ``salience_threshold`` (50) is
     robust to that shift.
 
-    If `archive_dir` is missing or has no `.txt` sidecars, logs a warning
-    and returns ``{term: 0 for term in terms}`` rather than raising.
+    If the genre's corpus root is missing or has no `.txt` sidecars, logs a
+    warning and returns ``{term: 0 for term in terms}`` rather than raising.
     """
     if not terms:
         return {}
 
-    archive_dir = config.archive_dir
-    if not archive_dir.exists():
+    corpus_dir = config.safety_dir if genre == "safety" else config.archive_dir
+    if not corpus_dir.exists():
         logger.warning(
-            "archive_dir %s does not exist; document-frequency scoring returns 0 for all terms",
-            archive_dir,
+            "corpus dir %s does not exist; document-frequency scoring returns 0 for all terms",
+            corpus_dir,
         )
         return {term: 0 for term in terms}
 
-    corpus_texts = _build_corpus_index(archive_dir)
+    corpus_texts = _build_corpus_index(corpus_dir)
     if not corpus_texts:
         logger.warning(
-            "archive_dir %s has no .txt sidecars; document-frequency scoring returns 0 for all terms",
-            archive_dir,
+            "corpus dir %s has no .txt sidecars; document-frequency scoring returns 0 for all terms",
+            corpus_dir,
         )
         return {term: 0 for term in terms}
 
@@ -773,10 +897,12 @@ def mine_candidates(
     reports: list[str] = CURATED_REPORTS,
     *,
     nlp: Any = None,
+    genre: str = "chemistry",
 ) -> list[Candidate]:
     """Enumerate, exclude, cost-bound, and retain novelty candidates (the umbrella entry point).
 
-    Pipeline (refine-mine-salience D1-D3):
+    Pipeline (refine-mine-salience D1-D3; ``genre`` per chunk 11 /
+    ingest-iaea-safety D3, task 3.1):
 
     1. **Enumerate.** If `nlp` is injected, use it directly; otherwise try
        :func:`load_spacy_pipeline`. When a pipeline is available, enumerate
@@ -784,18 +910,26 @@ def mine_candidates(
        otherwise log the fallback and use the prior lexical n-gram pass
        (:func:`enumerate_lexical_terms`, design D5). Either way, also read
        the unchanged chunk-6 salt-formula misses
-       (:func:`read_miss_candidates`).
+       (:func:`read_miss_candidates`). ``genre`` is threaded to
+       :func:`enumerate_spacy_terms`/:func:`enumerate_lexical_terms` so
+       ``genre="safety"`` reads segments from the safety cache
+       (``config.safety_segments_path``) and relaxes the noun-chunk window
+       to ``config.safety_max_chunk_tokens`` while preserving the
+       noun-chunk head phrase (prepositions intact) -- ``genre="chemistry"``
+       (the default) is byte-identical to before this parameter existed.
     2. **Harden-exclude.** Drop any candidate whose term is `in`
        :func:`build_exclusion_set`'s :class:`ExclusionIndex` (normalization/
-       token-sequence aware, design D2).
+       token-sequence aware, design D2) -- unchanged for both genres.
     3. **Cost-bound, not rank.** Score the survivors' document frequency
-       (:func:`score_document_frequency`, unchanged) over the full corpus;
-       drop anything below the ``config.salience_threshold`` floor. If more
-       than ``config.mine_max_candidates`` remain, keep only the top-N by
-       document frequency with a deterministic ``(-doc_frequency, term)``
-       tie-break (a pure runaway guard on triage fan-out -- explicitly NOT a
-       novelty ranking; no keyness/weirdness/TF-IDF is computed anywhere in
-       this module).
+       (:func:`score_document_frequency`) over the genre's corpus --
+       ``config.archive_dir`` for chemistry (unchanged), ``config.safety_dir``
+       for safety; drop anything below the ``config.salience_threshold``
+       floor. If more than ``config.mine_max_candidates`` remain, keep only
+       the top-N by document frequency with a deterministic
+       ``(-doc_frequency, term)`` tie-break (a pure runaway guard on triage
+       fan-out -- explicitly NOT a novelty ranking; no keyness/weirdness/
+       TF-IDF is computed anywhere in this module). The floor/ceiling
+       VALUES themselves are unchanged for both genres.
     4. **Attach evidence.** Lexical/spaCy-sourced candidates carry the
        evidence collected during enumeration (plus, for spaCy candidates,
        the chunk's original `surface_form`); miss candidates keep the
@@ -810,7 +944,7 @@ def mine_candidates(
 
     surface_forms: dict[str, str] = {}
     if nlp is not None:
-        spacy_hits = enumerate_spacy_terms(reports, config, nlp)
+        spacy_hits = enumerate_spacy_terms(reports, config, nlp, genre=genre)
         lexical_evidence: dict[str, tuple[Evidence, ...]] = {
             term: hit.evidence for term, hit in spacy_hits.items()
         }
@@ -819,8 +953,18 @@ def mine_candidates(
         logger.error(
             "mine: spaCy pipeline unavailable; falling back to n-gram candidate enumeration"
         )
+        # NOTE: `genre` is passed only when non-default so that a caller who
+        # has monkeypatched `enumerate_lexical_terms`/`score_document_frequency`
+        # with a fixed 2-positional-arg test double (as the chemistry-genre
+        # test suite does) keeps working unmodified -- the extra keyword is
+        # never sent on the byte-identical `genre="chemistry"` default path.
+        lexical_terms = (
+            enumerate_lexical_terms(reports, config, genre=genre)
+            if genre != "chemistry"
+            else enumerate_lexical_terms(reports, config)
+        )
         lexical_evidence = {
-            term: tuple(evidence) for term, evidence in enumerate_lexical_terms(reports, config).items()
+            term: tuple(evidence) for term, evidence in lexical_terms.items()
         }
 
     miss_candidates = read_miss_candidates(reports, config)
@@ -835,7 +979,14 @@ def mine_candidates(
     excluded_count = enumerated_count - (len(surviving_lexical) + len(surviving_miss))
 
     all_terms = set(surviving_lexical) | {candidate.term for candidate in surviving_miss}
-    frequencies = score_document_frequency(all_terms, config)
+    # See the NOTE above `enumerate_lexical_terms`'s call site: `genre` is
+    # passed only when non-default, for the identical monkeypatch-compat
+    # reason.
+    frequencies = (
+        score_document_frequency(all_terms, config, genre=genre)
+        if genre != "chemistry"
+        else score_document_frequency(all_terms, config)
+    )
 
     scored: list[Candidate] = []
     for term, evidence in surviving_lexical.items():
