@@ -24,3 +24,13 @@ backups/*
 # ...but keep the backup/restore scripts under version control
 !backups/backup.sh
 !backups/restore.sh
+
+# Frontend deps and build output (embedded via go:embed); keep the tracked
+# placeholder so `//go:embed all:build` in webapp/embed.go has something to
+# embed before the real frontend build runs. The generic `build/` pattern
+# above already matches webapp/build/, so it must be explicitly re-included
+# before its contents can be selectively re-included again.
+/webapp/node_modules/
+!/webapp/build/
+/webapp/build/*
+!/webapp/build/index.html

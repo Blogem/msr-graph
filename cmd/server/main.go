@@ -1,14 +1,15 @@
 // Command server runs the msr-graph HTTP API. It wires the grounded
 // analysis agent (GraphDB-backed sparql_query, read-only-SQLite-backed
 // sql_query, sandbox-pool-backed run_python) to the stateless POST
-// /api/chat SSE endpoint, and the proposal review + checkpoint APIs to
-// the proposal and checkpoint engines; the embedded frontend is added by
-// a later task.
+// /api/chat SSE endpoint, the proposal review + checkpoint APIs to the
+// proposal and checkpoint engines, and the embedded SvelteKit frontend
+// (openspec/changes/web-frontend) to the static/SPA-fallback handler.
 package main
 
 import (
 	"context"
 	"database/sql"
+	"io/fs"
 	"log"
 	"net/http"
 	"os"
@@ -20,6 +21,7 @@ import (
 	"github.com/blogem/msr-graph/internal/graph"
 	"github.com/blogem/msr-graph/internal/proposal"
 	"github.com/blogem/msr-graph/internal/sandbox"
+	"github.com/blogem/msr-graph/webapp"
 )
 
 func main() {
@@ -89,7 +91,17 @@ func main() {
 	propEngine := proposal.NewEngine(gc)
 	ckptEngine := checkpoint.NewEngine(gc, cfg.dbPath, cfg.checkpointDir)
 
-	mux := newMux(newChatHandler(ag, prompts), gc, propEngine, ckptEngine)
+	// webapp.Assets keeps the "build/" prefix on every embedded path (Go's
+	// //go:embed preserves the directory it's declared on); fs.Sub roots
+	// the handler at the build output directory itself so asset paths
+	// (e.g. "index.html", "_app/...") line up with URL paths (design D1).
+	buildFS, err := fs.Sub(webapp.Assets, "build")
+	if err != nil {
+		log.Fatalf("server: sub embedded frontend build dir: %v", err)
+	}
+	static := newStaticHandler(buildFS)
+
+	mux := newMux(newChatHandler(ag, prompts), gc, propEngine, ckptEngine, static)
 
 	log.Printf("server listening on %s", cfg.addr)
 	if err := http.ListenAndServe(cfg.addr, mux); err != nil {

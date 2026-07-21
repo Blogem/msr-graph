@@ -13,6 +13,21 @@
 # Run:    docker run --rm msr-graph:latest                       # server
 #         docker run --rm msr-graph:latest /app/loader seed ...  # loader
 
+# ---- frontend ------------------------------------------------------------
+# Builds the SvelteKit static assets that cmd/server embeds via
+# `//go:embed all:build` (webapp/embed.go). Must run before the Go build
+# stage below so the embedded directory has real content at compile time
+# (design.md D1, "Embed requires build-before-compile").
+FROM node:22 AS frontend
+
+WORKDIR /webapp
+
+COPY webapp/package.json webapp/package-lock.json ./
+RUN npm ci
+
+COPY webapp/ ./
+RUN npm run build
+
 # ---- builder -----------------------------------------------------------
 FROM golang:1.26 AS builder
 
@@ -24,6 +39,11 @@ COPY go.mod go.sum ./
 RUN go mod download
 
 COPY . .
+
+# Overlay the real frontend build on top of the committed placeholder
+# (webapp/build/index.html) brought in by `COPY . .` above, so
+# `//go:embed all:build` picks up the actual built assets.
+COPY --from=frontend /webapp/build ./webapp/build
 
 RUN CGO_ENABLED=0 go build -o /out/server ./cmd/server
 RUN CGO_ENABLED=0 go build -o /out/loader ./cmd/loader

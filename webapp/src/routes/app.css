@@ -1,0 +1,50 @@
+/* Minimal hand-rolled global styling (design D6: no UI framework). */
+
+:root {
+	color-scheme: light dark;
+	font-family:
+		system-ui,
+		-apple-system,
+		'Segoe UI',
+		sans-serif;
+}
+
+body {
+	margin: 0;
+}
+
+.app-shell {
+	display: flex;
+	flex-direction: column;
+	min-height: 100vh;
+}
+
+nav[data-testid='app-nav'] {
+	border-bottom: 1px solid #ccc;
+	padding: 0.5rem 1rem;
+}
+
+nav[data-testid='app-nav'] ul {
+	display: flex;
+	gap: 1rem;
+	list-style: none;
+	margin: 0;
+	padding: 0;
+}
+
+nav[data-testid='app-nav'] a {
+	text-decoration: none;
+	color: inherit;
+	padding: 0.25rem 0.5rem;
+	border-radius: 0.25rem;
+}
+
+nav[data-testid='app-nav'] a[aria-current='page'] {
+	font-weight: 600;
+	background: rgba(0, 0, 0, 0.08);
+}
+
+main[data-testid='app-main'] {
+	flex: 1;
+	padding: 1rem;
+}
