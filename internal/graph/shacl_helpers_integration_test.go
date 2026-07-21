@@ -77,9 +77,21 @@ func insertData(t *testing.T, client *graph.Client, triples string) error {
 // unique subject means a failed cleanup cannot corrupt a later test).
 func deleteData(t *testing.T, client *graph.Client, triples string) {
 	t.Helper()
-	update := shaclPrefixes + fmt.Sprintf("DELETE DATA { GRAPH <%s> {\n%s\n} }", graph.Data, triples)
+	deleteFromGraph(t, client, graph.Data, triples)
+}
+
+// deleteFromGraph is the reusable, any-named-graph counterpart to deleteData:
+// it runs a DELETE DATA against the given graph IRI with the shared
+// SHACL-fixture prefixes in scope, for tests that write fixture triples
+// somewhere other than urn:msr:data (e.g. urn:msr:staging probes). Intended
+// to be registered via t.Cleanup so every integration test that writes to a
+// shared, persistent live GraphDB instance removes exactly what it wrote.
+// Best-effort like deleteData: a cleanup failure is logged, not fatal.
+func deleteFromGraph(t *testing.T, client *graph.Client, iri graph.GraphIRI, triples string) {
+	t.Helper()
+	update := shaclPrefixes + fmt.Sprintf("DELETE DATA { GRAPH <%s> {\n%s\n} }", iri, triples)
 	if err := client.Update(context.Background(), update); err != nil {
-		t.Logf("cleanup: deleting SHACL fixture triples: %v", err)
+		t.Logf("cleanup: deleting fixture triples from %s: %v", iri, err)
 	}
 }
 

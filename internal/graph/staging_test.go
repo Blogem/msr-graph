@@ -26,10 +26,15 @@ func TestStagingExcludedFromCoreReads(t *testing.T) {
 	const predicate = "urn:msr:test:predicate"
 	const object = "sentinel-value"
 
-	update := fmt.Sprintf(`INSERT DATA { GRAPH <urn:msr:staging> { <%s> <%s> "%s" . } }`, subject, predicate, object)
+	triples := fmt.Sprintf("<%s> <%s> \"%s\" .\n", subject, predicate, object)
+	update := fmt.Sprintf(`INSERT DATA { GRAPH <urn:msr:staging> {%s} }`, triples)
 	if err := client.Update(ctx, update); err != nil {
 		t.Fatalf("inserting staging probe triple: %v", err)
 	}
+	// Remove the probe triple after the test so urn:msr:staging does not
+	// accumulate timestamp-suffixed fixture subjects indefinitely across
+	// repeated runs against the shared, persistent live GraphDB instance.
+	t.Cleanup(func() { deleteFromGraph(t, client, graph.Staging, triples) })
 
 	query := fmt.Sprintf(`SELECT ?o WHERE { <%s> <%s> ?o }`, subject, predicate)
 

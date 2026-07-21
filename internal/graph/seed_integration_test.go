@@ -129,10 +129,15 @@ func TestSeedLoadIsIdempotent(t *testing.T) {
 
 	stagingSubject := fmt.Sprintf("urn:msr:test:idempotency-probe-%d", time.Now().UnixNano())
 	const stagingPredicate = "urn:msr:test:predicate"
-	insertProbe := fmt.Sprintf(`INSERT DATA { GRAPH <urn:msr:staging> { <%s> <%s> "still-here" . } }`, stagingSubject, stagingPredicate)
+	stagingTriples := fmt.Sprintf("<%s> <%s> \"still-here\" .\n", stagingSubject, stagingPredicate)
+	insertProbe := fmt.Sprintf(`INSERT DATA { GRAPH <urn:msr:staging> {%s} }`, stagingTriples)
 	if err := client.Update(ctx, insertProbe); err != nil {
 		t.Fatalf("inserting pre-existing staging triple: %v", err)
 	}
+	// Remove the probe triple after the test so urn:msr:staging does not
+	// accumulate timestamp-suffixed fixture subjects indefinitely across
+	// repeated runs against the shared, persistent live GraphDB instance.
+	t.Cleanup(func() { deleteFromGraph(t, client, graph.Staging, stagingTriples) })
 
 	runLoaderSeed(t, baseURL)
 
