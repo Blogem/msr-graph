@@ -265,17 +265,33 @@ def reactor_statement_iri(e: ReactorEdge) -> str:
     return f"msrd:edge-{e.report}-{salt_local}-usedIn-reactor-{safe_slug}"
 
 
-def standard_iri(name: str) -> str:
+def standard_iri(name: str) -> str | None:
     """Return the deterministic ``msrd:`` CURIE minted for a named IAEA standard.
 
     Chunk 11 (ingest-iaea-safety D4, task 4.4): opportunistic
     ``rdfs:seeAlso`` alignment mints a local IRI from the standard's name
     exactly as named in the source text (e.g. ``"IAEA SSR-2/1"`` ->
-    ``msrd:IAEA-SSR-2-1``), reusing :func:`slugify` (the same
+    ``msrd:iaea-ssr-2-1``), reusing :func:`slugify` (the same
     space/slash/etc-to-hyphen rule used for the reactor slug) rather than a
     bespoke normalization.
+
+    ``name`` is ``ValidatedServedByProperty.standard_name`` /
+    ``ValidatedAddressesFunction.standard_name`` -- LLM-derived free text
+    with no charset restriction -- and the result is interpolated
+    *unquoted* into an ``INSERT DATA`` CURIE. :func:`slugify` alone does
+    not neutralize SPARQL/Turtle metacharacters (``< > " { } ;``, control
+    characters, newlines), so this additionally passes the slug through
+    :func:`_safe_reactor_slug` (the same guard :func:`reactor_iri` uses),
+    restricting the local name to ``[a-z0-9-]``. Returns ``None`` when the
+    sanitized result is empty (e.g. ``name`` is pure punctuation/whitespace
+    or entirely metacharacters); callers must skip emitting the
+    ``rdfs:seeAlso`` block in that case rather than mint a degenerate
+    ``msrd:`` IRI.
     """
-    return f"msrd:{slugify(name)}"
+    safe = _safe_reactor_slug(slugify(name))
+    if not safe:
+        return None
+    return f"msrd:{safe}"
 
 
 def served_by_statement_iri(e: ServedByEdge) -> str:
@@ -397,11 +413,12 @@ def served_by_edge_triples(e: ServedByEdge) -> str:
     )
     if e.standard_name:
         standard = standard_iri(e.standard_name)
-        standard_label = _escape_literal(e.standard_name)
-        block += (
-            f"\n{subject} rdfs:seeAlso {standard} .\n"
-            f'{standard} rdfs:label "{standard_label}"^^xsd:string .'
-        )
+        if standard is not None:
+            standard_label = _escape_literal(e.standard_name)
+            block += (
+                f"\n{subject} rdfs:seeAlso {standard} .\n"
+                f'{standard} rdfs:label "{standard_label}"^^xsd:string .'
+            )
     return block
 
 
@@ -441,11 +458,12 @@ def addresses_function_edge_triples(e: AddressesFunctionEdge) -> str:
     )
     if e.standard_name:
         standard = standard_iri(e.standard_name)
-        standard_label = _escape_literal(e.standard_name)
-        block += (
-            f"\n{subject} rdfs:seeAlso {standard} .\n"
-            f'{standard} rdfs:label "{standard_label}"^^xsd:string .'
-        )
+        if standard is not None:
+            standard_label = _escape_literal(e.standard_name)
+            block += (
+                f"\n{subject} rdfs:seeAlso {standard} .\n"
+                f'{standard} rdfs:label "{standard_label}"^^xsd:string .'
+            )
     if e.threshold_value is not None and e.threshold_comparator:
         block += (
             f'\n{subject} msr:thresholdValue "{_format_number(e.threshold_value)}"^^xsd:decimal ;\n'
