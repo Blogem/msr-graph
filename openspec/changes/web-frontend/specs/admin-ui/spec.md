@@ -10,25 +10,29 @@ store access.
 ## ADDED Requirements
 
 ### Requirement: Checkpoint list
-The admin surface SHALL list existing checkpoints from `GET /api/checkpoints`, showing each
-checkpoint's label.
+The admin surface SHALL list existing checkpoints from `GET /api/checkpoints`, whose response is
+`{"checkpoints": [{label, ontology_version}]}`, showing each checkpoint's label (and its recorded
+ontology version where useful).
 
 #### Scenario: Existing checkpoints are listed
 - **WHEN** the admin surface loads
-- **THEN** it requests `GET /api/checkpoints` and shows the returned checkpoints
+- **THEN** it requests `GET /api/checkpoints` and shows the returned checkpoints from the
+  `checkpoints` array
 
 ### Requirement: Create a checkpoint
 The admin surface SHALL let the user create a checkpoint by supplying a label and calling
-`POST /api/checkpoints`. On success the new checkpoint SHALL appear in the list.
+`POST /api/checkpoints` with body `{label}`. A successful create returns `201` with the created
+manifest; on success the new checkpoint SHALL appear in the list.
 
 #### Scenario: New checkpoint created and listed
 - **WHEN** the user creates a checkpoint named `demo`
-- **THEN** the client sends `POST /api/checkpoints` with that label and the checkpoint appears in
-  the refreshed list
+- **THEN** the client sends `POST /api/checkpoints` with `{label:"demo"}`, receives `201` with the
+  manifest, and the checkpoint appears in the refreshed list
 
 #### Scenario: Rejected label surfaces an error
 - **WHEN** the user supplies a label the API rejects (e.g. containing path-traversal characters)
-- **THEN** the UI shows the error and no checkpoint is added to the list
+- **THEN** the API returns a `400` `invalid_label` typed error, the UI shows it, and no checkpoint
+  is added to the list
 
 ### Requirement: Restore a checkpoint
 The admin surface SHALL let the user restore a listed checkpoint via

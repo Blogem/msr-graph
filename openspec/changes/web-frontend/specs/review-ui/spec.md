@@ -52,22 +52,32 @@ available.
 
 ### Requirement: Editable placement and unit fields drive the edit endpoint
 The detail view SHALL allow the reviewer to edit the proposal's placement/unit fields and persist
-the edit via `PUT /api/proposals/{id}/graph`. A successful edit SHALL update the rendered
-proposal.
+the edit via `PUT /api/proposals/{id}/graph`. The edit endpoint **replaces the whole proposal
+graph**, so the client SHALL send the full edited graph serialized in the request body's
+`triples` field (`{"triples": "<serialized triples>"}`), never a partial patch. A successful edit
+SHALL update the rendered proposal.
 
 #### Scenario: Reviewer sets a proposal's unit
 - **WHEN** the reviewer sets the `solubility` proposal's unit to mole fraction and saves
-- **THEN** the client sends `PUT /api/proposals/{id}/graph` with the edited graph and the detail
-  view reflects the change
+- **THEN** the client sends `PUT /api/proposals/{id}/graph` with the full edited graph as the
+  `triples` string and the detail view reflects the change
+
+#### Scenario: Empty edit body is not sent
+- **WHEN** the reviewer's edit would produce no triples
+- **THEN** the client does not send an empty `triples` body (which the API rejects `400`), and the
+  proposal graph is left unchanged
 
 ### Requirement: Approve and reject controls
 The detail view SHALL provide approve and reject controls calling
-`POST /api/proposals/{id}/approve` and `POST /api/proposals/{id}/reject`. On approve success the
-proposal SHALL be shown as approved; on reject it SHALL be shown as rejected.
+`POST /api/proposals/{id}/approve` and `POST /api/proposals/{id}/reject`. The approve request
+SHALL carry a JSON body identifying the decision (`{reviewer, timestamp}`), since the API rejects
+an empty approve body `400`; the reject request needs no body. On approve success the proposal
+SHALL be shown as approved; on reject it SHALL be shown as rejected.
 
 #### Scenario: Approve promotes the proposal
 - **WHEN** the reviewer approves a proposal and the API returns success
-- **THEN** the proposal is shown as approved and removed from the pending queue
+- **THEN** the client sends `POST /api/proposals/{id}/approve` with a `{reviewer, timestamp}` body
+  and the proposal is shown as approved and removed from the pending queue
 
 #### Scenario: Reject marks the proposal
 - **WHEN** the reviewer rejects a proposal
@@ -75,11 +85,15 @@ proposal SHALL be shown as approved; on reject it SHALL be shown as rejected.
 
 ### Requirement: SHACL validation errors surfaced legibly
 The UI SHALL surface a typed SHACL validation error returned by an approve or edit as a legible
-message and SHALL leave the proposal in its pending state when GraphDB rejects the write.
+message and SHALL leave the proposal in its pending state when GraphDB rejects the write. The
+error is delivered as an HTTP `422` with a typed JSON body `{error, message, violations}`, where
+each violation carries `focusNode`, `constraint`, `shape`, `path`, and `message`; the UI SHALL
+render the violation detail rather than a raw status or stack trace.
 
 #### Scenario: Approve rejected on validation
-- **WHEN** an approve returns a typed SHACL validation error
-- **THEN** the UI shows the validation violation message and the proposal remains pending
+- **WHEN** an approve returns a `422` with a `violations` array
+- **THEN** the UI shows the per-violation detail (path/constraint/message) and the proposal
+  remains pending
 
 ### Requirement: Raw-triples advanced view
 The detail view SHALL offer an advanced view exposing the proposal's unrendered triples for a

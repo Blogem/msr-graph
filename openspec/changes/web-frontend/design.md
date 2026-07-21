@@ -57,17 +57,23 @@ paths so client-side routing works on deep links/reload.
   deployable"); serving `webapp/build` from disk (rejected — embed keeps the binary
   self-contained and matches `internal/store`'s existing `//go:embed` precedent).
 
-### D2 — Static handler registered last as the catch-all; `/api` never shadowed
-Add the embedded-frontend handler to `newMux` as the root (`/`) catch-all, registered so it
-resolves only after the explicit `/api/*` and `/healthz` routes. Requests under `/api/` that
-match no registered API route return the mux's normal 404, not the SPA fallback.
-- *Why*: chunk 9 adds `/api/proposals*` and `/api/checkpoints*` to the same `newMux`
-  concurrently; a root catch-all that defers to more specific patterns is purely additive and
-  cannot break their routes. Go's `http.ServeMux` longest-pattern-wins semantics make this safe.
-- *Coordination*: the only shared file is `cmd/server/handler.go`. Keep the static-handler
-  addition to a distinct block; expect a trivial merge with chunk 9. Guard with a test that
-  `/api/chat` and a representative `/api/proposals` path still route to their handlers, not the
-  SPA fallback.
+### D2 — Static handler at `/` with an explicit `/api/` guard; `/api` never shadowed
+Chunk 9 is now merged: `newMux` has signature `newMux(chat http.Handler, gr graphReader, ps
+proposalService, cs checkpointService)` and registers the proposal/checkpoint routes with **Go
+1.22 method-scoped patterns** (`GET /api/proposals`, `POST /api/checkpoints/{label}/restore`,
+…), which auto-return `405` for a matched path with the wrong method. Add the embedded-frontend
+handler at the root pattern (`/`). Go 1.22 `ServeMux` resolves by **most-specific pattern wins,
+independent of registration order**, so every explicit `/api/*` and `/healthz` route takes
+precedence over `/` — registration order does not matter.
+- *Critical caveat*: because `/` is the catch-all, an unmatched `/api/foo` path **would**
+  otherwise fall through to the SPA handler. The static handler MUST therefore explicitly return
+  `404` (not the SPA `index.html`) for any request whose path begins with `/api/`. This is the
+  `frontend-app-shell` "Unknown API path is not served the SPA" requirement.
+- *Coordination*: the only shared file is `cmd/server/handler.go`. The frontend change threads
+  the embed handler into the existing `newMux` signature and its `main.go` call site (do not
+  change the chunk-9 params/routes). Guard with a test that `/api/chat` and a representative
+  `/api/proposals` path route to their handlers, an unknown `/api/*` path returns 404, and
+  `GET /` + a deep link serve `index.html`.
 
 ### D3 — SSE consumed via `fetch` + `ReadableStream`, parsed into a typed event union
 A single `streamChat(messages, onEvent)` client issues `fetch('/api/chat', {method:'POST'})`,
@@ -111,6 +117,33 @@ component tests (repo UI standard). No component/UI framework beyond Svelte; min
 styling. API access through one typed client module (`lib/api.ts`) so every fetch is mockable.
 - *Why*: keeps the dependency/build surface small for a demo, honors the repo testing standard,
   and isolates all network calls behind one mockable module.
+
+### D7 — Client typed against the concrete JSON shapes merged in chunk 9
+`lib/api.ts` and the SSE types mirror the exact wire shapes the merged server emits, verified
+against `cmd/server/proposals.go`, `checkpoints.go`, and `apierror.go` on `main`:
+- **Queue** `GET /api/proposals[?status=]` → `{"proposals": [{id, kind, status, term,
+  docFrequency}]}` (object-wrapped, not a bare array; `status` filtering is applied server-side).
+- **Detail** `GET /api/proposals/{id}` → `{id, triples[], evidence[], neighborhood[]}` where a
+  triple is `{subject, predicate, object, objectType, datatype?, lang?}`, evidence is `{text,
+  citedIn, startOffset, endOffset}`, and a neighborhood triple is `{subject, predicate, object}`.
+  The diff overlays `triples` on `neighborhood` and highlights the added ones.
+- **Edit** `PUT /api/proposals/{id}/graph` takes `{"triples": "<serialized triples string>"}`
+  and **replaces the whole proposal graph** — the client must re-serialize the full edited graph,
+  not send a field patch; an empty/whitespace `triples` is rejected `400`.
+- **Approve** `POST /api/proposals/{id}/approve` **requires a JSON body** `{reviewer, timestamp}`
+  — unlike reject, an empty body is rejected `400`. The client always sends at least
+  `{reviewer, timestamp}`. Success → `{status:"approved"}`; reject → `{status:"rejected"}`;
+  edit → `{status:"ok"}`.
+- **Checkpoints**: list → `{"checkpoints": [{label, ontology_version}]}` (note snake_case
+  `ontology_version`); create `POST /api/checkpoints` body `{label}` → `201` with the manifest;
+  restore → `{status:"restored"}`.
+- **Errors** are a typed body `{error, message, violations?}`. A **SHACL rejection is HTTP 422**
+  with `violations[]`, each `{focusNode, constraint, shape, path, message}`; `404` is `not_found`,
+  `409` `invalid_transition`, `400` `bad_request`/`invalid_label`. The review UI renders the 422
+  `violations` legibly and keeps the proposal pending.
+- *Why*: pinning the client to the real shapes now (rather than the spec's "at least …" wording)
+  removes a class of integration bugs; extra fields are tolerated (D3) so later additions don't
+  break rendering.
 
 ## Risks / Trade-offs
 

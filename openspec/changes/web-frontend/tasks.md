@@ -7,10 +7,10 @@
 
 ## 2. Typed API client and SSE parser (`webapp/src/lib`)
 
-- [ ] 2.1 Create a single `lib/api.ts` typed client wrapping the chunk-9 proposal + checkpoint endpoints (`GET /api/proposals[?status=]`, `GET /api/proposals/{id}`, `PUT /api/proposals/{id}/graph`, `POST …/approve`, `POST …/reject`, `GET|POST /api/checkpoints`, `POST /api/checkpoints/{label}/restore`), so every network call is mockable
+- [ ] 2.1 Create a single `lib/api.ts` typed client wrapping the chunk-9 proposal + checkpoint endpoints, typed to the concrete merged shapes (design D7): queue `{proposals:[{id,kind,status,term,docFrequency}]}`; detail `{id,triples[],evidence[],neighborhood[]}` (triple `{subject,predicate,object,objectType,datatype?,lang?}`, evidence `{text,citedIn,startOffset,endOffset}`); edit `PUT …/graph` body `{triples:"<full serialized graph>"}` (whole-graph replace); approve `POST …/approve` body `{reviewer,timestamp}` (empty body → 400); reject `POST …/reject` (no body); checkpoints list `{checkpoints:[{label,ontology_version}]}`, create `POST` body `{label}` → 201 manifest, restore `POST …/{label}/restore`. Every call mockable.
 - [ ] 2.2 Define the `TraceEvent` discriminated union mirroring the chunk-4 SSE schema (`text | tool_call | tool_result | script_run | provenance | answer | done`) plus a raw fallback for unknown types
 - [ ] 2.3 Implement `streamChat(messages, onEvent)` using `fetch` + `response.body.getReader()`, buffering across chunk boundaries and splitting on complete SSE frames into `TraceEvent`s
-- [ ] 2.4 Surface typed API errors (400 malformed, 404 unknown, and the chunk-9 SHACL validation error body) so callers can render legible messages
+- [ ] 2.4 Parse the typed error body `{error, message, violations?}`: map `400` (bad_request/invalid_label), `404` (not_found), `409` (invalid_transition), and the SHACL `422` with `violations[]` (each `{focusNode,constraint,shape,path,message}`) so callers can render legible messages
 
 ## 3. Chat surface (`chat-ui`)
 
@@ -26,9 +26,9 @@
 - [ ] 4.1 Proposal queue from `GET /api/proposals` with a status filter (pending/approved/rejected), showing id, kind, status, term, docFrequency
 - [ ] 4.2 Proposal detail from `GET /api/proposals/{id}`; render proposed triples overlaid on the affected ontology neighborhood as a highlighted diff (added nodes/edges); handle `404` as a not-found state
 - [ ] 4.3 Evidence panel: sentence text, `citedIn` document link, start/end offsets
-- [ ] 4.4 Editable placement/unit fields persisting via `PUT /api/proposals/{id}/graph`
-- [ ] 4.5 Approve/reject controls calling their endpoints; reflect the resulting status and remove approved/rejected from the pending queue
-- [ ] 4.6 Surface a typed SHACL validation error legibly on approve/edit, leaving the proposal pending
+- [ ] 4.4 Editable placement/unit fields that re-serialize the **full** proposal graph and persist via `PUT /api/proposals/{id}/graph` (`{triples}` whole-graph replace); never send an empty `triples` body
+- [ ] 4.5 Approve (sending `{reviewer, timestamp}`) / reject controls calling their endpoints; reflect the resulting status and remove approved/rejected from the pending queue
+- [ ] 4.6 Surface a `422` SHACL validation error legibly on approve/edit — render the `violations[]` detail (path/constraint/message) — leaving the proposal pending
 - [ ] 4.7 Raw-triples advanced view
 
 ## 5. Admin surface (`admin-ui`)
@@ -41,8 +41,8 @@
 
 - [ ] 6.1 Add a `//go:embed` of the built frontend directory to the server (mirroring `internal/store`'s embed precedent); commit a minimal placeholder so `go build` succeeds before a local frontend build
 - [ ] 6.2 Add a static-asset + SPA-fallback handler serving embedded files, with `index.html` fallback for non-`/api`, non-`/healthz` `GET`s that match no asset
-- [ ] 6.3 Register the handler on `newMux` in `cmd/server/handler.go` as the root (`/`) catch-all, resolving after `/api/*` and `/healthz`; keep the change to one additive block for a clean merge with chunk 9
-- [ ] 6.4 Ensure `/api/*` paths matching no registered route return a not-found (not the SPA fallback)
+- [ ] 6.3 Register the handler on the merged `newMux(chat, gr, ps, cs)` in `cmd/server/handler.go` at the root pattern (`/`) and thread it through the `main.go` call site; do not alter chunk 9's params or its Go 1.22 method-scoped `/api/*` routes (they win by specificity regardless of order)
+- [ ] 6.4 In the static handler, explicitly return `404` for any path beginning with `/api/` (the `/` catch-all would otherwise serve the SPA for an unknown `/api/*` path)
 
 ## 7. Build wiring
 
