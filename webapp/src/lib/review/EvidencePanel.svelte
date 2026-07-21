@@ -22,9 +22,11 @@
 					<p class="text">{item.text}</p>
 					<p class="meta">
 						{#if isLink(item.citedIn)}
-							<a href={item.citedIn} target="_blank" rel="noreferrer">{item.citedIn}</a>
+							<a class="identifier" href={item.citedIn} target="_blank" rel="noreferrer"
+								>{item.citedIn}</a
+							>
 						{:else}
-							<span class="cited-in">{item.citedIn}</span>
+							<span class="cited-in identifier">{item.citedIn}</span>
 						{/if}
 						<span class="offsets">[{item.startOffset}-{item.endOffset}]</span>
 					</p>
@@ -41,23 +43,33 @@
 		padding: 0;
 		display: flex;
 		flex-direction: column;
-		gap: 0.5rem;
+		gap: var(--space-2);
 	}
 
 	li {
-		border-left: 3px solid #ccc;
-		padding: 0.25rem 0.5rem;
+		border-left: 3px solid var(--border);
+		padding: var(--space-1) var(--space-2);
 	}
 
 	.meta {
-		font-size: 0.85rem;
+		font-size: var(--font-size-0);
 		opacity: 0.75;
 		display: flex;
-		gap: 0.5rem;
+		flex-wrap: wrap;
+		gap: var(--space-2);
+		min-width: 0;
+	}
+
+	.meta .identifier {
+		flex: 1 1 auto;
+	}
+
+	.offsets {
+		flex-shrink: 0;
 	}
 
 	.empty {
 		opacity: 0.7;
-		font-size: 0.9rem;
+		font-size: var(--font-size-0);
 	}
 </style>
