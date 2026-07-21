@@ -19,6 +19,7 @@ import (
 	"io"
 	"net/http"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -66,36 +67,90 @@ type proposalQueueResponse struct {
 	Proposals []proposalSummary `json:"proposals"`
 }
 
-// proposalSummary is one row of the queue listing.
+// proposalSummary is one row of the queue listing. documentFrequency/
+// totalOccurrences/corpusCount/corpora are aggregates derived at read
+// time from the proposal's (possibly zero, possibly many) observations
+// -- never a stored scalar (design D3) -- so a proposal with
+// observations spread across documents, corpora, or mining runs still
+// resolves to exactly one summary (spec "One row per proposal despite
+// multi-corpus/multi-run observations").
 type proposalSummary struct {
-	ID           string `json:"id"`
-	Kind         string `json:"kind"`
-	Status       string `json:"status"`
-	Term         string `json:"term"`
-	DocFrequency int    `json:"docFrequency"`
+	ID                string   `json:"id"`
+	Kind              string   `json:"kind"`
+	Status            string   `json:"status"`
+	Term              string   `json:"term"`
+	DocumentFrequency int      `json:"documentFrequency"`
+	TotalOccurrences  int      `json:"totalOccurrences"`
+	CorpusCount       int      `json:"corpusCount"`
+	Corpora           []string `json:"corpora"`
 }
 
 // proposalQueueQuery reads every msr:ChangeProposal resource from
-// urn:msr:staging. It is a fixed query string (no request-derived
-// values embedded), so it carries no injection surface; the optional
-// ?status filter is applied to the results in Go instead of by
-// interpolating the query, keeping this string static.
+// urn:msr:staging together with its (0..N) msr:hasObservation nodes. It
+// is a fixed query string (no request-derived values embedded), so it
+// carries no injection surface; the optional ?status filter is applied
+// to the results in Go instead of by interpolating the query, keeping
+// this string static.
+//
+// The observation block is OPTIONAL (a LEFT join): a proposal predating
+// the observation model, or one with a kind that never gets observations
+// (e.g. instance proposals), has no msr:hasObservation edge at all and
+// must still appear in the queue with zeroed aggregates (spec "obs-less
+// proposals still return"). Because the join is one-row-per-observation,
+// a proposal with several observations comes back as several bindings
+// sharing the same ?s; newProposalQueueHandler collapses those back to
+// one summary per proposal (design D3), which is what makes duplicate
+// docFrequency values (the original bug) structurally impossible here.
 const proposalQueueQuery = `PREFIX msr: <https://w3id.org/msr-kg/ontology#>
-SELECT ?s ?kind ?status ?term ?docFrequency WHERE {
+PREFIX prov: <http://www.w3.org/ns/prov#>
+SELECT ?s ?kind ?status ?term ?document ?occurrenceCount ?corpus ?generatedAtTime WHERE {
   GRAPH <urn:msr:staging> {
     ?s a msr:ChangeProposal ;
        msr:kind ?kind ;
        msr:reviewStatus ?status ;
-       msr:term ?term ;
-       msr:docFrequency ?docFrequency .
+       msr:term ?term .
+    OPTIONAL {
+      ?s msr:hasObservation ?obs .
+      ?obs msr:inDocument ?document ;
+           msr:occurrenceCount ?occurrenceCount ;
+           msr:inCorpus ?corpus ;
+           prov:generatedAtTime ?generatedAtTime .
+    }
   }
 }`
+
+// latestDocObservation is the latest-seen (?generatedAtTime) observation
+// for one document, as tracked by proposalQueueAgg / readProposalObservations
+// while collapsing a proposal's (possibly many) observation rows.
+// prov:generatedAtTime is an xsd:dateTime lexical value; since every
+// writer stamps it with a consistent zero-padded ISO-8601 form,
+// lexicographic string comparison agrees with chronological order,
+// so "latest" is decided without parsing it as a time.Time.
+type latestDocObservation struct {
+	corpus          string
+	occurrenceCount int
+	generatedAtTime string
+}
+
+// proposalQueueAgg accumulates one proposal's kind/status/term plus its
+// per-document latest observation while scanning proposalQueueQuery's
+// rows (design D3): the query's OPTIONAL observation block means a
+// proposal with N observations comes back as N rows sharing the same
+// ?s, so this collapses them back into the single summary the queue
+// must return per proposal.
+type proposalQueueAgg struct {
+	kind, status, term string
+	// documents maps a document IRI to its latest-seen observation.
+	documents map[string]latestDocObservation
+}
 
 // newProposalQueueHandler builds the GET /api/proposals handler: it
 // lists the msr:ChangeProposal resources staged in urn:msr:staging,
 // optionally filtered to a single review status by the ?status query
 // parameter (spec "Queue endpoint lists proposals filtered by review
-// status").
+// status"), aggregating each proposal's observations into one summary
+// row (spec "One row per proposal despite multi-corpus/multi-run
+// observations").
 func newProposalQueueHandler(gr graphReader) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		statusFilter := r.URL.Query().Get("status")
@@ -106,7 +161,8 @@ func newProposalQueueHandler(gr graphReader) http.HandlerFunc {
 			return
 		}
 
-		proposals := make([]proposalSummary, 0, len(results.Results.Bindings))
+		aggs := make(map[string]*proposalQueueAgg)
+		var order []string // preserves first-seen order for deterministic output
 		for _, b := range results.Results.Bindings {
 			id, ok := proposalIDFromResourceIRI(b["s"].Value)
 			if !ok {
@@ -114,17 +170,67 @@ func newProposalQueueHandler(gr graphReader) http.HandlerFunc {
 				// skip rather than fail the whole listing.
 				continue
 			}
-			status := b["status"].Value
-			if statusFilter != "" && status != statusFilter {
+
+			agg, exists := aggs[id]
+			if !exists {
+				agg = &proposalQueueAgg{
+					kind:      b["kind"].Value,
+					status:    b["status"].Value,
+					term:      b["term"].Value,
+					documents: make(map[string]latestDocObservation),
+				}
+				aggs[id] = agg
+				order = append(order, id)
+			}
+
+			document, hasDocument := b["document"]
+			if !hasDocument || document.Value == "" {
+				// The OPTIONAL observation block produced no binding for this
+				// row (an obs-less proposal, or a proposal whose only row
+				// happens to precede one that does have observations).
 				continue
 			}
-			docFreq, _ := strconv.Atoi(b["docFrequency"].Value)
+			occurrenceCount, _ := strconv.Atoi(b["occurrenceCount"].Value)
+			corpus := b["corpus"].Value
+			generatedAtTime := b["generatedAtTime"].Value
+
+			if existing, seen := agg.documents[document.Value]; !seen || generatedAtTime > existing.generatedAtTime {
+				agg.documents[document.Value] = latestDocObservation{
+					corpus:          corpus,
+					occurrenceCount: occurrenceCount,
+					generatedAtTime: generatedAtTime,
+				}
+			}
+		}
+
+		proposals := make([]proposalSummary, 0, len(order))
+		for _, id := range order {
+			agg := aggs[id]
+			if statusFilter != "" && agg.status != statusFilter {
+				continue
+			}
+
+			totalOccurrences := 0
+			corpusSet := make(map[string]bool, len(agg.documents))
+			for _, obs := range agg.documents {
+				totalOccurrences += obs.occurrenceCount
+				corpusSet[obs.corpus] = true
+			}
+			corpora := make([]string, 0, len(corpusSet))
+			for corpus := range corpusSet {
+				corpora = append(corpora, corpus)
+			}
+			sort.Strings(corpora)
+
 			proposals = append(proposals, proposalSummary{
-				ID:           id,
-				Kind:         b["kind"].Value,
-				Status:       status,
-				Term:         b["term"].Value,
-				DocFrequency: docFreq,
+				ID:                id,
+				Kind:              agg.kind,
+				Status:            agg.status,
+				Term:              agg.term,
+				DocumentFrequency: len(agg.documents),
+				TotalOccurrences:  totalOccurrences,
+				CorpusCount:       len(corpusSet),
+				Corpora:           corpora,
 			})
 		}
 
@@ -136,10 +242,11 @@ func newProposalQueueHandler(gr graphReader) http.HandlerFunc {
 // (spec "Detail endpoint returns triples, evidence, and affected
 // neighborhood"; design D7).
 type proposalDetailResponse struct {
-	ID           string           `json:"id"`
-	Triples      []tripleJSON     `json:"triples"`
-	Evidence     []evidenceJSON   `json:"evidence"`
-	Neighborhood []neighborTriple `json:"neighborhood"`
+	ID           string                   `json:"id"`
+	Triples      []tripleJSON             `json:"triples"`
+	Evidence     []evidenceJSON           `json:"evidence"`
+	Observations []corpusObservationsJSON `json:"observations"`
+	Neighborhood []neighborTriple         `json:"neighborhood"`
 }
 
 // tripleJSON is one triple from the proposal's urn:msr:proposal/{id}
@@ -159,6 +266,25 @@ type evidenceJSON struct {
 	CitedIn     string `json:"citedIn"`
 	StartOffset int    `json:"startOffset"`
 	EndOffset   int    `json:"endOffset"`
+}
+
+// documentObservationJSON is one document's latest observation within a
+// corpus -- the per-document row of the detail endpoint's observation
+// breakdown (spec "Observation breakdown exposes per-corpus
+// provenance").
+type documentObservationJSON struct {
+	DocumentID      string `json:"documentId"`
+	OccurrenceCount int    `json:"occurrenceCount"`
+	FirstObserved   string `json:"firstObserved"`
+	LastObserved    string `json:"lastObserved"`
+}
+
+// corpusObservationsJSON groups a proposal's document observations by
+// corpus (design D7: "observations array grouped by corpus -> per
+// document").
+type corpusObservationsJSON struct {
+	Corpus    string                    `json:"corpus"`
+	Documents []documentObservationJSON `json:"documents"`
 }
 
 // neighborTriple is one core-graph triple about an IRI the proposal
@@ -201,6 +327,12 @@ func newProposalDetailHandler(gr graphReader) http.HandlerFunc {
 			return
 		}
 
+		observations, err := readProposalObservations(r.Context(), gr, id)
+		if err != nil {
+			mapEngineError(w, err)
+			return
+		}
+
 		neighborhood, err := readProposalNeighborhood(r.Context(), gr, triples)
 		if err != nil {
 			mapEngineError(w, err)
@@ -211,6 +343,7 @@ func newProposalDetailHandler(gr graphReader) http.HandlerFunc {
 			ID:           id,
 			Triples:      triples,
 			Evidence:     evidence,
+			Observations: observations,
 			Neighborhood: neighborhood,
 		})
 	}
@@ -322,6 +455,108 @@ SELECT ?text ?citedIn ?startOffset ?endOffset WHERE {
 		})
 	}
 	return evidence, nil
+}
+
+// docObservationAgg is the working accumulator readProposalObservations
+// uses to collapse a document's (possibly many, one per mining run)
+// observation rows down to: the latest occurrenceCount/corpus (the row
+// with the maximum generatedAtTime), and the first/last observed times
+// across all of that document's rows.
+type docObservationAgg struct {
+	corpus          string
+	occurrenceCount int
+	firstObserved   string
+	lastObserved    string
+}
+
+// readProposalObservations reads id's msr:hasObservation msr:Observation
+// nodes from urn:msr:staging and groups them by corpus, then by
+// document, taking each document's latest occurrenceCount (the
+// observation with the maximum prov:generatedAtTime) and its first/last
+// observed times (spec "Detail endpoint ... observation breakdown";
+// "Observation breakdown exposes per-corpus provenance"). The proposal
+// resource IRI is embedded the same way readProposalEvidence embeds it:
+// proposalResourceIRI(id) built from an id already validated against
+// proposalIDPattern by the caller, so this introduces no new injection
+// surface.
+func readProposalObservations(ctx context.Context, gr graphReader, id string) ([]corpusObservationsJSON, error) {
+	query := fmt.Sprintf(`PREFIX msr: <%s>
+PREFIX prov: <http://www.w3.org/ns/prov#>
+SELECT ?document ?occurrenceCount ?corpus ?generatedAtTime WHERE {
+  GRAPH <%s> {
+    <%s> msr:hasObservation ?obs .
+    ?obs msr:inDocument ?document ;
+         msr:occurrenceCount ?occurrenceCount ;
+         msr:inCorpus ?corpus ;
+         prov:generatedAtTime ?generatedAtTime .
+  }
+}`, msrNS, graph.Staging, proposalResourceIRI(id))
+
+	results, err := gr.SelectRaw(ctx, query)
+	if err != nil {
+		return nil, fmt.Errorf("proposals: read observations for %q: %w", id, err)
+	}
+
+	// Collapse to one aggregate per document: prov:generatedAtTime is an
+	// xsd:dateTime lexical value stamped consistently by every writer, so
+	// lexicographic string comparison agrees with chronological order
+	// (see latestDocObservation above the queue handler for the same
+	// reasoning).
+	byDocument := make(map[string]*docObservationAgg)
+	for _, b := range results.Results.Bindings {
+		document := b["document"].Value
+		generatedAtTime := b["generatedAtTime"].Value
+		occurrenceCount, _ := strconv.Atoi(b["occurrenceCount"].Value)
+		corpus := b["corpus"].Value
+
+		agg, seen := byDocument[document]
+		if !seen {
+			byDocument[document] = &docObservationAgg{
+				corpus:          corpus,
+				occurrenceCount: occurrenceCount,
+				firstObserved:   generatedAtTime,
+				lastObserved:    generatedAtTime,
+			}
+			continue
+		}
+		if generatedAtTime < agg.firstObserved {
+			agg.firstObserved = generatedAtTime
+		}
+		if generatedAtTime > agg.lastObserved {
+			agg.lastObserved = generatedAtTime
+			agg.occurrenceCount = occurrenceCount
+			agg.corpus = corpus
+		}
+	}
+
+	documentsByCorpus := make(map[string][]documentObservationJSON)
+	for document, agg := range byDocument {
+		documentsByCorpus[agg.corpus] = append(documentsByCorpus[agg.corpus], documentObservationJSON{
+			DocumentID:      document,
+			OccurrenceCount: agg.occurrenceCount,
+			FirstObserved:   agg.firstObserved,
+			LastObserved:    agg.lastObserved,
+		})
+	}
+
+	corpora := make([]string, 0, len(documentsByCorpus))
+	for corpus := range documentsByCorpus {
+		corpora = append(corpora, corpus)
+	}
+	sort.Strings(corpora)
+
+	observations := make([]corpusObservationsJSON, 0, len(corpora))
+	for _, corpus := range corpora {
+		documents := documentsByCorpus[corpus]
+		sort.Slice(documents, func(i, j int) bool {
+			return documents[i].DocumentID < documents[j].DocumentID
+		})
+		observations = append(observations, corpusObservationsJSON{
+			Corpus:    corpus,
+			Documents: documents,
+		})
+	}
+	return observations, nil
 }
 
 // safeIRIRef reports whether s can be embedded inside a SPARQL/Turtle
