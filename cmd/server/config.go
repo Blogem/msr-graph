@@ -34,6 +34,16 @@ type serverConfig struct {
 	// agentTurnDeadline bounds one chat turn's wall-clock across all
 	// iterations (env AGENT_TURN_DEADLINE, a Go duration like "600s" / "10m").
 	agentTurnDeadline time.Duration
+	// checkpointDir is the checkpoints base directory checkpoint.Engine
+	// writes each labelled checkpoint under, as data/checkpoints/{label}/
+	// (env MSR_CHECKPOINT_DIR). This must be set to a path under the same
+	// persistent volume as dbPath in any deployment where the working
+	// directory isn't already on that volume -- e.g. the Docker image runs
+	// with WORKDIR /app while dbPath is bind-mounted at /data/msr.db, so
+	// the relative default below would resolve to the non-persistent
+	// /app/data/checkpoints inside the container unless MSR_CHECKPOINT_DIR
+	// is set (e.g. to /data/checkpoints) in that environment.
+	checkpointDir string
 }
 
 const (
@@ -52,6 +62,13 @@ const (
 	// AGENT_TURN_DEADLINE).
 	defaultAgentMaxIterations = 30
 	defaultAgentTurnDeadline  = 10 * time.Minute
+	// defaultCheckpointDir is the checkpoints base directory used when
+	// MSR_CHECKPOINT_DIR is unset -- a relative path sufficient for
+	// `go run ./cmd/server` from the repo root, but deliberately not
+	// assumed to be correct in every deployment (see checkpointDir's
+	// field comment above): the Docker Compose deployment must override
+	// it to a path under the same persistent volume as MSR_DB_PATH.
+	defaultCheckpointDir = "data/checkpoints"
 )
 
 // loadServerConfig reads serverConfig from env (via the injected lookup,
@@ -67,6 +84,7 @@ func loadServerConfig(env func(string) string) serverConfig {
 		deepSeekAPIKey:     envOrDefault(env, "DEEPSEEK_API_KEY", defaultDeepSeekAPIKey),
 		agentMaxIterations: envIntOrDefault(env, "AGENT_MAX_ITERATIONS", defaultAgentMaxIterations),
 		agentTurnDeadline:  envDurationOrDefault(env, "AGENT_TURN_DEADLINE", defaultAgentTurnDeadline),
+		checkpointDir:      envOrDefault(env, "MSR_CHECKPOINT_DIR", defaultCheckpointDir),
 	}
 }
 

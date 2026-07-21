@@ -93,6 +93,12 @@ services:
       GRAPHDB_URL: http://graphdb:7200
       GRAPHDB_REPO: msr
       MSR_DB_PATH: /data/msr.db
+      # Checkpoint engine (internal/checkpoint): writes data/checkpoints/{label}/
+      # relative to the process's WORKDIR by default, which inside this
+      # container is /app — NOT the ./data bind mount. Point it at an
+      # absolute path under the mounted /data (alongside MSR_DB_PATH above)
+      # so checkpoints persist on the host bind mount, next to msr.db.
+      MSR_CHECKPOINT_DIR: /data/checkpoints
       # Sandbox pool (chunk 3, internal/sandbox): the server launches sandbox
       # SIBLING containers over the mounted Docker socket. Bind-mount SOURCES are
       # resolved by the daemon on the HOST, not inside this container, so the

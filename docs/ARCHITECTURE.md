@@ -340,10 +340,16 @@ writable `-shm` sidecar, which would break the sandboxes' read-only mounts) and 
 `busy_timeout` on every connection. Sandboxes mount the **data directory** read-only (not
 the bare file), so journal sidecars stay visible and a mid-write read can't see a torn
 state. Writers are the batch jobs only (loader, extraction); the server does not write
-SQLite at runtime — checkpoints copy the file via the **SQLite backup API** (safe
-regardless of writers) and restore puts the copy back while no extraction is running.
+SQLite at runtime — checkpoints copy the file via **`VACUUM INTO`** on a dedicated
+connection (safe regardless of writers; see below) and restore puts the copy back while no
+extraction is running.
 **DDL ownership:** chunk 1 owns the init script (idempotent `CREATE TABLE IF NOT EXISTS`);
 any later chunk adding a table extends that same script.
+
+Checkpoints take the SQLite copy with **`VACUUM INTO`** on a dedicated read-write
+connection opened on the live `msr.db` (never the chat path's `mode=ro&query_only`
+connection, which forbids `VACUUM`) — a consistent single-file snapshot regardless of
+concurrent readers, needing no C backup API (`internal/checkpoint`, design D4).
 
 **GraphDB repository.** Single repo `msr`, **inference disabled** (no ruleset), for three
 reasons. (1) *Staging isolation*: forward-chaining materializes inferred triples into the
@@ -448,14 +454,22 @@ the answer itself.
 Demo requirement: evolve the ontology, roll it back, do it again.
 
 - **Checkpoint** = full GraphDB repository export (TriG, **all** named graphs incl.
-  staging/proposals) + a copy of the SQLite file (via the SQLite backup API) + the
-  ontology version, stored under `data/checkpoints/{label}/`.
+  staging/proposals) + a copy of the SQLite file (via `VACUUM INTO` on a dedicated
+  connection) + the ontology version, stored under `data/checkpoints/{label}/` as three
+  fixed files: `store.trig` (the TriG export), `msr.db` (the SQLite snapshot), and
+  `manifest.json` (`{"label", "ontology_version"}`).
 - **Restore** = clear repository → import the TriG → put the SQLite copy back. Full-store
   restore is deliberately chosen over per-change undo: proposal statuses, back-populated
   instances, and text-derived rows all revert together in one atomic move — no dangling
   ABox referencing a rolled-back class.
-- Exposed as API (`POST /api/checkpoints`, `POST /api/checkpoints/{label}/restore`) + an
-  admin panel in the web app; `make checkpoint` / `make restore` wrappers.
+- Exposed as API — `GET /api/checkpoints` (list), `POST /api/checkpoints` (create, JSON
+  body `{"label": "..."}`), `POST /api/checkpoints/{label}/restore` — plus an admin panel
+  in the web app. `{label}` is validated to a conservative filesystem-safe charset
+  (alphanumerics, dash, underscore) before any path is touched, rejecting path traversal.
+- `make checkpoint` / `make restore` wrap the create/restore routes against the running
+  server (`SERVER_URL`, default `http://localhost:8080`, matching `cmd/server`'s
+  `SERVER_ADDR` default `:8080`), taking a `LABEL` variable (default `demo`):
+  `make checkpoint LABEL=before-solubility` / `make restore LABEL=before-solubility`.
 - Per-change undo stays cheap if ever wanted (an approval only copies triples that still
   sit in the proposal graph, so a DELETE-where-in-proposal pattern can surgically remove
   one change from the core graphs), but checkpoints are the demo path.

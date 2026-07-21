@@ -20,4 +20,7 @@ build/
 .env
 
 # Local data backups (GraphDB volume snapshot + sqlite + corpus traces)
-backups/
+backups/*
+# ...but keep the backup/restore scripts under version control
+!backups/backup.sh
+!backups/restore.sh

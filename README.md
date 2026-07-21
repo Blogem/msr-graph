@@ -96,8 +96,25 @@ make mine       # one-shot Compose run of the extraction container: enumerate
                 # governance T-Box lives in ontology/msr.ttl) as well as
                 # `make link` (mentions to mine candidates from).
 
-make test       # GRAPHDB_REQUIRED=1 go test ./...
-                # integration tests FAIL (not skip) if the stack isn't up
+make test       # GRAPHDB_REQUIRED=1 SANDBOX_DOCKER_REQUIRED=1 go test -p 1 ./...
+                # integration tests FAIL (not skip) if the stack isn't up;
+                # -p 1 serializes package execution because the checkpoint/
+                # proposal integration tests share the live `msr` repo and
+                # would otherwise clobber each other under cross-package
+                # parallelism
+
+make checkpoint LABEL=demo  # POST /api/checkpoints against the running
+                # server: writes a labelled whole-store checkpoint —
+                # full-repo TriG export (all named graphs) + a SQLite
+                # `VACUUM INTO` snapshot + a manifest — under
+                # data/checkpoints/{label}/. Requires the server up
+                # (`make up`); honors SERVER_URL and LABEL (both default as
+                # shown).
+
+make restore LABEL=demo    # POST /api/checkpoints/{label}/restore: clears
+                # and re-imports the graph and swaps the SQLite file back
+                # to the checkpointed copy. Same requirements as
+                # `make checkpoint`.
 ```
 
 The `msr:ChangeProposal` governance T-Box (design.md D4) loads into
@@ -322,6 +339,13 @@ it host-root-equivalent — sandbox hardening protects against the untrusted
 documented ceiling for a single-host proof of concept.
 
 ## Chat API (`POST /api/chat`)
+
+The `server` binary also exposes a proposal review/disposition API
+(`GET /api/proposals`, `GET /api/proposals/{id}`, `PUT /api/proposals/{id}/graph`,
+`POST /api/proposals/{id}/approve`, `POST /api/proposals/{id}/reject`) and a
+checkpoint API (`GET|POST /api/checkpoints`, `POST /api/checkpoints/{label}/restore`
+— see `make checkpoint`/`make restore` above) alongside `/api/chat`; see
+[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for their request/response shapes.
 
 The grounded-analysis agent (`internal/agent`) is reachable over one HTTP
 endpoint, `POST /api/chat`. The endpoint is **stateless**: the request body
