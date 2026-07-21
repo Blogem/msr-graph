@@ -16,6 +16,9 @@ func renderEvent(w io.Writer, ev Event) {
 	case EventText:
 		fmt.Fprint(w, ev.Text)
 
+	case EventReasoning:
+		fmt.Fprintf(w, "\n  [thinking] %s\n", ev.Reasoning)
+
 	case EventToolCall:
 		if tc := ev.ToolCall; tc != nil {
 			fmt.Fprintf(w, "\n  -> %s(%s)\n", tc.Name, tc.Arguments)

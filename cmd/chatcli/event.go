@@ -10,6 +10,7 @@ type EventType string
 
 const (
 	EventText       EventType = "text"
+	EventReasoning  EventType = "reasoning"
 	EventToolCall   EventType = "tool_call"
 	EventToolResult EventType = "tool_result"
 	EventScriptRun  EventType = "script_run"
@@ -24,6 +25,7 @@ const (
 type Event struct {
 	Type       EventType        `json:"type"`
 	Text       string           `json:"text,omitempty"`
+	Reasoning  string           `json:"reasoning,omitempty"`
 	ToolCall   *ToolCallEvent   `json:"tool_call,omitempty"`
 	ToolResult *ToolResultEvent `json:"tool_result,omitempty"`
 	ScriptRun  *ScriptRunEvent  `json:"script_run,omitempty"`
