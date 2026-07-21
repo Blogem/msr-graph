@@ -11,7 +11,27 @@
 // suite is written directly against the chat-ui spec's acceptance
 // scenarios and the pinned testids in the task contract; it is expected to
 // fail to resolve/compile until the merge, and is reconciled in pass 2.
-import { fireEvent, render, screen, within } from '@testing-library/svelte';
+//
+// PASS 2 FINDING -- genuine component defect, not a test-harness/timing
+// issue (confirmed with a standalone repro component + debug logging,
+// removed after diagnosis): every test below fails because
+// ChatSurface.svelte's `sendMessage()` captures `assistantTurn` as a plain
+// object BEFORE `turns.push(assistantTurn)`, then mutates that captured
+// reference afterwards (`assistantTurn.content += event.text`;
+// `assistantTurn.trace?.push(event)`). In Svelte 5, pushing a plain object
+// into a `$state` array wraps a *new* proxy around it; the pre-push local
+// variable keeps pointing at the original, now-detached object, so none of
+// those mutations are observed by the reactive `turns` array the template
+// renders from. `streamChat` itself resolves correctly and its `onEvent`
+// callback fires with every event (verified directly) -- the events simply
+// never reach the DOM. Net effect: the trace timeline stays empty ("Hide
+// trace (0)"), the streamed answer text never appears, and no
+// `answer-stamp` ever renders, for every turn. This is a real bug (not a
+// jsdom/vitest artifact) and reproduces in a real browser too. Left
+// unmodified/failing per pass-2 policy -- see the handoff report for the
+// fix pointer (re-obtain the turn from `turns` after pushing, e.g.
+// `const assistantTurn = turns[turns.length - 1]`, before mutating it).
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/svelte';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import ChatSurface from './ChatSurface.svelte';
 import type { TraceEvent } from '../types';
@@ -82,10 +102,24 @@ const FULL_TURN_EVENTS: TraceEvent[] = [
 	{ type: 'done' }
 ];
 
-async function sendMessage(text: string) {
+// `ChatSurface`'s submit handler fires the async `streamChat` call without
+// awaiting it (`void sendMessage()`), so `fireEvent.click` resolves as soon
+// as the click is dispatched -- well before the mocked stream has been read
+// and its events pushed into the turn's reactive trace array. Every
+// fixture stream used below ends in an `answer` event before `done`, so
+// waiting here for `wantAnswerStamps` `answer-stamp` elements to exist (an
+// async, retrying assertion) is the reliable "this turn has fully
+// streamed" signal a synchronous `getByTestId`/`getAllByTestId` query can
+// then be run against. `wantAnswerStamps` counts the total across every
+// turn sent so far in the test (1 for a single turn, 2 after a second),
+// since `answer-stamp` is not a testid unique per turn.
+async function sendMessage(text: string, wantAnswerStamps = 1) {
 	const input = screen.getByTestId('chat-input');
 	await fireEvent.input(input, { target: { value: text } });
 	await fireEvent.click(screen.getByTestId('chat-send'));
+	await waitFor(() => {
+		expect(screen.getAllByTestId('answer-stamp').length).toBeGreaterThanOrEqual(wantAnswerStamps);
+	});
 }
 
 describe('ChatSurface', () => {
@@ -197,10 +231,8 @@ describe('ChatSurface', () => {
 		vi.stubGlobal('fetch', fetchMock);
 
 		render(ChatSurface);
-		await sendMessage('first message');
-		await screen.findByTestId('answer-stamp');
-		await sendMessage('second message');
-		await screen.findAllByTestId('answer-stamp');
+		await sendMessage('first message', 1);
+		await sendMessage('second message', 2);
 
 		expect(fetchMock).toHaveBeenCalledTimes(2);
 		const secondCallBody = JSON.parse((fetchMock.mock.calls[1][1] as RequestInit).body as string);
