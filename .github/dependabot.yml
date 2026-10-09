@@ -1,0 +1,97 @@
+version: 2
+updates:
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+      day: friday
+    groups:
+      go-minor-patch:
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - patch
+    open-pull-requests-limit: 5
+    cooldown:
+      default-days: 5
+
+  - package-ecosystem: npm
+    directory: /webapp
+    schedule:
+      interval: weekly
+      day: friday
+    groups:
+      npm-minor-patch:
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - patch
+    open-pull-requests-limit: 5
+    cooldown:
+      default-days: 5
+
+  - package-ecosystem: pip
+    directory: /extraction
+    schedule:
+      interval: weekly
+      day: friday
+    groups:
+      pip-minor-patch:
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - patch
+    open-pull-requests-limit: 5
+    cooldown:
+      default-days: 5
+
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+      day: friday
+    groups:
+      docker-minor-patch:
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - patch
+    open-pull-requests-limit: 5
+    cooldown:
+      default-days: 5
+
+  - package-ecosystem: docker
+    directory: /extraction
+    schedule:
+      interval: weekly
+      day: friday
+    groups:
+      docker-extraction-minor-patch:
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - patch
+    open-pull-requests-limit: 5
+    cooldown:
+      default-days: 5
+
+  - package-ecosystem: docker
+    directory: /docker/sandbox
+    schedule:
+      interval: weekly
+      day: friday
+    groups:
+      docker-sandbox-minor-patch:
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - patch
+    open-pull-requests-limit: 5
+    cooldown:
+      default-days: 5
