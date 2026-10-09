@@ -25,7 +25,7 @@ dependencies = [
     # without this direct pin.
     "click==8.5.0",
     "rapidfuzz==3.14.6",
-    "openai==1.57.0",
+    "openai==3.24.0",
     # Chunk 11 (ingest-iaea-safety D1/1.3) — text-layer PDF extraction for the
     # safety-source genre (pypdf), plus cryptography for the encrypted IAEA
     # SRS-123 PDF that pypdf needs it to open.
