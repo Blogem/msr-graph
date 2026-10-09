@@ -18,7 +18,7 @@
 # `//go:embed all:build` (webapp/embed.go). Must run before the Go build
 # stage below so the embedded directory has real content at compile time
 # (design.md D1, "Embed requires build-before-compile").
-FROM node:22 AS frontend
+FROM node:25 AS frontend
 
 WORKDIR /webapp
 
