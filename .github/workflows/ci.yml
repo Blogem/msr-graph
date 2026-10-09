@@ -1,0 +1,41 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  go:
+    name: Go
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - run: go build ./...
+      - run: go vet ./...
+      # internal/sandbox drives a real Docker daemon through container
+      # fixtures and needs a sandbox image available before it can run, so it
+      # is excluded here rather than left to fail every PR. Widen the filter
+      # once those fixtures exist in CI.
+      - name: Test
+        run: go test $(go list ./... | grep -v '/internal/sandbox$')
+
+  webapp:
+    name: Webapp
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: webapp
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: webapp/package-lock.json
+      - run: npm ci
+      - run: npm run build
+      - run: npm test
