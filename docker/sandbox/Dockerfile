@@ -12,7 +12,7 @@
 # Verify: docker run --rm msr-sandbox-base:latest python -c "import numpy, pandas"
 #         (must exit 0 while running as the non-root UID below)
 
-FROM python:3.12-slim
+FROM python:3.14-slim
 
 # Pinned, exact, known-good stable 2.x releases. numpy/pandas 3.x exists
 # upstream but is intentionally not adopted yet for this POC; bump these
