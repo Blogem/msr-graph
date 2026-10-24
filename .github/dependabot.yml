@@ -32,13 +32,13 @@ updates:
     cooldown:
       default-days: 5
 
-  - package-ecosystem: pip
+  - package-ecosystem: uv
     directory: /extraction
     schedule:
       interval: weekly
       day: friday
     groups:
-      pip-minor-patch:
+      uv-minor-patch:
         patterns:
           - "*"
         update-types:
