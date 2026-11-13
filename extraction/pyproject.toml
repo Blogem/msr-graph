@@ -6,7 +6,7 @@ requires-python = ">=3.12"
 dependencies = [
     "pysbd==0.3.4",
     "httpx==0.28.1",
-    "spacy==3.8.16",
+    "spacy==3.8.17",
     # NOTE: `en_core_web_sm` IS required (refine-mine-salience design D1/D5):
     # the mine novelty pass loads it (`doc.noun_chunks` + NER) to shape
     # candidate enumeration and filter proper nouns, replacing the n-gram
@@ -15,7 +15,7 @@ dependencies = [
     # the model is fetched at build time, not downloaded at runtime via
     # `spacy download`; inference is CPU-only and deterministic (no GPU,
     # no sampling). Version must track `en_core_web_sm-3.8.x` to match
-    # spacy==3.8.16 above. `seeding.py`'s `spacy.blank("en")` + EntityRuler
+    # spacy==3.8.17 above. `seeding.py`'s `spacy.blank("en")` + EntityRuler
     # pipeline for NER *linking* is unaffected and still model-free.
     "en_core_web_sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl",
     # Pinned explicitly: spacy's `cli` submodule (imported unconditionally by
